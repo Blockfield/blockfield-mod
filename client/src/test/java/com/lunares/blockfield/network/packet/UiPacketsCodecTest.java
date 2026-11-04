@@ -1,0 +1,94 @@
+package com.lunares.blockfield.network.packet;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.mojang.serialization.JsonOps;
+import io.netty.buffer.Unpooled;
+import net.minecraft.network.FriendlyByteBuf;
+import org.junit.jupiter.api.Test;
+
+class UiPacketsCodecTest {
+    private static JsonObject ui() {
+        JsonObject ui = new JsonObject();
+        ui.addProperty("tabActive", true);
+        ui.addProperty("showHud", true);
+        ui.addProperty("battleCredits", 150);
+        ui.add("pts", new com.google.gson.JsonArray());
+        return ui;
+    }
+
+    private static <T> T roundTrip(
+            net.minecraft.network.codec.StreamCodec<FriendlyByteBuf, T> codec, T packet) {
+        var buf = new FriendlyByteBuf(Unpooled.buffer());
+        codec.encode(buf, packet);
+        return codec.decode(buf);
+    }
+
+    @Test
+    void updateUiRoundTrip() {
+        var packet = new UpdateUIS2CPacket(ui());
+        var decoded = roundTrip(UpdateUIS2CPacket.CODEC, packet);
+        assertTrue(decoded.valid());
+        assertEquals(packet.ui(), decoded.ui());
+        assertEquals(packet.uiDataJson(), decoded.uiDataJson());
+    }
+
+    @Test
+    void classMenuRoundTrip() {
+        JsonObject classes = new JsonObject();
+        JsonObject kit = new JsonObject();
+        kit.addProperty("name", "Штурмовик");
+        classes.add("assault", kit);
+        var decoded =
+                roundTrip(OpenClassMenuS2CPacket.CODEC, new OpenClassMenuS2CPacket(classes, true));
+        assertTrue(decoded.valid());
+        assertEquals(classes, decoded.classes());
+        assertTrue(decoded.isUpdate());
+        assertEquals(classes.toString(), decoded.classesJson());
+    }
+
+    @Test
+    void spawnMenuRoundTrip() {
+        JsonObject spawns = new JsonObject();
+        spawns.addProperty("ffa", true);
+        var decoded =
+                roundTrip(
+                        OpenSpawnMenuS2CPacket.CODEC, new OpenSpawnMenuS2CPacket(spawns, "arena"));
+        assertTrue(decoded.valid());
+        assertEquals(spawns, decoded.spawns());
+        assertEquals("arena", decoded.mapId());
+    }
+
+    @Test
+    void openMenuRoundTrip() {
+        JsonObject menu = new JsonObject();
+        menu.addProperty("id", "vote");
+        menu.addProperty("close", true);
+        var decoded = roundTrip(OpenMenuS2CPacket.CODEC, new OpenMenuS2CPacket(menu));
+        assertTrue(decoded.valid());
+        assertEquals("vote", decoded.id());
+        assertTrue(decoded.close());
+    }
+
+    @Test
+    void malformedJsonRejectedByCodec() {
+        var badKind =
+                UpdateUIS2CPacket.JSON_CODEC.parse(
+                        JsonOps.INSTANCE, JsonParser.parseString("{\"tabActive\": \"yes\"}"));
+        assertTrue(badKind.error().isPresent());
+        assertTrue(badKind.error().get().message().contains("tabActive"));
+
+        var notObject =
+                UpdateUIS2CPacket.JSON_CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString("[1]"));
+        assertTrue(notObject.error().isPresent());
+    }
+
+    @Test
+    void malformedWirePayloadIgnored() {
+        assertFalse(UpdateUIS2CPacket.decode("not json").valid());
+        assertFalse(OpenMenuS2CPacket.decode("{\"id\": 42}").valid());
+        assertTrue(OpenMenuS2CPacket.decode("{\"id\": \"vote\"}").valid());
+    }
+}

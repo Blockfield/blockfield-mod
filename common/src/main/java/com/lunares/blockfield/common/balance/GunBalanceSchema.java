@@ -5,6 +5,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.annotations.SerializedName;
+import com.lunares.blockfield.network.packet.UiJson;
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.DataResult;
 import com.tacz.guns.resource.CommonAssetsManager;
 import com.tacz.guns.resource.pojo.data.gun.GunData;
 import java.lang.reflect.Field;
@@ -13,6 +16,7 @@ import java.lang.reflect.Type;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import net.minecraft.resources.ResourceLocation;
 
@@ -39,6 +43,29 @@ public final class GunBalanceSchema {
                     "exclusive_attachments.*.melee");
 
     private GunBalanceSchema() {}
+
+    /** Codec validation for kit/balance overrides; errors carry the field path, never throw. */
+    public static final Codec<JsonObject> OVERRIDES_CODEC =
+            UiJson.validatingCodec(GunBalanceSchema::problems);
+
+    /**
+     * Non-throwing validation for kit/balance JSON: success, or the first violation with its field
+     * path (same checks as {@link #merge}, without applying anything).
+     */
+    public static DataResult<JsonObject> validate(JsonObject overrides) {
+        Optional<String> problem = problems(overrides);
+        if (problem.isPresent()) return DataResult.error(problem.get()::toString);
+        return DataResult.success(overrides);
+    }
+
+    private static Optional<String> problems(JsonObject overrides) {
+        try {
+            validate(nativeOverrides(overrides), GunData.class, "");
+            return Optional.empty();
+        } catch (IllegalArgumentException bad) {
+            return Optional.of(bad.getMessage());
+        }
+    }
 
     public static JsonObject merge(JsonObject baseline, JsonObject overrides) {
         overrides = nativeOverrides(overrides);
