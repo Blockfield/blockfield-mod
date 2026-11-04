@@ -1,5 +1,6 @@
 package com.lunares.blockfield.client.gui.screen;
 
+import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -7,6 +8,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import net.minecraft.client.Minecraft;
@@ -471,7 +477,7 @@ public final class ModSettingsScreen extends OptionsSubScreen {
                     Button mods =
                             Button.builder(
                                             Component.translatable("blockfield.settings.title"),
-                                            b -> client.setScreen(new ModSettingsScreen(screen)))
+                                            b -> openSettings(client, screen))
                                     .width(150)
                                     .build();
                     buttons.add(mods);
@@ -488,5 +494,498 @@ public final class ModSettingsScreen extends OptionsSubScreen {
         done.setWidth(150);
         done.setX(screen.width / 2 + 5);
         mods.setPosition(screen.width / 2 - 155, done.getY());
+    }
+
+    private static void openSettings(Minecraft client, Screen parent) {
+        Screen yacl = null;
+        try {
+            if (yaclPresent()) yacl = buildYaclScreen(parent);
+        } catch (Exception | LinkageError e) {
+            LOGGER.debug("YACL settings unavailable, using the vanilla list", e);
+        }
+        client.setScreen(yacl != null ? yacl : new ModSettingsScreen(parent));
+    }
+
+    private static boolean yaclPresent() {
+        try {
+            Class.forName(
+                    "dev.isxander.yacl3.api.YetAnotherConfigLib",
+                    false,
+                    ModSettingsScreen.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError e) {
+            return false;
+        }
+    }
+
+    /**
+     * Staged YACL save that failed on this entry; entries written earlier in the batch were already
+     * restored to their previous values.
+     */
+    static final class StagedSaveException extends Exception {
+        final String labelKey;
+
+        StagedSaveException(String labelKey, Throwable cause) {
+            super(cause);
+            this.labelKey = labelKey;
+        }
+    }
+
+    /**
+     * Applies staged option values in screen order, restoring every already-written entry when a
+     * later one fails (the pendingEdits pattern). Entries equal to the live value are skipped so an
+     * unchanged option never touches its config file.
+     */
+    static void commitStaged(Map<ModSettingsBridge.Entry, Object> staged)
+            throws StagedSaveException {
+        Map<ModSettingsBridge.Entry, Object> applied = new LinkedHashMap<>();
+        for (var edit : staged.entrySet()) {
+            ModSettingsBridge.Entry entry = edit.getKey();
+            Object previous;
+            try {
+                previous = entry.get();
+            } catch (Exception | LinkageError e) {
+                throw rollback(applied, entry, e);
+            }
+            if (Objects.equals(edit.getValue(), previous)) continue;
+            try {
+                entry.set(edit.getValue());
+            } catch (Exception | LinkageError e) {
+                throw rollback(applied, entry, e);
+            }
+            applied.put(entry, previous);
+        }
+    }
+
+    private static StagedSaveException rollback(
+            Map<ModSettingsBridge.Entry, Object> applied,
+            ModSettingsBridge.Entry failed,
+            Throwable cause) {
+        StagedSaveException failure = new StagedSaveException(failed.labelKey(), cause);
+        var done = new ArrayList<>(applied.entrySet());
+        for (int i = done.size() - 1; i >= 0; i--) {
+            var restored = done.get(i);
+            try {
+                restored.getKey().set(restored.getValue());
+            } catch (Exception | LinkageError restoreFailure) {
+                failure.addSuppressed(restoreFailure);
+            }
+        }
+        return failure;
+    }
+
+    // YACL chrome. The pack ships YACL 3.8.2 but it is not on the compile classpath, so the
+    // screen below goes through its public API by reflection (same house pattern as
+    // AnimationPolicyTweaksScreenMixin). The bridged write path is untouched: bindings only
+    // stage values, and the save runnable commits them with rollback.
+    private static final String YACL_API = "dev.isxander.yacl3.api.";
+    private static final String YACL_CONTROLLER = YACL_API + "controller.";
+
+    private static Class<?> yaclClass(String name) throws ClassNotFoundException {
+        return Class.forName(YACL_API + name);
+    }
+
+    private static Method yaclCall(Object target, String name, int arity)
+            throws NoSuchMethodException {
+        return yaclCall(target, name, arity, null);
+    }
+
+    private static Method yaclCall(
+            Object target, String name, int arity, Predicate<Class<?>[]> params)
+            throws NoSuchMethodException {
+        Class<?> type = target instanceof Class<?> c ? c : target.getClass();
+        Method found = null;
+        for (Method m : type.getMethods()) {
+            if (!m.getName().equals(name)
+                    || m.getParameterCount() != arity
+                    || m.isBridge()
+                    || m.isSynthetic()
+                    || (params != null && !params.test(m.getParameterTypes()))) continue;
+            if (found != null)
+                throw new NoSuchMethodException("Ambiguous " + type.getName() + "#" + name);
+            found = m;
+        }
+        if (found == null)
+            throw new NoSuchMethodException(type.getName() + "#" + name + "/" + arity);
+        return found;
+    }
+
+    private static Screen buildYaclScreen(Screen parent) throws Exception {
+        Class<?> optionClass = yaclClass("Option");
+        Class<?> categoryClass = yaclClass("ConfigCategory");
+        Class<?> descriptionClass = yaclClass("OptionDescription");
+        Object lib = yaclCall(yaclClass("YetAnotherConfigLib"), "createBuilder", 0).invoke(null);
+        Map<String, List<ModSettingsBridge.Entry>> groups = new LinkedHashMap<>();
+        for (var entry : ModSettingsBridge.entries())
+            groups.computeIfAbsent(entry.modId(), k -> new ArrayList<>()).add(entry);
+        Map<ModSettingsBridge.Entry, Object> staged = new LinkedHashMap<>();
+        Map<ModSettingsBridge.Entry, Object> options = new LinkedHashMap<>();
+        int built = 0;
+        for (var group : groups.entrySet()) {
+            Object category = yaclCall(categoryClass, "createBuilder", 0).invoke(null);
+            yaclCall(category, "name", 1)
+                    .invoke(
+                            category,
+                            Component.translatable("blockfield.settings.group." + group.getKey()));
+            boolean any = false;
+            for (var entry : group.getValue()) {
+                Object option = yaclOption(optionClass, descriptionClass, entry, staged);
+                if (option == null) continue;
+                yaclCall(category, "option", 1, p -> p[0].equals(optionClass))
+                        .invoke(category, option);
+                options.put(entry, option);
+                any = true;
+                built++;
+            }
+            if (!any) continue;
+            Object done = yaclCall(category, "build", 0).invoke(category);
+            yaclCall(lib, "category", 1, p -> p[0].equals(categoryClass)).invoke(lib, done);
+        }
+        if (built == 0) throw new IllegalStateException("No YACL options built");
+        yaclCall(lib, "title", 1).invoke(lib, Component.translatable("blockfield.settings.title"));
+        Minecraft minecraft = Minecraft.getInstance();
+        yaclCall(lib, "save", 1)
+                .invoke(lib, (Runnable) () -> saveYaclStaged(minecraft, staged, options));
+        Object config = yaclCall(lib, "build", 0).invoke(lib);
+        return (Screen) yaclCall(config, "generateScreen", 1).invoke(config, parent);
+    }
+
+    private static Object yaclOption(
+            Class<?> optionClass,
+            Class<?> descriptionClass,
+            ModSettingsBridge.Entry entry,
+            Map<ModSettingsBridge.Entry, Object> staged) {
+        try {
+            Object current = null;
+            String reason = entry.restriction();
+            try {
+                current = entry.get();
+            } catch (Exception | LinkageError e) {
+                LOGGER.debug("Unavailable mod option {}", entry.labelKey(), e);
+                if (reason == null)
+                    reason =
+                            ModSettingsBridge.loaded(entry.modId())
+                                    ? "blockfield.settings.unavailable"
+                                    : "blockfield.settings.missing";
+            }
+            if (reason == null && entry.modId().equals("voicechat")) {
+                String audio = ModSettingsBridge.audioRestriction(entry);
+                if (audio != null) reason = audio;
+            }
+            if (reason != null)
+                return lockedOption(optionClass, descriptionClass, entry, current, reason, staged);
+            if (current instanceof Boolean value)
+                return boolOption(optionClass, descriptionClass, entry, value, staged);
+            if (current instanceof Enum<?> e)
+                return enumOption(optionClass, descriptionClass, entry, e, staged);
+            if (current instanceof Number number)
+                return numberOption(optionClass, descriptionClass, entry, number, staged);
+            return lockedOption(
+                    optionClass,
+                    descriptionClass,
+                    entry,
+                    current,
+                    "blockfield.settings.unavailable",
+                    staged);
+        } catch (Exception | LinkageError e) {
+            LOGGER.debug("YACL option skipped for {}", entry.labelKey(), e);
+            return null;
+        }
+    }
+
+    private static Object optionBuilder(
+            Class<?> optionClass,
+            Class<?> descriptionClass,
+            ModSettingsBridge.Entry entry,
+            Object current,
+            Component[] description,
+            Map<ModSettingsBridge.Entry, Object> staged)
+            throws Exception {
+        Object builder = yaclCall(optionClass, "createBuilder", 0).invoke(null);
+        yaclCall(builder, "name", 1).invoke(builder, Component.translatable(entry.labelKey()));
+        yaclCall(builder, "description", 1, p -> p[0].isAssignableFrom(descriptionClass))
+                .invoke(
+                        builder,
+                        yaclCall(descriptionClass, "of", 1).invoke(null, (Object) description));
+        Supplier<Object> getter = () -> readLive(entry, current);
+        Consumer<Object> setter = value -> staged.put(entry, value);
+        yaclCall(builder, "binding", 3).invoke(builder, current, getter, setter);
+        return builder;
+    }
+
+    private static Object readLive(ModSettingsBridge.Entry entry, Object fallback) {
+        try {
+            return entry.get();
+        } catch (Exception | LinkageError e) {
+            return fallback;
+        }
+    }
+
+    private static Component[] optionDescription(ModSettingsBridge.Entry entry, Object current) {
+        String tip = entry.labelKey() + ".tooltip";
+        if (I18n.exists(tip)) return new Component[] {Component.translatable(tip)};
+        if (current instanceof Number && entry.step() == 0 && entry.restriction() == null) {
+            if (entry.min() == -Double.MAX_VALUE && entry.max() == Double.MAX_VALUE)
+                return new Component[] {
+                    Component.translatable("blockfield.settings.numeric_unbounded")
+                };
+            return new Component[] {
+                Component.translatable("blockfield.settings.numeric", entry.min(), entry.max())
+            };
+        }
+        return new Component[0];
+    }
+
+    private static Object lockedOption(
+            Class<?> optionClass,
+            Class<?> descriptionClass,
+            ModSettingsBridge.Entry entry,
+            Object current,
+            String reason,
+            Map<ModSettingsBridge.Entry, Object> staged)
+            throws Exception {
+        boolean value = current instanceof Boolean enabled && enabled;
+        Object builder =
+                optionBuilder(
+                        optionClass,
+                        descriptionClass,
+                        entry,
+                        value,
+                        new Component[] {Component.translatable(reason)},
+                        staged);
+        yaclCall(builder, "available", 1).invoke(builder, false);
+        yaclCall(builder, "controller", 1)
+                .invoke(
+                        builder,
+                        (Function<Object, Object>)
+                                option -> {
+                                    try {
+                                        return boolController(
+                                                option, ModSettingsScreen::valueLabel);
+                                    } catch (Exception | LinkageError e) {
+                                        throw new IllegalStateException(
+                                                "YACL boolean controller failed", e);
+                                    }
+                                });
+        return yaclCall(builder, "build", 0).invoke(builder);
+    }
+
+    private static Object boolOption(
+            Class<?> optionClass,
+            Class<?> descriptionClass,
+            ModSettingsBridge.Entry entry,
+            Boolean value,
+            Map<ModSettingsBridge.Entry, Object> staged)
+            throws Exception {
+        Object builder =
+                optionBuilder(
+                        optionClass,
+                        descriptionClass,
+                        entry,
+                        value,
+                        optionDescription(entry, value),
+                        staged);
+        String on = entry.labelKey() + ".on";
+        Function<Object, Object> words =
+                I18n.exists(on)
+                        ? v ->
+                                Component.translatable(
+                                        Boolean.TRUE.equals(v) ? on : entry.labelKey() + ".off")
+                        : ModSettingsScreen::valueLabel;
+        yaclCall(builder, "controller", 1)
+                .invoke(
+                        builder,
+                        (Function<Object, Object>)
+                                option -> {
+                                    try {
+                                        return boolController(option, words);
+                                    } catch (Exception | LinkageError e) {
+                                        throw new IllegalStateException(
+                                                "YACL boolean controller failed", e);
+                                    }
+                                });
+        return yaclCall(builder, "build", 0).invoke(builder);
+    }
+
+    private static Object boolController(Object option, Function<Object, Object> words)
+            throws Exception {
+        Object box =
+                yaclCall(yaclClass("controller.BooleanControllerBuilder"), "create", 1)
+                        .invoke(null, option);
+        if (words != null) yaclCall(box, "valueFormatter", 1).invoke(box, words);
+        return yaclCall(box, "build", 0).invoke(box);
+    }
+
+    private static Object enumOption(
+            Class<?> optionClass,
+            Class<?> descriptionClass,
+            ModSettingsBridge.Entry entry,
+            Enum<?> value,
+            Map<ModSettingsBridge.Entry, Object> staged)
+            throws Exception {
+        Object builder =
+                optionBuilder(
+                        optionClass,
+                        descriptionClass,
+                        entry,
+                        value,
+                        optionDescription(entry, value),
+                        staged);
+        yaclCall(builder, "controller", 1)
+                .invoke(
+                        builder,
+                        (Function<Object, Object>)
+                                option -> {
+                                    try {
+                                        Object box =
+                                                yaclCall(
+                                                                yaclClass(
+                                                                        "controller.EnumControllerBuilder"),
+                                                                "create",
+                                                                1)
+                                                        .invoke(null, option);
+                                        yaclCall(box, "enumClass", 1)
+                                                .invoke(box, value.getDeclaringClass());
+                                        yaclCall(box, "valueFormatter", 1)
+                                                .invoke(
+                                                        box,
+                                                        (Function<Object, Object>)
+                                                                ModSettingsScreen::valueLabel);
+                                        return yaclCall(box, "build", 0).invoke(box);
+                                    } catch (Exception | LinkageError e) {
+                                        throw new IllegalStateException(
+                                                "YACL enum controller failed", e);
+                                    }
+                                });
+        return yaclCall(builder, "build", 0).invoke(builder);
+    }
+
+    private static Object numberOption(
+            Class<?> optionClass,
+            Class<?> descriptionClass,
+            ModSettingsBridge.Entry entry,
+            Number number,
+            Map<ModSettingsBridge.Entry, Object> staged)
+            throws Exception {
+        String kind =
+                number instanceof Integer
+                        ? "Integer"
+                        : number instanceof Long
+                                ? "Long"
+                                : number instanceof Float
+                                        ? "Float"
+                                        : number instanceof Double ? "Double" : null;
+        if (kind == null)
+            return lockedOption(
+                    optionClass,
+                    descriptionClass,
+                    entry,
+                    number,
+                    "blockfield.settings.unavailable",
+                    staged);
+        boolean slider =
+                entry.step() > 0
+                        && Double.isFinite(entry.min())
+                        && Double.isFinite(entry.max())
+                        && entry.max() > entry.min();
+        Object builder =
+                optionBuilder(
+                        optionClass,
+                        descriptionClass,
+                        entry,
+                        number,
+                        optionDescription(entry, number),
+                        staged);
+        String controller =
+                YACL_CONTROLLER
+                        + kind
+                        + (slider ? "SliderControllerBuilder" : "FieldControllerBuilder");
+        yaclCall(builder, "controller", 1)
+                .invoke(
+                        builder,
+                        (Function<Object, Object>)
+                                option -> {
+                                    try {
+                                        Object box =
+                                                yaclCall(Class.forName(controller), "create", 1)
+                                                        .invoke(null, option);
+                                        if (slider) {
+                                            yaclCall(box, "range", 2)
+                                                    .invoke(
+                                                            box,
+                                                            number(kind, entry.min()),
+                                                            number(kind, entry.max()));
+                                            yaclCall(box, "step", 1)
+                                                    .invoke(box, number(kind, entry.step()));
+                                        } else {
+                                            if (Double.isFinite(entry.min()))
+                                                yaclCall(box, "min", 1)
+                                                        .invoke(box, number(kind, entry.min()));
+                                            if (Double.isFinite(entry.max()))
+                                                yaclCall(box, "max", 1)
+                                                        .invoke(box, number(kind, entry.max()));
+                                        }
+                                        yaclCall(box, "valueFormatter", 1)
+                                                .invoke(
+                                                        box,
+                                                        (Function<Object, Object>)
+                                                                ModSettingsScreen::valueLabel);
+                                        return yaclCall(box, "build", 0).invoke(box);
+                                    } catch (Exception | LinkageError e) {
+                                        throw new IllegalStateException(
+                                                "YACL number controller failed", e);
+                                    }
+                                });
+        return yaclCall(builder, "build", 0).invoke(builder);
+    }
+
+    private static Number number(String kind, double value) {
+        return switch (kind) {
+            case "Integer" -> (int) value;
+            case "Long" -> (long) value;
+            case "Float" -> (float) value;
+            default -> value;
+        };
+    }
+
+    private static void saveYaclStaged(
+            Minecraft minecraft,
+            Map<ModSettingsBridge.Entry, Object> staged,
+            Map<ModSettingsBridge.Entry, Object> options) {
+        if (!staged.isEmpty()) {
+            Map<ModSettingsBridge.Entry, Object> pending = new LinkedHashMap<>(staged);
+            staged.clear();
+            try {
+                commitStaged(pending);
+            } catch (StagedSaveException e) {
+                LOGGER.warn("Cannot save mod option {}", e.labelKey, e);
+                SystemToast.addOrUpdate(
+                        minecraft.getToasts(),
+                        SystemToast.SystemToastId.PERIODIC_NOTIFICATION,
+                        Component.translatable("blockfield.settings.save_failed"),
+                        Component.translatable(e.labelKey));
+            } catch (LinkageError e) {
+                LOGGER.warn("Cannot save mod options", e);
+                SystemToast.addOrUpdate(
+                        minecraft.getToasts(),
+                        SystemToast.SystemToastId.PERIODIC_NOTIFICATION,
+                        Component.translatable("blockfield.settings.save_failed"),
+                        Component.translatable("blockfield.settings.save_failed.help"));
+            }
+        }
+        refreshYaclAudio(options);
+    }
+
+    private static void refreshYaclAudio(Map<ModSettingsBridge.Entry, Object> options) {
+        for (var saved : options.entrySet()) {
+            if (!saved.getKey().modId().equals("voicechat")) continue;
+            String reason = ModSettingsBridge.audioRestriction(saved.getKey());
+            try {
+                yaclCall(saved.getValue(), "setAvailable", 1)
+                        .invoke(saved.getValue(), reason == null);
+            } catch (Exception | LinkageError e) {
+                LOGGER.debug("Cannot refresh audio lock", e);
+            }
+        }
     }
 }
