@@ -1,0 +1,995 @@
+diff --git a/common/src/main/java/com/lunares/blockfield/common/combat/AnimationSchema.java b/common/src/main/java/com/lunares/blockfield/common/combat/AnimationSchema.java
+index f5c1a331..4e6d802c 100644
+--- a/common/src/main/java/com/lunares/blockfield/common/combat/AnimationSchema.java
++++ b/common/src/main/java/com/lunares/blockfield/common/combat/AnimationSchema.java
+@@ -23,7 +23,9 @@ public final class AnimationSchema {
+     public static final int MAX_VICTIMS = 4096;
+     public static final int MAX_NODES = 4096;
+     public static final int MAX_DEPTH = 64;
+-    public static final int MAX_PAYLOAD_BYTES = 256 * 1024;
++    // UPERF PROTOTYPE ONLY: -Dblockfield.uperf.maxPayload lifts the cap for 30x29 measurement.
++    public static final int MAX_PAYLOAD_BYTES =
++            Integer.getInteger("blockfield.uperf.maxPayload", 256 * 1024);
+     public static final int MAX_STRING_BYTES = MAX_PAYLOAD_BYTES;
+ 
+     @Retention(RetentionPolicy.RUNTIME)
+diff --git a/common/src/main/java/com/lunares/blockfield/common/combat/ObserverReducer.java b/common/src/main/java/com/lunares/blockfield/common/combat/ObserverReducer.java
+index 235dc9d2..6a7116ab 100644
+--- a/common/src/main/java/com/lunares/blockfield/common/combat/ObserverReducer.java
++++ b/common/src/main/java/com/lunares/blockfield/common/combat/ObserverReducer.java
+@@ -233,6 +233,15 @@ public final class ObserverReducer {
+ 
+     private static volatile boolean verifyMemo;
+ 
++    /** UPERF PROTOTYPE ONLY: observes every reducer step (null in production). */
++    public interface StepProbe {
++        void before(Reduction reduction, AnimationState checkpoint);
++
++        void after(Reduction reduction);
++    }
++
++    public static volatile StepProbe STEP_PROBE;
++
+     /** Test/benchmark switch: every resumed reduction is also replayed and must be equal. */
+     public static void verifyMemo(boolean value) {
+         verifyMemo = value;
+@@ -437,6 +446,8 @@ public final class ObserverReducer {
+          * order, its ParCool boundary marker running the family's NATIVE_TICK boundary in place.
+          */
+         public void step(AnimationState checkpoint) {
++            var probe = STEP_PROBE;
++            if (probe != null) probe.before(this, checkpoint);
+             try {
+                 advance(checkpoint);
+             } catch (RuntimeException | Error refused) {
+@@ -444,6 +455,7 @@ public final class ObserverReducer {
+                 carried = null;
+                 throw refused;
+             }
++            if (probe != null) probe.after(this);
+         }
+ 
+         private void advance(AnimationState checkpoint) {
+diff --git a/dev/oracle-runner.gradle b/dev/oracle-runner.gradle
+index f3a2e2ad..497c57c1 100644
+--- a/dev/oracle-runner.gradle
++++ b/dev/oracle-runner.gradle
+@@ -40,6 +40,9 @@ tasks.register('oracleTest', JavaExec) {
+         ['benchTicks', 'benchWarmup', 'benchDebug', 'benchVerify', 'benchSeconds'].each { key ->
+             if (project.hasProperty(key)) systemProperty "blockfield.animSync.${key}", project.property(key)
+         }
++        // UPERF PROTOTYPE ONLY: -Puperf.<name>=<value> becomes -Dblockfield.uperf.<name>.
++        project.properties.each { k, v -> if (k.startsWith('uperf.')) systemProperty "blockfield.${k}", v }
++        if (project.hasProperty('uperf.heap')) maxHeapSize = project.property('uperf.heap')
+         systemProperty 'blockfield.animSync.benchOut', layout.buildDirectory.dir('anim-sync-bench').get().asFile.absolutePath
+         jvmArgs '-XX:FlightRecorderOptions:stackdepth=512'
+         timeout = java.time.Duration.ofMinutes(90)
+diff --git a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java
+index f2cf7f31..0091d047 100644
+--- a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java
++++ b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java
+@@ -188,24 +188,30 @@ final class AnimSyncCapture {
+             long tick,
+             Context context) {
+         long start = System.nanoTime();
++        UperfProbe.begin(1);
+         try {
+             var identity = identity(player, state, target);
+             // Journals this tick's accepted ParCool capsules even when S[t] stays unavailable.
+             var parcool = AnimSyncParCool.take(target, tick);
++            UperfProbe.lap(1, UperfProbe.C_IDENTITY);
+             AnimationState checkpoint =
+                     target.unavailable() == null
+                             ? freeze(player, state, target, tick, context, identity, parcool)
+                             : null;
++            UperfProbe.lap(1, UperfProbe.C_FREEZE);
+             try {
+                 seal(target, identity, tick);
+             } catch (RuntimeException invalid) {
+                 target.unavailable("capsule:" + invalid.getMessage());
+                 checkpoint = null;
+             }
++            UperfProbe.lap(1, UperfProbe.C_SEAL);
+             if (checkpoint != null) {
+                 try {
+                     retain(target, tick, checkpoint);
++                    UperfProbe.lap(1, UperfProbe.C_RETAIN);
+                     generationBoundary(target, tick, identity);
++                    UperfProbe.lap(1, UperfProbe.C_TAIL);
+                     return;
+                 } catch (RuntimeException invalid) {
+                     target.unavailable("retain:" + invalid.getMessage());
+@@ -481,6 +487,7 @@ final class AnimSyncCapture {
+             Context context,
+             AnimationState.Identity identity,
+             List<AnimSyncParCool.Accepted> parcoolAccepted) {
++        UperfProbe.begin(2);
+         long resources = identity.resourceGeneration();
+         var policy = HeldWeaponPose.policy();
+         AnimationState prior = target.at(tick - 1);
+@@ -505,6 +512,7 @@ final class AnimSyncCapture {
+         }
+         definitions.addAll(vanilla.definitions());
+         var unfolded = previousEndpoint(vanilla.placement(), prior, identity);
++        UperfProbe.lap(2, UperfProbe.F_VANILLA);
+ 
+         var stack = LrBodyPose.stack(player, state);
+         if (stack == null) {
+@@ -537,6 +545,7 @@ final class AnimSyncCapture {
+                                 HeldWeaponPose.assets(resources),
+                                 context.weaponIds(),
+                                 context.rawAim());
++            UperfProbe.lap(2, UperfProbe.F_PA);
+             var create = create(target, tick);
+             var sbw =
+                     SbwBodyPose.capture(
+@@ -547,6 +556,7 @@ final class AnimSyncCapture {
+             definitions.addAll(
+                     com.lunares.blockfield.common.combat.ParCoolCheckpoints.definitions(
+                             resources, target.targetEpoch));
++            UperfProbe.lap(2, UperfProbe.F_CREATE_SBW);
+             AnimSyncParCool.Canonical parcool;
+             try {
+                 parcool =
+@@ -585,6 +595,7 @@ final class AnimSyncCapture {
+                 return null;
+             }
+             graph = parcool.graph();
++            UperfProbe.lap(2, UperfProbe.F_PARCOOL);
+             // ADR4 §5.2: the ordered ParCool yaw fold is part of S[t] placement before freezing.
+             var placement = AnimSyncParCool.fold(unfolded, parcool.angles());
+             AnimationGraphValidator.validateComplete(graph, policy);
+@@ -611,7 +622,9 @@ final class AnimSyncCapture {
+                             sbw,
+                             decisions);
+             AnimationSchema.validateFinite(checkpoint);
++            UperfProbe.lap(2, UperfProbe.F_VALIDATE);
+             stage(definitions, checkpoint, lrAssets);
++            UperfProbe.lap(2, UperfProbe.F_STAGE);
+             return checkpoint;
+         } catch (PaGraph.Unsupported refused) {
+             target.unavailable("pa:" + refused.getMessage());
+@@ -841,9 +854,11 @@ final class AnimSyncCapture {
+     }
+ 
+     private static void retain(AnimSyncLedger.Target target, long tick, AnimationState state) {
++        UperfProbe.begin(2);
+         var decoded = AnimSyncLedger.roundTrip(state);
+         if (!decoded.value().equals(state))
+             throw new IllegalStateException("Checkpoint changed in its own round trip");
++        UperfProbe.lap(2, UperfProbe.T_ROUNDTRIP);
+         var lease =
+                 state == staged
+                         ? AnimSyncLedger.pin(stagedRefs)
+@@ -854,6 +869,7 @@ final class AnimSyncCapture {
+             AnimSync.add("checkpointBytes", decoded.bytes());
+             AnimSync.count("checkpoints");
+         } else AnimSync.count("checkpointSentImmutable");
++        UperfProbe.lap(2, UperfProbe.T_REST);
+     }
+ 
+     // --- SBW seats ---
+diff --git a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java
+index d8dbc924..6de6ed7b 100644
+--- a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java
++++ b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java
+@@ -317,6 +317,7 @@ final class AnimSyncStream {
+             long tick,
+             Map<Integer, Entity> eligible,
+             AdminSettings.Netcode config) {
++        UperfProbe.begin(0);
+         State anim = observer.anim;
+         var records = new ArrayList<AnimationRecipe.SnapshotRecord>();
+         var sent = new LinkedHashMap<Integer, SentRecord>();
+@@ -411,7 +412,9 @@ final class AnimSyncStream {
+                 seeds.add(issued);
+                 seed = issued.seed().ref().contentId();
+             } else if (stamped != null) {
++                UperfProbe.lap(0, UperfProbe.S_RECORDS);
+                 var folded = fold(observer, target, identity, tick);
++                UperfProbe.lap(0, UperfProbe.S_FOLD);
+                 if (folded != null) {
+                     seeds.add(folded);
+                     seed = folded.seed().ref().contentId();
+@@ -450,11 +453,13 @@ final class AnimSyncStream {
+                         config.dilationPercent(),
+                         config.holdToSnapMs(),
+                         batch);
++        UperfProbe.lap(0, UperfProbe.S_RECORDS);
+         var buf = new FriendlyByteBuf(Unpooled.buffer());
+         int bytes;
+         try {
+             PlayerSnapshotS2CPacket.ANIMATION_CODEC.encode(buf, packet);
+             bytes = buf.readableBytes();
++            UperfProbe.lap(0, UperfProbe.S_ENCODE);
+         } catch (IllegalArgumentException capacity) {
+             for (Seed issued : seeds) issued.lease().close();
+             throw new IllegalArgumentException("Snapshot capacity", capacity);
+@@ -483,6 +488,7 @@ final class AnimSyncStream {
+ 
+     /** Commits a sent batch: incarnations, refs, seed ledger, sent ledger and S[t] immutability. */
+     static void publish(SnapshotStream.Observer observer, Prepared prepared) {
++        UperfProbe.begin(0);
+         State anim = observer.anim;
+         long tick = prepared.batch().tick();
+         anim.incarnations.keySet().retainAll(observer.subscriptions.keySet());
+@@ -498,9 +504,12 @@ final class AnimSyncStream {
+         }
+         anim.sent.put(tick, prepared.batch());
+         for (var target : prepared.targets()) target.sent(tick);
++        UperfProbe.lap(0, UperfProbe.S_PUBLISH);
+         prune(observer, tick);
++        UperfProbe.lap(0, UperfProbe.S_PRUNE);
+         AnimSync.add("snapshotBytes", prepared.bytes());
+         AnimSync.count("snapshots");
++        UperfProbe.lap(0, UperfProbe.S_PUBLISH);
+     }
+ 
+     /** Retain the last live seed through the final receipt window, including after unsubscribe. */
+@@ -623,6 +632,7 @@ final class AnimSyncStream {
+             AnimationState.Identity identity,
+             long tick) {
+         var anim = observer.anim;
++        UperfProbe.begin(1);
+         Seed current = null;
+         for (Seed seed : anim.seeds.values())
+             if (seed.entityId() == identity.entityId()
+@@ -656,6 +666,7 @@ final class AnimSyncStream {
+         }
+         var context = target.at(bucket);
+         com.lunares.blockfield.common.combat.ObserverReducer.Result reduced;
++        UperfProbe.lap(1, UperfProbe.D_INPUTS);
+         try {
+             reduced =
+                     com.lunares.blockfield.common.combat.ObserverReducer.reduce(
+@@ -672,6 +683,7 @@ final class AnimSyncStream {
+             AnimSync.count("seedFoldUnavailable:reducer");
+             return null;
+         }
++        UperfProbe.lap(1, UperfProbe.D_REDUCE);
+         long eventPrefix = Math.max(seed.eventPrefix(), seed.ref().contentId());
+         for (var event : applied)
+             eventPrefix = Math.max(eventPrefix, event.event().id().eventSequence());
+@@ -713,7 +725,9 @@ final class AnimSyncStream {
+         AnimSyncLedger.install(
+                 List.of(new Definition(ref, new AnimationResources.Bytes(content), List.of())));
+         AnimSync.count("seedsFolded");
+-        return new Seed(decoded, tick, identity.entityId(), AnimSyncLedger.pin(decoded));
++        var folded = new Seed(decoded, tick, identity.entityId(), AnimSyncLedger.pin(decoded));
++        UperfProbe.lap(1, UperfProbe.D_COMMIT);
++        return folded;
+     }
+ 
+     /**
+diff --git a/server/src/main/java/com/lunares/blockfield/server/combat/ServerBodyPoses.java b/server/src/main/java/com/lunares/blockfield/server/combat/ServerBodyPoses.java
+index 803a1600..fd2b2fc5 100644
+--- a/server/src/main/java/com/lunares/blockfield/server/combat/ServerBodyPoses.java
++++ b/server/src/main/java/com/lunares/blockfield/server/combat/ServerBodyPoses.java
+@@ -699,6 +699,7 @@ public final class ServerBodyPoses {
+ 
+     private static void evaluateInner(
+             ServerPlayer player, State state, long tick, String restartReason) {
++        UperfProbe.begin(0);
+         boolean advancing = state.tick != tick;
+         seatChanged(player);
+         List<String> diagnostics = new ArrayList<>();
+@@ -837,6 +838,7 @@ public final class ServerBodyPoses {
+                         keys[2],
+                         keys[3],
+                         player.getYRot());
++        UperfProbe.lap(0, UperfProbe.R_INPUTS);
+         if (advancing && state.animator != null && !started) state.animator.tick(input, pc);
+         // bf7 advances the incumbent, runs working producers, then removes it during render.
+         // Canonical observer: one render per completed server tick; restore next working tick.
+@@ -857,6 +859,7 @@ public final class ServerBodyPoses {
+         Matrix4f root = renderOffset(input);
+         var rotator = new ParCoolBodyPose.Root(root, input);
+         boolean replaced = rotations(state.animator, mask, input, pc, rotator, root);
++        UperfProbe.lap(0, UperfProbe.R_PARCOOL);
+         // Both families update one stack before it is sampled. The PA body transform lives
+         // inside setupRotations, so a ParCool replacement still suppresses that root stage.
+         LrBodyPose.bind(player, state);
+@@ -867,6 +870,7 @@ public final class ServerBodyPoses {
+         AnimSyncCapture.lr(player, state, sync, journal);
+         weapon(player, state, input, replaced ? null : root, diagnostics, tick, weaponIds, sync);
+         AnimSyncCapture.create(player, sync, tick);
++        UperfProbe.lap(0, UperfProbe.R_WEAPON);
+         try {
+             LrBodyPose.sample(player, state.bones, replaced ? null : root, input);
+         } catch (ReflectiveOperationException
+@@ -875,6 +879,7 @@ public final class ServerBodyPoses {
+             diagnostics.add("missing:lr_playeranimator");
+         }
+         diagnostics.addAll(LrBodyPose.diagnostics(player));
++        UperfProbe.lap(0, UperfProbe.R_SAMPLE);
+         if (state.animator != null && mask != 63) {
+             postStages(state.animator, input, pc, rotator, transformer, replaced);
+         } else if (state.animator == null
+@@ -950,6 +955,7 @@ public final class ServerBodyPoses {
+                             skin.source(),
+                             weaponIds);
+         }
++        UperfProbe.lap(0, UperfProbe.R_FRAME);
+         state.body =
+                 new CombatHitbox.Body(
+                         yaw,
+@@ -967,13 +973,16 @@ public final class ServerBodyPoses {
+         for (String diagnostic : diagnostics)
+             if (diagnostic.startsWith("fallback:")) fallbackDefects++;
+         CombatPoseHistory.commit(player, state.body);
+-        if (AnimSync.capturing())
++        UperfProbe.lap(0, UperfProbe.R_HISTORY);
++        if (AnimSync.capturing()) {
+             AnimSyncCapture.commit(
+                     player,
+                     state,
+                     sync,
+                     tick,
+                     new AnimSyncCapture.Context(weaponIds, AnimSyncCapture.rawAim(player)));
++            UperfProbe.lap(0, UperfProbe.C_COMMIT);
++        }
+     }
+ 
+     /** Unpadded stance flatness for the Body metadata; hit geometry comes from the shape. */
+diff --git a/server/src/main/java/com/lunares/blockfield/server/combat/UperfProbe.java b/server/src/main/java/com/lunares/blockfield/server/combat/UperfProbe.java
+new file mode 100644
+index 00000000..6d909b8a
+--- /dev/null
++++ b/server/src/main/java/com/lunares/blockfield/server/combat/UperfProbe.java
+@@ -0,0 +1,126 @@
++package com.lunares.blockfield.server.combat;
++
++import java.util.LinkedHashMap;
++import java.util.Map;
++
++/**
++ * UPERF PROTOTYPE ONLY (docs/review/anim-sync-perf-options.md): stage timers for the END-tick
++ * pose, capture and stream, and a mock-dispatch counter fed by the benchmark. Off (the default)
++ * every call is one volatile read; nothing here changes a value.
++ */
++public final class UperfProbe {
++    private UperfProbe() {}
++
++    public static volatile boolean on;
++
++    /** Incremented by the benchmark's Mockito invocation listener. */
++    public static long mockCalls;
++
++    static final String[] NAMES = {
++        // level 0: ServerBodyPoses.evaluateInner
++        "r10.inputs",
++        "r10.parcoolVanillaRoot",
++        "r10.weaponLr",
++        "r10.legacySample",
++        "r10.frame",
++        "r10.bodyHistory",
++        "capture.commit",
++        // level 1: AnimSyncCapture.commit
++        "capture.identityTake",
++        "capture.freeze",
++        "capture.seal",
++        "capture.retain",
++        "capture.tail",
++        // level 2: AnimSyncCapture.freeze / retain
++        "freeze.vanilla",
++        "freeze.paLrTacz",
++        "freeze.createSbw",
++        "freeze.parcool",
++        "freeze.validate",
++        "freeze.stage",
++        "retain.roundTrip",
++        "retain.rest",
++        // level 0 (stream): AnimSyncStream.prepare/publish per observer
++        "stream.prepareRecords",
++        "stream.fold",
++        "stream.prepareEncode",
++        "stream.publishPrune",
++        "stream.publishRest",
++        // level 1 (stream): fold
++        "fold.inputs",
++        "fold.reduce",
++        "fold.commit",
++    };
++
++    static final int R_INPUTS = 0,
++            R_PARCOOL = 1,
++            R_WEAPON = 2,
++            R_SAMPLE = 3,
++            R_FRAME = 4,
++            R_HISTORY = 5,
++            C_COMMIT = 6,
++            C_IDENTITY = 7,
++            C_FREEZE = 8,
++            C_SEAL = 9,
++            C_RETAIN = 10,
++            C_TAIL = 11,
++            F_VANILLA = 12,
++            F_PA = 13,
++            F_CREATE_SBW = 14,
++            F_PARCOOL = 15,
++            F_VALIDATE = 16,
++            F_STAGE = 17,
++            T_ROUNDTRIP = 18,
++            T_REST = 19,
++            S_RECORDS = 20,
++            S_FOLD = 21,
++            S_ENCODE = 22,
++            S_PRUNE = 23,
++            S_PUBLISH = 24,
++            D_INPUTS = 25,
++            D_REDUCE = 26,
++            D_COMMIT = 27;
++
++    static final long[] NANOS = new long[NAMES.length];
++    static final long[] COUNT = new long[NAMES.length];
++    static final long[] MOCKS = new long[NAMES.length];
++    private static final long[] MARK = new long[3];
++    private static final long[] MOCK_MARK = new long[3];
++
++    static void begin(int level) {
++        if (!on) return;
++        MARK[level] = System.nanoTime();
++        MOCK_MARK[level] = mockCalls;
++    }
++
++    static void lap(int level, int slot) {
++        if (!on) return;
++        long now = System.nanoTime();
++        NANOS[slot] += now - MARK[level];
++        MOCKS[slot] += mockCalls - MOCK_MARK[level];
++        COUNT[slot]++;
++        MARK[level] = now;
++        MOCK_MARK[level] = mockCalls;
++    }
++
++    public static void reset() {
++        java.util.Arrays.fill(NANOS, 0);
++        java.util.Arrays.fill(COUNT, 0);
++        java.util.Arrays.fill(MOCKS, 0);
++    }
++
++    /** Per slot: total nanos, laps, mock calls. */
++    public static Map<String, Object> snapshot(int ticks) {
++        var result = new LinkedHashMap<String, Object>();
++        for (int i = 0; i < NAMES.length; i++) {
++            if (COUNT[i] == 0) continue;
++            var row = new LinkedHashMap<String, Object>();
++            row.put("msPerTick", NANOS[i] / 1e6 / ticks);
++            row.put("usPerLap", NANOS[i] / 1e3 / COUNT[i]);
++            row.put("lapsPerTick", (double) COUNT[i] / ticks);
++            row.put("mockCallsPerLap", (double) MOCKS[i] / COUNT[i]);
++            result.put(NAMES[i], row);
++        }
++        return result;
++    }
++}
+diff --git a/server/src/main/java/com/lunares/blockfield/server/combat/VanillaAnimSync.java b/server/src/main/java/com/lunares/blockfield/server/combat/VanillaAnimSync.java
+index e11086e1..c3c5bd24 100644
+--- a/server/src/main/java/com/lunares/blockfield/server/combat/VanillaAnimSync.java
++++ b/server/src/main/java/com/lunares/blockfield/server/combat/VanillaAnimSync.java
+@@ -571,9 +571,31 @@ public final class VanillaAnimSync {
+                 .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+     }
+ 
++    // UPERF PROTOTYPE ONLY: -Dblockfield.uperf.equipMemo memoizes canonicalString by stack
++    // content (item, count, components: exactly what ItemStack.CODEC encodes).
++    private static final boolean EQUIP_MEMO = Boolean.getBoolean("blockfield.uperf.equipMemo");
++
++    private record MemoEntry(ItemStack copy, net.minecraft.core.RegistryAccess access, String text) {}
++
++    private static final java.util.Map<ItemStack, MemoEntry> EQUIP_CACHE =
++            new java.util.WeakHashMap<>();
++
+     /** Stable empty-slot encoding (never a reused last-item byte string). */
+     static String canonicalString(ItemStack stack, net.minecraft.core.RegistryAccess access) {
+         if (stack.isEmpty()) return "empty";
++        if (EQUIP_MEMO) {
++            var hit = EQUIP_CACHE.get(stack);
++            if (hit != null && hit.access() == access && ItemStack.matches(hit.copy(), stack))
++                return hit.text();
++            String text = canonicalUncached(stack, access);
++            EQUIP_CACHE.put(stack, new MemoEntry(stack.copy(), access, text));
++            return text;
++        }
++        return canonicalUncached(stack, access);
++    }
++
++    private static String canonicalUncached(
++            ItemStack stack, net.minecraft.core.RegistryAccess access) {
+         var ops = access.createSerializationContext(net.minecraft.nbt.NbtOps.INSTANCE);
+         var tag =
+                 ItemStack.CODEC
+diff --git a/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java
+index 3f18767c..b2660b8d 100644
+--- a/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java
++++ b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java
+@@ -134,7 +134,10 @@ public final class AnimSyncBench {
+                 var parts = cohortSpec.split(":");
+                 int size = Integer.parseInt(parts[0]);
+                 int seen = parts.length > 1 ? Integer.parseInt(parts[1]) : size - 1;
+-                for (boolean combat : new boolean[] {false, true}) {
++                for (boolean combat :
++                        Boolean.getBoolean("blockfield.uperf.combatOnly")
++                                ? new boolean[] {true}
++                                : new boolean[] {false, true}) {
+                     String name =
+                             size
+                                     + (seen < size - 1 ? "x" + seen : "")
+@@ -325,8 +328,16 @@ public final class AnimSyncBench {
+     // --- Cohort ---
+ 
+     private static final MinecraftServer SERVER =
+-            mock(MinecraftServer.class, withSettings().stubOnly());
+-    private static final PlayerList LIST = mock(PlayerList.class, withSettings().stubOnly());
++            mock(MinecraftServer.class, counted(withSettings().stubOnly()));
++    private static final PlayerList LIST =
++            mock(PlayerList.class, counted(withSettings().stubOnly()));
++
++    /** UPERF PROTOTYPE: -Puperf.countMocks counts every Mockito dispatch of the bench doubles. */
++    static org.mockito.MockSettings counted(org.mockito.MockSettings settings) {
++        return Boolean.getBoolean("blockfield.uperf.countMocks")
++                ? settings.invocationListeners(report -> UperfProbe.mockCalls++)
++                : settings;
++    }
+     private static long serverTick;
+     private static List<ServerPlayer> listed = List.of();
+ 
+@@ -344,12 +355,27 @@ public final class AnimSyncBench {
+             for (int i = 0; i < warmup; i++) world.tick(false);
+             world.resetCounts();
+             var composition = world.composition();
++            // UPERF PROTOTYPE: the JFR table needs the whole recording in heap; large cohorts skip it.
++            boolean jfr = !Boolean.getBoolean("blockfield.uperf.noJfr") && size * seen <= 400;
+             var recording = new jdk.jfr.Recording();
+             recording.enable("jdk.ExecutionSample").withPeriod(Duration.ofMillis(2));
+             recording.enable("jdk.ObjectAllocationSample").with("throttle", "2000/s");
+-            recording.start();
++            if (jfr) recording.start();
++            UperfProbe.reset();
++            UperfShare.reset();
++            UperfProbe.on = true;
+             for (int i = 0; i < ticks; i++) world.tick(true);
+-            recording.stop();
++            UperfProbe.on = false;
++            if (jfr) recording.stop();
++            var uperf = new LinkedHashMap<String, Object>();
++            uperf.put("stages", UperfProbe.snapshot(ticks));
++            uperf.put("share", UperfShare.snapshot(ticks));
++            uperf.put("mockNanosPerCall", world.mockCost());
++            if (World.FLIGHT > 0) {
++                uperf.put("flightTicks", World.FLIGHT);
++                uperf.put("flightCpuNanosPerVictimTick", world.flightVictim.stats());
++                uperf.put("flightFailures", world.flightFailures);
++            }
+             var out =
+                     Path.of(System.getProperty("blockfield.animSync.benchOut", "anim-sync-bench"));
+             Files.createDirectories(out);
+@@ -361,11 +387,12 @@ public final class AnimSyncBench {
+                                     + seen
+                                     + (combat ? "-combat" : "-idle")
+                                     + ".jfr");
+-            recording.dump(file);
++            if (jfr) recording.dump(file);
+             recording.close();
+             var result = world.results();
+             result.put("checkpointComposition", composition);
+-            result.put("jfr", JfrTable.analyze(file));
++            result.put("uperf", uperf);
++            if (jfr) result.put("jfr", JfrTable.analyze(file));
+             return result;
+         } finally {
+             world.close();
+@@ -477,6 +504,7 @@ public final class AnimSyncBench {
+                 end(op, measure);
+             }
+             if (combat) shot(measure);
++            if (FLIGHT > 0) flight(measure);
+             for (var sim : sims) {
+                 if (!sim.toPair.isEmpty()) {
+                     var other = sim.toPair.removeFirst();
+@@ -514,7 +542,9 @@ public final class AnimSyncBench {
+             for (var sim : sims) {
+                 var op = op("streamPerObserver");
+                 op.begin();
++                UperfShare.server = true;
+                 var delivery = stream(sim);
++                UperfShare.server = false;
+                 end(op, measure);
+                 if (delivery != null) sim.viewer.receive(delivery, tick);
+                 sim.viewer.frame(tick);
+@@ -532,6 +562,38 @@ public final class AnimSyncBench {
+             }
+         }
+ 
++        // UPERF PROTOTYPE: -Puperf.flight=N keeps each exact shot "in flight" for N more ticks and
++        // resolves every validated victim at each flight age as BulletHitboxMixin does.
++        static final int FLIGHT = Integer.getInteger("blockfield.uperf.flight", 0);
++
++        record InFlight(Sim sim, CombatView view, AnimSyncValidation.Verdict verdict, long tick) {}
++
++        final java.util.ArrayDeque<InFlight> inFlight = new java.util.ArrayDeque<>();
++        final Series flightVictim = new Series();
++        long flightFailures;
++
++        private void flight(boolean measure) {
++            inFlight.removeIf(f -> tick - f.tick() > FLIGHT);
++            for (var f : inFlight) {
++                long age = tick - f.tick();
++                if (age < 1) continue;
++                var a = f.view().animation().a().plusWhole(age);
++                for (var other : sims) {
++                    var victim = f.verdict().victims().get(other.id);
++                    if (victim == null) continue;
++                    long t0 = MX.getCurrentThreadCpuTime();
++                    try {
++                        var advanced = AnimSyncValidation.advance(victim, f.view(), age);
++                        var result = AnimSyncEval.evaluate(other.player, advanced, a);
++                        if (result.body() == null) flightFailures++;
++                    } catch (RuntimeException failure) {
++                        flightFailures++;
++                    }
++                    if (measure) flightVictim.add(MX.getCurrentThreadCpuTime() - t0);
++                }
++            }
++        }
++
+         /** The TaCZ holder firing in tick {@code tick}: one of the burst's two shooters. */
+         Sim shooter(long tick) {
+             var guns = sims.stream().filter(s -> s.gun).toList();
+@@ -552,6 +614,7 @@ public final class AnimSyncBench {
+             long rowNanosBefore = AnimSync.counter("validateRowNanos");
+             var op = op("validatePerReceipt");
+             op.begin();
++            UperfShare.server = true;
+             var verdict =
+                     AnimSyncValidation.validate(
+                             sim.observer,
+@@ -559,6 +622,7 @@ public final class AnimSyncBench {
+                             System.nanoTime(),
+                             com.lunares.blockfield.server.AnimationResourceGate.activated(
+                                     sim.player));
++            UperfShare.server = false;
+             end(op, measure);
+             long validate = op.lastCpu;
+             long rowsDone = AnimSync.counter("validateRows") - rowsBefore;
+@@ -617,6 +681,7 @@ public final class AnimSyncBench {
+                 }
+             }
+             if (!verdict.exact()) return;
++            if (FLIGHT > 0) inFlight.add(new InFlight(sim, view, verdict, tick));
+             var a = view.animation().a();
+             for (var other : sims) {
+                 var victim = verdict.victims().get(other.id);
+@@ -676,6 +741,27 @@ public final class AnimSyncBench {
+             return new Delivery(packets, prepared.packet().animation());
+         }
+ 
++        /** UPERF PROTOTYPE: nanos per Mockito dispatch on a bench player (stubbed/unstubbed). */
++        Map<String, Object> mockCost() {
++            var p = sims.getFirst().player;
++            var out = new LinkedHashMap<String, Object>();
++            long sink = 0;
++            for (int round = 0; round < 2; round++) {
++                long t0 = System.nanoTime();
++                for (int i = 0; i < 100_000; i++) sink += (long) p.getYRot();
++                long t1 = System.nanoTime();
++                for (int i = 0; i < 100_000; i++) sink += p.isAlive() ? 1 : 0;
++                long t2 = System.nanoTime();
++                for (int i = 0; i < 100_000; i++) sink += p.isPassenger() ? 1 : 0;
++                long t3 = System.nanoTime();
++                out.put("thenAnswer", (t1 - t0) / 100_000.0);
++                out.put("thenReturn", (t2 - t1) / 100_000.0);
++                out.put("unstubbed", (t3 - t2) / 100_000.0);
++            }
++            out.put("sink", sink & 1);
++            return out;
++        }
++
+         /** Encoded bytes of each component of every player's latest checkpoint. */
+         Map<String, Object> composition() {
+             var out = new LinkedHashMap<String, Object>();
+@@ -813,14 +899,12 @@ public final class AnimSyncBench {
+         }
+ 
+         private ServerPlayer player() throws Exception {
+-            var p =
+-                    mock(
+-                            ServerPlayer.class,
+-                            withSettings()
+-                                    .stubOnly()
+-                                    .extraInterfaces(
+-                                            io.wispforest.accessories.pond.AccessoriesAPIAccess
+-                                                    .class));
++            var settings =
++                    withSettings()
++                            .stubOnly()
++                            .extraInterfaces(
++                                    io.wispforest.accessories.pond.AccessoriesAPIAccess.class);
++            var p = mock(ServerPlayer.class, counted(settings));
+             var serverField =
+                     com.lunares.blockfield.oracle.OracleReflection.field(
+                             ServerPlayer.class, "server", "Lnet/minecraft/server/MinecraftServer;");
+@@ -833,7 +917,8 @@ public final class AnimSyncBench {
+                             "Lnet/minecraft/world/entity/WalkAnimationState;");
+             walkField.setAccessible(true);
+             walkField.set(p, walk);
+-            p.connection = mock(ServerGamePacketListenerImpl.class, withSettings().stubOnly());
++            p.connection =
++                    mock(ServerGamePacketListenerImpl.class, counted(withSettings().stubOnly()));
+             when(p.connection.getPlayer()).thenReturn(p);
+             when(p.connection.latency()).thenReturn(50);
+             var inventory = new Inventory(p);
+@@ -845,7 +930,7 @@ public final class AnimSyncBench {
+             inventory.items.set(8, new ItemStack(Items.ARROW, 48));
+             inventory.armor.set(2, new ItemStack(Items.IRON_CHESTPLATE));
+             inventory.armor.set(3, new ItemStack(Items.IRON_HELMET));
+-            var level = mock(ServerLevel.class, withSettings().stubOnly());
++            var level = mock(ServerLevel.class, counted(withSettings().stubOnly()));
+             when(level.dimension()).thenReturn(Level.OVERWORLD);
+             when(level.isLoaded(any())).thenReturn(true);
+             var access = RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
+@@ -906,10 +991,11 @@ public final class AnimSyncBench {
+             var item =
+                     mock(
+                             Item.class,
+-                            withSettings()
+-                                    .stubOnly()
+-                                    .defaultAnswer(Mockito.CALLS_REAL_METHODS)
+-                                    .extraInterfaces(com.tacz.guns.api.item.IGun.class));
++                            counted(
++                                    withSettings()
++                                            .stubOnly()
++                                            .defaultAnswer(Mockito.CALLS_REAL_METHODS)
++                                            .extraInterfaces(com.tacz.guns.api.item.IGun.class)));
+             when(item.asItem()).thenReturn(item);
+             when(item.components()).thenReturn(Items.IRON_HOE.components());
+             when(item.builtInRegistryHolder()).thenReturn(Items.IRON_HOE.builtInRegistryHolder());
+@@ -983,6 +1069,12 @@ public final class AnimSyncBench {
+                 }
+             }
+             if (hanging && tick % 5 == 0) CreateBodyPose.journal().noteTtlPacket(uuid, tick);
++            // UPERF PROTOTYPE: -Puperf.parcoolTick advances every action's counters once per tick
++            // as bf7 ActionProcessor.processAction does for each server player (Action.tick).
++            if (Boolean.getBoolean("blockfield.uperf.parcoolTick"))
++                for (var action :
++                        com.alrex.parcool.common.attachment.common.Parkourability.get(player)
++                                .getList()) action.tick();
+         }
+     }
+ 
+@@ -1041,6 +1133,17 @@ public final class AnimSyncBench {
+             frameId++;
+             a = new Time(h - 2, 0x4000);
+             r = new Time(h - 3, 0x8000);
++            if (SPREAD > 0) {
++                // UPERF PROTOTYPE: each observer's A sits at its own offset behind H (as differing
++                // jitter/oA and arrival phase do), drifting slowly; nondecreasing, R <= A <= H.
++                double g = (sim.index * 0.6180339887) % 1.0, phase = (sim.index * 0.3819660113) % 1.0;
++                double delta =
++                        -0.75 + (SPREAD - 0.4) * g + 0.2 * Math.sin(2 * Math.PI * (tick / 50.0 + phase));
++                double at = h - 2 + delta;
++                long whole = (long) Math.floor(at);
++                a = new Time(whole, Math.min(0xFFFF, (int) ((at - whole) * 65536)));
++                r = new Time(h - 3, 0);
++            }
+             for (var life : lives.values()) {
+                 try {
+                     step(life);
+@@ -1106,6 +1209,8 @@ public final class AnimSyncBench {
+         }
+ 
+         private static final boolean VERIFY = Boolean.getBoolean("blockfield.animSync.benchVerify");
++        private static final double SPREAD =
++                Double.parseDouble(System.getProperty("blockfield.uperf.aSpread", "0"));
+ 
+         /** Runs {@code operation} on the reference reduction with fresh scratch per operation. */
+         private void reference(
+diff --git a/server/src/oracleTest/java/com/lunares/blockfield/server/combat/UperfShare.java b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/UperfShare.java
+new file mode 100644
+index 00000000..f4320f3d
+--- /dev/null
++++ b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/UperfShare.java
+@@ -0,0 +1,203 @@
++package com.lunares.blockfield.server.combat;
++
++import com.lunares.blockfield.common.combat.AnimationGraphState;
++import com.lunares.blockfield.common.combat.AnimationStartReport.StartKey;
++import com.lunares.blockfield.common.combat.AnimationState;
++import com.lunares.blockfield.common.combat.ObserverReducer;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.LinkedHashMap;
++import java.util.Map;
++import java.util.Set;
++
++/**
++ * UPERF PROTOTYPE ONLY: how many server-side reducer steps (folds and receipt rows) repeat a step
++ * another observer already took for the same target life and bucket from the same presentation.
++ * The key is the pre-step composed graph and ParCool value with the reduction's own seed id
++ * relabelled (the only observer-minted label in a reduced graph); each repeat also compares the
++ * relabelled post-step graph with the first one, which tests that relabelling is result-neutral.
++ */
++final class UperfShare {
++    private UperfShare() {}
++
++    static boolean server;
++    static final boolean ON = Boolean.getBoolean("blockfield.uperf.share");
++
++    record Key(
++            long target, long bucket, AnimationGraphState graph, AnimationState.ParCool parcool) {}
++
++    private static final Map<Key, AnimationGraphState> SEEN = new HashMap<>();
++    // Distinct pre-states per (target, bucket) as key hashes: counting only, bounded memory.
++    private static final Map<Long, Map<Long, Set<Integer>>> CLASSES = new HashMap<>();
++    private static final Map<String, Key> FIRST = new HashMap<>();
++    private static final Map<Long, Map<Long, Integer>> STEPS = new HashMap<>();
++    private static long steps, hits, mismatches, stepNanos, hitNanos, probeNanos, lastPrune;
++    private static Key pending;
++    private static long started;
++
++    static {
++        if (ON) ObserverReducer.STEP_PROBE = new Probe();
++    }
++
++    static void reset() {
++        SEEN.clear();
++        FIRST.clear();
++        CLASSES.clear();
++        STEPS.clear();
++        steps = hits = mismatches = stepNanos = hitNanos = probeNanos = 0;
++    }
++
++    private static final class Probe implements ObserverReducer.StepProbe {
++        @Override
++        public void before(ObserverReducer.Reduction reduction, AnimationState checkpoint) {
++            pending = null;
++            if (!server || !UperfProbe.on) return;
++            long t0 = System.nanoTime();
++            long seedId = reduction.seed().ref().contentId();
++            var result = reduction.result();
++            long target = reduction.seed().identity().targetEpoch();
++            long bucket = checkpoint.serverTick();
++            pending =
++                    new Key(
++                            target,
++                            bucket,
++                            normalize(result.pa().graph(), seedId),
++                            normalize(result.parcool(), seedId));
++            if (bucket - lastPrune > 20) {
++                SEEN.keySet().removeIf(k -> k.bucket() < bucket - 60);
++                FIRST.values().removeIf(k -> k.bucket() < bucket - 60);
++                lastPrune = bucket;
++            }
++            started = System.nanoTime();
++            probeNanos += started - t0;
++        }
++
++        @Override
++        public void after(ObserverReducer.Reduction reduction) {
++            long dt = System.nanoTime() - started;
++            var key = pending;
++            pending = null;
++            if (key == null) return;
++            long t0 = System.nanoTime();
++            steps++;
++            stepNanos += dt;
++            var set =
++                    CLASSES.computeIfAbsent(key.target(), k -> new HashMap<>())
++                            .computeIfAbsent(key.bucket(), k -> new HashSet<>());
++            if (DIAG > 0) {
++                var first = FIRST.putIfAbsent(key.target() + ":" + key.bucket(), key);
++                if (first != null && !first.equals(key)) {
++                    DIAG--;
++                    diff(first, key);
++                }
++            }
++            set.add(key.hashCode());
++            STEPS.computeIfAbsent(key.target(), k -> new HashMap<>())
++                    .merge(key.bucket(), 1, Integer::sum);
++            var post = normalize(reduction.result().pa().graph(), reduction.seed().ref().contentId());
++            var first = SEEN.get(key);
++            if (first == null) SEEN.put(key, post);
++            else {
++                hits++;
++                hitNanos += dt;
++                if (!first.equals(post)) mismatches++;
++            }
++            probeNanos += System.nanoTime() - t0;
++        }
++    }
++
++    private static int DIAG = Integer.getInteger("blockfield.uperf.shareDiag", 0);
++
++    /** Prints where two presentations of one target and bucket differ. */
++    private static void diff(Key a, Key b) {
++        var na = a.graph().nodes();
++        var nb = b.graph().nodes();
++        var sb = new StringBuilder("UPERF-DIFF target=" + a.target() + " bucket=" + a.bucket());
++        sb.append(" nodes=").append(na.size()).append('/').append(nb.size());
++        sb.append(" roots=").append(a.graph().roots().equals(b.graph().roots()));
++        sb.append(" aliases=").append(a.graph().aliases().equals(b.graph().aliases()));
++        sb.append(" parcool=").append(java.util.Objects.equals(a.parcool(), b.parcool()));
++        var ida = new java.util.TreeMap<Integer, AnimationGraphState.Node>();
++        for (var n : na) ida.put(n.id(), n);
++        var idb = new java.util.TreeMap<Integer, AnimationGraphState.Node>();
++        for (var n : nb) idb.put(n.id(), n);
++        sb.append(" ids=").append(ida.keySet().equals(idb.keySet()) ? "same" : ida.keySet() + " vs " + idb.keySet());
++        int shown = 0;
++        for (var e : ida.entrySet()) {
++            var other = idb.get(e.getKey());
++            if (other == null || other.equals(e.getValue())) continue;
++            if (shown++ >= 3) break;
++            var x = e.getValue();
++            sb.append("\n  node ").append(x.id()).append(" start ").append(x.start()).append(" vs ").append(other.start());
++            String dx = String.valueOf(x.data()), dy = String.valueOf(other.data());
++            int i = 0;
++            while (i < Math.min(dx.length(), dy.length()) && dx.charAt(i) == dy.charAt(i)) i++;
++            sb.append("\n    a: …").append(dx, Math.max(0, i - 80), Math.min(dx.length(), i + 120));
++            sb.append("\n    b: …").append(dy, Math.max(0, i - 80), Math.min(dy.length(), i + 120));
++        }
++        if (!java.util.Objects.equals(a.parcool(), b.parcool())) {
++            String dx = String.valueOf(a.parcool()), dy = String.valueOf(b.parcool());
++            int i = 0;
++            while (i < Math.min(dx.length(), dy.length()) && dx.charAt(i) == dy.charAt(i)) i++;
++            sb.append("\n  parcool a: …").append(dx, Math.max(0, i - 60), Math.min(dx.length(), i + 100));
++            sb.append("\n  parcool b: …").append(dy, Math.max(0, i - 60), Math.min(dy.length(), i + 100));
++        }
++        System.out.println(sb);
++    }
++
++    private static StartKey relabel(StartKey key, long seedId) {
++        return key != null && key.eventSequence() == seedId ? new StartKey(-1, key.nodeId()) : key;
++    }
++
++    static AnimationGraphState normalize(AnimationGraphState graph, long seedId) {
++        var nodes = new ArrayList<AnimationGraphState.Node>(graph.nodes().size());
++        for (var node : graph.nodes())
++            nodes.add(
++                    new AnimationGraphState.Node(
++                            node.id(), node.domain(), relabel(node.start(), seedId), node.data()));
++        return new AnimationGraphState(graph.roots(), nodes, graph.aliases());
++    }
++
++    static AnimationState.ParCool normalize(AnimationState.ParCool old, long seedId) {
++        if (old == null) return null;
++        return new AnimationState.ParCool(
++                old.animator(),
++                relabel(old.passiveStart(), seedId),
++                old.option(),
++                old.passive(),
++                old.actions(),
++                old.hangGrid(),
++                old.diveGrid());
++    }
++
++    static Map<String, Object> snapshot(int ticks) {
++        var out = new LinkedHashMap<String, Object>();
++        out.put("enabled", ON);
++        if (!ON) return out;
++        long groups = 0, classes = 0;
++        int maxClasses = 0;
++        var histogram = new java.util.TreeMap<Integer, Long>();
++        for (var target : CLASSES.entrySet())
++            for (var bucket : target.getValue().entrySet()) {
++                groups++;
++                int n = bucket.getValue().size();
++                classes += n;
++                maxClasses = Math.max(maxClasses, n);
++                histogram.merge(n, 1L, Long::sum);
++            }
++        out.put("serverStepsPerTick", (double) steps / ticks);
++        out.put("stepUsMean", steps == 0 ? 0 : stepNanos / 1e3 / steps);
++        out.put("repeatedSteps", hits);
++        out.put("repeatedShare", steps == 0 ? 0 : (double) hits / steps);
++        out.put("repeatedStepMsPerTick", hitNanos / 1e6 / ticks);
++        out.put("allStepMsPerTick", stepNanos / 1e6 / ticks);
++        out.put("relabelMismatches", mismatches);
++        out.put("targetBuckets", groups);
++        out.put("classesPerTargetBucketMean", groups == 0 ? 0 : (double) classes / groups);
++        out.put("classesPerTargetBucketMax", maxClasses);
++        out.put("classesHistogram", histogram);
++        out.put("probeMsPerTick", probeNanos / 1e6 / ticks);
++        return out;
++    }
++}

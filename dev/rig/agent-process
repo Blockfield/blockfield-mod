@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+runtime_parent="${XDG_RUNTIME_DIR:-/tmp}"
+if [[ "$runtime_parent" == "/tmp" ]]; then
+  registry_dir="/tmp/ai-agent-processes-$(id -u)"
+else
+  registry_dir="$runtime_parent/ai-agent-processes"
+fi
+
+mkdir -p "$registry_dir"
+chmod 700 "$registry_dir"
+
+usage() {
+  printf '%s\n' \
+    'Usage:' \
+    '  agent-process start --name NAME [--owner SESSION] [--cwd DIR] [--log FILE] -- COMMAND [ARG...]' \
+    '  agent-process list' \
+    '  agent-process status ID' \
+    '  agent-process stop [--owner SESSION] [--force] ID' \
+    '' \
+    'Starts long-running agent-owned processes in a separate process group and records ownership.' \
+    'stop refuses processes owned by another agent session unless --force is explicitly used.'
+}
+
+default_owner() {
+  local value="${AI_AGENT_SESSION_ID:-${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-${CLAUDE_SESSION_ID:-${GEMINI_SESSION_ID:-${OPENCODE_SESSION_ID:-}}}}}}"
+  if [[ -z "$value" ]]; then
+    printf '%s\n' 'No stable agent session ID found. Pass --owner SESSION.' >&2
+    return 2
+  fi
+  printf '%s' "$value"
+}
+
+start_ticks() {
+  local pid="$1"
+  [[ -r "/proc/$pid/stat" ]] || return 1
+  awk '{print $22}' "/proc/$pid/stat"
+}
+
+tagged_group_pids() {
+  local process_id="$1"
+  local pgid="$2"
+  local pid candidate_pgid
+
+  while read -r pid candidate_pgid; do
+    [[ "$candidate_pgid" == "$pgid" ]] || continue
+    [[ -r "/proc/$pid/environ" ]] || continue
+    if tr '\0' '\n' < "/proc/$pid/environ" | grep -Fqx "AI_AGENT_PROCESS_ID=$process_id"; then
+      printf '%s\n' "$pid"
+    fi
+  done < <(ps -eo pid=,pgid=)
+}
+
+metadata_is_live() {
+  local file="$1"
+  local process_id pid pgid recorded_ticks current_ticks
+  process_id="$(jq -r '.id' "$file")"
+  pid="$(jq -r '.pid' "$file")"
+  pgid="$(jq -r '.pgid' "$file")"
+  recorded_ticks="$(jq -r '.start_ticks' "$file")"
+
+  current_ticks="$(start_ticks "$pid" 2>/dev/null || true)"
+  if [[ -n "$current_ticks" && "$current_ticks" == "$recorded_ticks" ]]; then
+    return 0
+  fi
+
+  [[ -n "$(tagged_group_pids "$process_id" "$pgid")" ]]
+}
+
+write_metadata() {
+  local file="$1"
+  shift
+  local tmp_file="$file.tmp.$$"
+  jq -n "$@" > "$tmp_file"
+  chmod 600 "$tmp_file"
+  mv -f "$tmp_file" "$file"
+}
+
+start_process() {
+  local name=""
+  local owner=""
+  local cwd="$PWD"
+  local log_file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)
+        name="${2:?Missing value for --name}"
+        shift 2
+        ;;
+      --owner)
+        owner="${2:?Missing value for --owner}"
+        shift 2
+        ;;
+      --cwd)
+        cwd="${2:?Missing value for --cwd}"
+        shift 2
+        ;;
+      --log)
+        log_file="${2:?Missing value for --log}"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        printf 'Unknown start option: %s\n' "$1" >&2
+        usage >&2
+        return 2
+        ;;
+    esac
+  done
+
+  [[ -n "$name" ]] || { printf '%s\n' '--name is required.' >&2; return 2; }
+  [[ $# -gt 0 ]] || { printf '%s\n' 'A command is required after --.' >&2; return 2; }
+  [[ -d "$cwd" ]] || { printf 'Working directory does not exist: %s\n' "$cwd" >&2; return 2; }
+  cwd="$(realpath "$cwd")"
+  [[ -n "$owner" ]] || owner="$(default_owner)"
+
+  local process_id metadata_file pid pgid ticks started_at command_json tagged
+  process_id="$(date -u +%Y%m%dT%H%M%SZ)-$(tr -d '-' < /proc/sys/kernel/random/uuid)"
+  metadata_file="$registry_dir/$process_id.json"
+  [[ -n "$log_file" ]] || log_file="$registry_dir/$process_id.log"
+  mkdir -p "$(dirname "$log_file")"
+
+  (
+    cd "$cwd"
+    exec setsid env \
+      AI_AGENT_MANAGED=1 \
+      AI_AGENT_PROCESS_ID="$process_id" \
+      AI_AGENT_PROCESS_OWNER="$owner" \
+      "$@"
+  ) </dev/null >>"$log_file" 2>&1 &
+  pid=$!
+
+  ticks=""
+  pgid=""
+  tagged=""
+  for _ in {1..100}; do
+    ticks="$(start_ticks "$pid" 2>/dev/null || true)"
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ' || true)"
+    if [[ -r "/proc/$pid/environ" ]]; then
+      tagged="$(tr '\0' '\n' < "/proc/$pid/environ" | grep -Fqx "AI_AGENT_PROCESS_ID=$process_id" && printf yes || true)"
+    fi
+    [[ -n "$ticks" && "$pgid" == "$pid" && "$tagged" == yes ]] && break
+    sleep 0.02
+  done
+
+  if [[ -z "$ticks" || "$pgid" != "$pid" || "$tagged" != yes ]]; then
+    wait "$pid" 2>/dev/null || true
+    printf 'Process exited before it could be registered. See %s\n' "$log_file" >&2
+    return 1
+  fi
+
+  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  command_json="$(printf '%s\0' "$@" | jq -Rs 'split("\u0000")[:-1]')"
+
+  write_metadata "$metadata_file" \
+    --arg id "$process_id" \
+    --arg name "$name" \
+    --arg owner "$owner" \
+    --arg cwd "$cwd" \
+    --arg log "$log_file" \
+    --arg started_at "$started_at" \
+    --argjson pid "$pid" \
+    --argjson pgid "$pgid" \
+    --arg start_ticks "$ticks" \
+    --argjson command "$command_json" \
+    '{id:$id,name:$name,owner:$owner,pid:$pid,pgid:$pgid,start_ticks:$start_ticks,cwd:$cwd,command:$command,log:$log,started_at:$started_at}'
+
+  jq '. + {live:true}' "$metadata_file"
+}
+
+list_processes() {
+  local found=0 file live
+  printf '%-49s %-5s %-8s %-24s %s\n' 'ID' 'LIVE' 'PID' 'NAME' 'OWNER'
+  shopt -s nullglob
+  for file in "$registry_dir"/*.json; do
+    found=1
+    if metadata_is_live "$file"; then live=yes; else live=no; fi
+    jq -r --arg live "$live" '[.id,$live,(.pid|tostring),.name,.owner] | @tsv' "$file" \
+      | awk -F '\t' '{printf "%-49s %-5s %-8s %-24s %s\n", $1, $2, $3, $4, $5}'
+  done
+  [[ "$found" -eq 1 ]] || printf '%s\n' '(no registered processes)'
+}
+
+status_process() {
+  local process_id="${1:?Process ID is required}"
+  local metadata_file="$registry_dir/$process_id.json"
+  [[ -f "$metadata_file" ]] || { printf 'Unknown process ID: %s\n' "$process_id" >&2; return 1; }
+  local live=false
+  metadata_is_live "$metadata_file" && live=true
+  jq --argjson live "$live" '. + {live:$live}' "$metadata_file"
+}
+
+stop_process() {
+  local owner=""
+  local force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --owner)
+        owner="${2:?Missing value for --owner}"
+        shift 2
+        ;;
+      --force)
+        force=1
+        shift
+        ;;
+      --*)
+        printf 'Unknown stop option: %s\n' "$1" >&2
+        return 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  local process_id="${1:?Process ID is required}"
+  local metadata_file="$registry_dir/$process_id.json"
+  [[ -f "$metadata_file" ]] || { printf 'Unknown process ID: %s\n' "$process_id" >&2; return 1; }
+
+  local recorded_owner pid pgid ticks current_ticks tagged
+  recorded_owner="$(jq -r '.owner' "$metadata_file")"
+  if [[ -z "$owner" ]]; then
+    if [[ "$force" -eq 1 ]]; then owner=explicit-user-approval; else owner="$(default_owner)"; fi
+  fi
+  if [[ "$force" -ne 1 && "$owner" != "$recorded_owner" ]]; then
+    printf 'Refusing: %s belongs to agent session %s, not %s.\n' "$process_id" "$recorded_owner" "$owner" >&2
+    return 3
+  fi
+
+  pid="$(jq -r '.pid' "$metadata_file")"
+  pgid="$(jq -r '.pgid' "$metadata_file")"
+  ticks="$(jq -r '.start_ticks' "$metadata_file")"
+  current_ticks="$(start_ticks "$pid" 2>/dev/null || true)"
+  tagged="$(tagged_group_pids "$process_id" "$pgid")"
+
+  if [[ "$current_ticks" != "$ticks" && -z "$tagged" ]]; then
+    printf 'Process %s is no longer running; no signal sent.\n' "$process_id"
+    return 0
+  fi
+
+  kill -TERM -- "-$pgid"
+  for _ in {1..50}; do
+    if ! metadata_is_live "$metadata_file"; then
+      printf 'Stopped %s (process group %s).\n' "$process_id" "$pgid"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  kill -KILL -- "-$pgid" 2>/dev/null || true
+  printf 'Stopped %s with SIGKILL after the graceful timeout.\n' "$process_id"
+}
+
+command_name="${1:-}"
+[[ $# -gt 0 ]] && shift
+case "$command_name" in
+  start) start_process "$@" ;;
+  list) list_processes "$@" ;;
+  status) status_process "$@" ;;
+  stop) stop_process "$@" ;;
+  -h|--help|help|'') usage ;;
+  *) printf 'Unknown command: %s\n' "$command_name" >&2; usage >&2; exit 2 ;;
+esac

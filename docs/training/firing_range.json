@@ -1,0 +1,27 @@
+{
+  "id": "firing_range",
+  "name": "Полигон",
+  "supported_modes": ["training"],
+  "bounds": { "minX": -77, "maxX": 72, "minZ": -29, "maxZ": 164 },
+  "mode_data": {
+    "training": {
+      "spawn": { "x": 2.5, "y": 65, "z": -16.5, "yaw": 0 },
+      "forceload_chunks": { "minX": -2, "maxX": 1, "minZ": 0, "maxZ": 10 },
+      "targets": [
+        { "id": "A10a", "x": -18.5, "y": 65, "z": 10.5, "yaw": 180, "armor": "class:assault" },
+        { "id": "B25a", "x": -10.5, "y": 65, "z": 25.5, "yaw": 180, "armor": "class:assault" },
+        { "id": "C50a", "x": -2.5, "y": 65, "z": 50.5, "yaw": 180, "armor": "class:assault" },
+        { "id": "D100a", "x": 5.5, "y": 65, "z": 100.5, "yaw": 180, "armor": "class:assault" },
+        { "id": "E150a", "x": 13.5, "y": 65, "z": 150.5, "yaw": 180, "armor": "class:assault" },
+        { "id": "F25", "x": 18.5, "y": 65, "z": 25.5, "yaw": 180, "armor": "class:assault",
+          "motion": { "type": "strafe", "to_x": 28.5, "speed": 4.0 } },
+        { "id": "F50", "x": 18.5, "y": 65, "z": 50.5, "yaw": 180, "armor": "class:assault",
+          "motion": { "type": "strafe", "to_x": 28.5, "speed": 4.0 } }
+      ],
+      "zones": {
+        "pvp": { "minX": 34, "maxX": 71, "minZ": -28, "maxZ": 40 },
+        "vehicles": { "minX": -76, "maxX": -29, "minZ": -28, "maxZ": 163 }
+      }
+    }
+  }
+}

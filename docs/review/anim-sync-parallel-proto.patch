@@ -1,0 +1,425 @@
+diff --git a/dev/oracle-runner.gradle b/dev/oracle-runner.gradle
+index f3a2e2ad..3b24d7a5 100644
+--- a/dev/oracle-runner.gradle
++++ b/dev/oracle-runner.gradle
+@@ -37,7 +37,7 @@ tasks.register('oracleTest', JavaExec) {
+     def bench = project.hasProperty('animSyncBench')
+     if (bench) {
+         systemProperty 'blockfield.animSync.bench', project.property('animSyncBench')
+-        ['benchTicks', 'benchWarmup', 'benchDebug', 'benchVerify', 'benchSeconds'].each { key ->
++        ['benchTicks', 'benchWarmup', 'benchDebug', 'benchVerify', 'benchSeconds', 'benchParallel'].each { key ->
+             if (project.hasProperty(key)) systemProperty "blockfield.animSync.${key}", project.property(key)
+         }
+         systemProperty 'blockfield.animSync.benchOut', layout.buildDirectory.dir('anim-sync-bench').get().asFile.absolutePath
+diff --git a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java
+index f2cf7f31..1748d65f 100644
+--- a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java
++++ b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncCapture.java
+@@ -840,7 +840,12 @@ final class AnimSyncCapture {
+         return result;
+     }
+ 
++    /** UPAR-1 PROTOTYPE ONLY: benchmark hook receiving each retained checkpoint. */
++    static volatile java.util.function.Consumer<AnimationState> RETAIN_PROBE;
++
+     private static void retain(AnimSyncLedger.Target target, long tick, AnimationState state) {
++        var probe = RETAIN_PROBE;
++        if (probe != null) probe.accept(state);
+         var decoded = AnimSyncLedger.roundTrip(state);
+         if (!decoded.value().equals(state))
+             throw new IllegalStateException("Checkpoint changed in its own round trip");
+diff --git a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java
+index 5c732279..249b1eee 100644
+--- a/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java
++++ b/server/src/main/java/com/lunares/blockfield/server/combat/AnimSyncStream.java
+@@ -597,6 +597,20 @@ final class AnimSyncStream {
+         return new Seed(decoded, tick, identity.entityId(), AnimSyncLedger.pin(decoded));
+     }
+ 
++    /** UPAR-1 PROTOTYPE ONLY: the pure inputs of one fold reduction. */
++    record FoldInputs(
++            AnimationEvent.ObserverSeed seed,
++            com.lunares.blockfield.common.combat.AnimationStartReport.Start activation,
++            long bucket,
++            Map<Long, AnimationState> checkpoints,
++            List<com.lunares.blockfield.common.combat.ObserverReducer.Applied> applied,
++            com.lunares.blockfield.common.combat.TaczAssets tacz,
++            com.lunares.blockfield.common.combat.LrAssets lr,
++            com.lunares.blockfield.common.combat.AnimationPolicy policy) {}
++
++    /** UPAR-1 PROTOTYPE ONLY: benchmark hook, null in production. */
++    static volatile java.util.function.Consumer<FoldInputs> FOLD_PROBE;
++
+     /** Seed age at which an observer's reported presentation is folded (§3.6). */
+     static final int FOLD_AGE = 20;
+ 
+@@ -647,6 +661,20 @@ final class AnimSyncStream {
+         }
+         var context = target.at(bucket);
+         com.lunares.blockfield.common.combat.ObserverReducer.Result reduced;
++        var ordered = com.lunares.blockfield.common.combat.ObserverReducer.ordered(applied);
++        // UPAR-1 PROTOTYPE ONLY: hands the fold's pure reducer inputs to the benchmark.
++        var probe = FOLD_PROBE;
++        if (probe != null)
++            probe.accept(
++                    new FoldInputs(
++                            seed,
++                            reports.activation,
++                            bucket,
++                            Map.copyOf(checkpoints),
++                            ordered,
++                            HeldWeaponPose.assets(identity.resourceGeneration()),
++                            LrBodyPose.assets(identity.resourceGeneration()),
++                            HeldWeaponPose.policy()));
+         try {
+             reduced =
+                     com.lunares.blockfield.common.combat.ObserverReducer.reduce(
+@@ -654,7 +682,7 @@ final class AnimSyncStream {
+                             reports.activation,
+                             bucket,
+                             checkpoints,
+-                            com.lunares.blockfield.common.combat.ObserverReducer.ordered(applied),
++                            ordered,
+                             HeldWeaponPose.assets(identity.resourceGeneration()),
+                             LrBodyPose.assets(identity.resourceGeneration()),
+                             HeldWeaponPose.policy(),
+diff --git a/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java
+index deffe1c9..810e1fdd 100644
+--- a/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java
++++ b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncBench.java
+@@ -380,6 +380,17 @@ public final class AnimSyncBench {
+         final Series validateRow = new Series(), validateExact = new Series();
+         long receiptsBuilt, receiptsUnavailable, shots;
+         long tick = 100;
++        // UPAR-1 PROTOTYPE: -PbenchParallel=0,1,2,3,4 replays each measured tick's pure work.
++        final AnimSyncParallelProto proto =
++                System.getProperty("blockfield.animSync.benchParallel") == null
++                        ? null
++                        : new AnimSyncParallelProto(
++                                Arrays.stream(
++                                                System.getProperty(
++                                                                "blockfield.animSync.benchParallel")
++                                                        .split(","))
++                                        .mapToInt(Integer::parseInt)
++                                        .toArray());
+         Map<String, Long> countersAtStart = Map.of();
+ 
+         World(int size, int seen, boolean combat) throws Exception {
+@@ -438,6 +449,7 @@ public final class AnimSyncBench {
+         void tick(boolean measure) {
+             cpuAcc = bytesAcc = legacyAcc = 0;
+             tick++;
++            if (measure && proto != null) proto.begin(tick);
+             active = combat ? shooter(tick) : null;
+             // Inter-tick task drain of tick `tick`: C2S reports, the shot, accepted inputs.
+             serverTick = tick - 1;
+@@ -494,6 +506,18 @@ public final class AnimSyncBench {
+                 sim.viewer.frame(tick);
+             }
+             AnimSyncParCool.clear();
++            if (measure && proto != null) {
++                for (var sim : sims) {
++                    var target = AnimSyncLedger.find(ServerBodyPoses.state(sim.player).epoch);
++                    var state = target == null ? null : target.at(tick);
++                    if (state != null) proto.shared.add(state);
++                }
++                try {
++                    proto.end();
++                } catch (Exception e) {
++                    throw new IllegalStateException(e);
++                }
++            }
+             if (measure) {
+                 tickCpu.add(cpuAcc);
+                 tickBytes.add(bytesAcc);
+@@ -638,6 +662,7 @@ public final class AnimSyncBench {
+                 return null;
+             }
+             AnimSyncStream.publish(observer, prepared);
++            if (proto != null && proto.tick == tick) proto.packets.add(prepared.packet());
+             observer.lastTick = tick;
+             observer.lastSendTick = tick;
+             for (var entity : eligible.values())
+@@ -723,11 +748,13 @@ public final class AnimSyncBench {
+             for (var sim : sims)
+                 sim.viewer.counts.forEach((k, v) -> viewers.merge(k, v, Long::sum));
+             result.put("observerEmulation", viewers);
++            if (proto != null) result.put("parallelPrototype", proto.results());
+             return result;
+         }
+ 
+         @Override
+         public void close() {
++            if (proto != null) proto.close();
+             for (var sim : sims) {
+                 com.lunares.blockfield.server.AnimationResourceGate.forgetForTests(sim.player);
+                 ServerBodyPoses.forget(sim.player);
+diff --git a/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncParallelProto.java b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncParallelProto.java
+new file mode 100644
+index 00000000..98919d9b
+--- /dev/null
++++ b/server/src/oracleTest/java/com/lunares/blockfield/server/combat/AnimSyncParallelProto.java
+@@ -0,0 +1,263 @@
++package com.lunares.blockfield.server.combat;
++
++import com.lunares.blockfield.common.combat.AnimationResources;
++import com.lunares.blockfield.common.combat.AnimationSchema;
++import com.lunares.blockfield.common.combat.AnimationState;
++import com.lunares.blockfield.common.combat.ObserverReducer;
++import com.lunares.blockfield.network.packet.PlayerSnapshotS2CPacket;
++import io.netty.buffer.Unpooled;
++import java.lang.management.ManagementFactory;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.LinkedHashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Objects;
++import java.util.concurrent.Callable;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.Future;
++import java.util.concurrent.ThreadPoolExecutor;
++import net.minecraft.network.FriendlyByteBuf;
++
++/**
++ * UPAR-1 PROTOTYPE (not production code). Replays, after each measured benchmark tick and outside
++ * the benchmark's own timing, the tick's pure work of three stages on fixed pools of 1..4 worker
++ * threads and on the calling thread: the observer fold reductions ({@link ObserverReducer#reduce}
++ * without a memo, the cost of a fold that replays its seed), the retention round trips of the
++ * tick's checkpoints ({@link AnimSyncLedger#roundTrip}) and the snapshot batch encodes of every
++ * observer (with the tick's shared component encodings registered on each thread, as the main
++ * thread does). Every variant's results must be bit-identical to the calling thread's: equal
++ * values, equal encoded bytes, equal exception class and message.
++ */
++final class AnimSyncParallelProto implements AutoCloseable {
++    private static final com.sun.management.ThreadMXBean MX =
++            (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
++
++    /** Pool sizes; 0 is the calling (benchmark main) thread, the serial reference. */
++    private final int[] sizes;
++
++    private final Map<Integer, ExecutorService> pools = new LinkedHashMap<>();
++    private final Map<Integer, List<Thread>> threads = new LinkedHashMap<>();
++    // stage -> size -> per-tick series
++    private final Map<String, Map<Integer, AnimSyncBench.Series>> wall = new LinkedHashMap<>();
++    private final Map<String, Map<Integer, AnimSyncBench.Series>> cpu = new LinkedHashMap<>();
++    private final Map<String, Long> tasks = new LinkedHashMap<>();
++    private final Map<String, Long> mismatches = new LinkedHashMap<>();
++    private final Map<String, Long> failures = new LinkedHashMap<>();
++    private long ticks;
++
++    final List<AnimSyncStream.FoldInputs> folds = new ArrayList<>();
++    final List<AnimationState> retained = new ArrayList<>();
++    final List<PlayerSnapshotS2CPacket> packets = new ArrayList<>();
++    final List<AnimationState> shared = new ArrayList<>();
++    long tick;
++
++    AnimSyncParallelProto(int[] sizes) {
++        this.sizes = sizes;
++        for (int size : sizes) {
++            if (size == 0) continue;
++            var created = new ArrayList<Thread>();
++            int n = size;
++            var pool =
++                    (ThreadPoolExecutor)
++                            Executors.newFixedThreadPool(
++                                    size,
++                                    runnable -> {
++                                        var thread =
++                                                new Thread(
++                                                        runnable,
++                                                        "upar-proto-" + n + "-" + created.size());
++                                        thread.setDaemon(true);
++                                        created.add(thread);
++                                        return thread;
++                                    });
++            pool.prestartAllCoreThreads();
++            pools.put(size, pool);
++            threads.put(size, created);
++        }
++        for (String stage : List.of("fold", "retain", "encode")) {
++            wall.put(stage, new LinkedHashMap<>());
++            cpu.put(stage, new LinkedHashMap<>());
++            for (int size : sizes) {
++                wall.get(stage).put(size, new AnimSyncBench.Series());
++                cpu.get(stage).put(size, new AnimSyncBench.Series());
++            }
++        }
++    }
++
++    /** Starts collecting one tick's work through the production probes. */
++    void begin(long tick) {
++        this.tick = tick;
++        folds.clear();
++        retained.clear();
++        packets.clear();
++        shared.clear();
++        AnimSyncStream.FOLD_PROBE = folds::add;
++        AnimSyncCapture.RETAIN_PROBE = retained::add;
++    }
++
++    /** Stops collecting and replays the tick on every pool size, rotating the order per tick. */
++    void end() throws Exception {
++        AnimSyncStream.FOLD_PROBE = null;
++        AnimSyncCapture.RETAIN_PROBE = null;
++        ticks++;
++        var foldWork = List.copyOf(folds);
++        var retainWork = List.copyOf(retained);
++        var packetWork = List.copyOf(packets);
++        var sharedWork = List.copyOf(shared);
++        long scope = tick;
++        List<Callable<Object>> foldTasks = new ArrayList<>();
++        for (var in : foldWork) foldTasks.add(() -> fold(in));
++        List<Callable<Object>> retainTasks = new ArrayList<>();
++        for (var state : retainWork) retainTasks.add(() -> retain(state));
++        List<Callable<Object>> encodeTasks = new ArrayList<>();
++        for (var packet : packetWork) encodeTasks.add(() -> encode(scope, sharedWork, packet));
++        int rotation = (int) (ticks % sizes.length);
++        Map<String, List<Object>> reference = new LinkedHashMap<>();
++        // The calling thread runs first every tick: it is the serial reference.
++        reference.put("fold", run("fold", 0, foldTasks));
++        reference.put("retain", run("retain", 0, retainTasks));
++        reference.put("encode", run("encode", 0, encodeTasks));
++        for (int i = 0; i < sizes.length; i++) {
++            int size = sizes[(i + rotation) % sizes.length];
++            if (size == 0) continue;
++            compare("fold", reference.get("fold"), run("fold", size, foldTasks));
++            compare("retain", reference.get("retain"), run("retain", size, retainTasks));
++            compare("encode", reference.get("encode"), run("encode", size, encodeTasks));
++        }
++        tasks.merge("fold", (long) foldTasks.size(), Long::sum);
++        tasks.merge("retain", (long) retainTasks.size(), Long::sum);
++        tasks.merge("encode", (long) encodeTasks.size(), Long::sum);
++    }
++
++    private List<Object> run(String stage, int size, List<Callable<Object>> work)
++            throws Exception {
++        var out = new ArrayList<Object>(work.size());
++        if (size == 0) {
++            long cpu0 = MX.getCurrentThreadCpuTime();
++            long start = System.nanoTime();
++            for (var task : work) out.add(call(task));
++            wall.get(stage).get(0).add(System.nanoTime() - start);
++            cpu.get(stage).get(0).add(MX.getCurrentThreadCpuTime() - cpu0);
++            return out;
++        }
++        var pool = pools.get(size);
++        long cpu0 = poolCpu(size);
++        long start = System.nanoTime();
++        List<Callable<Object>> wrapped = new ArrayList<>(work.size());
++        for (var task : work) wrapped.add(() -> call(task));
++        List<Future<Object>> futures = pool.invokeAll(wrapped);
++        for (var future : futures) out.add(future.get());
++        wall.get(stage).get(size).add(System.nanoTime() - start);
++        cpu.get(stage).get(size).add(poolCpu(size) - cpu0);
++        return out;
++    }
++
++    private long poolCpu(int size) {
++        long total = 0;
++        for (var thread : threads.get(size)) total += MX.getThreadCpuTime(thread.threadId());
++        return total;
++    }
++
++    /** A task's value, or its exception as a comparable value (class and message). */
++    private static Object call(Callable<Object> task) {
++        try {
++            return task.call();
++        } catch (Throwable thrown) {
++            return "threw:" + thrown.getClass().getName() + ":" + thrown.getMessage();
++        }
++    }
++
++    private static Object fold(AnimSyncStream.FoldInputs in) {
++        var result =
++                ObserverReducer.reduce(
++                        in.seed(),
++                        in.activation(),
++                        in.bucket(),
++                        in.checkpoints(),
++                        in.applied(),
++                        in.tacz(),
++                        in.lr(),
++                        in.policy());
++        // The value and the bytes the successor seed would carry.
++        return List.of(result, Arrays.hashCode(AnimationSchema.encode(result.pa().graph())));
++    }
++
++    private static Object retain(AnimationState state) {
++        var decoded = AnimSyncLedger.roundTrip(state);
++        if (!decoded.value().equals(state)) return "changed";
++        return List.of(decoded.value(), decoded.bytes(), decoded.digest());
++    }
++
++    private static Object encode(
++            long scope, List<AnimationState> shared, PlayerSnapshotS2CPacket packet) {
++        // The main thread registers each target's checkpoint once per tick (AnimSyncStream.share);
++        // a worker registers the same immutable values in its own thread-confined registry.
++        for (var state : shared)
++            for (Object component :
++                    Arrays.asList(
++                            state.placement(),
++                            state.vanilla(),
++                            state.stance(),
++                            state.equipment(),
++                            state.tacz(),
++                            state.lr(),
++                            state.graph(),
++                            state.parcool(),
++                            state.create(),
++                            state.sbw(),
++                            state.decisions())) AnimationSchema.shareEncoding(scope, component);
++        var buf = new FriendlyByteBuf(Unpooled.buffer());
++        try {
++            PlayerSnapshotS2CPacket.ANIMATION_CODEC.encode(buf, packet);
++            byte[] bytes = new byte[buf.readableBytes()];
++            buf.readBytes(bytes);
++            return AnimationResources.Digest.hash(bytes);
++        } finally {
++            buf.release();
++        }
++    }
++
++    private void compare(String stage, List<Object> expected, List<Object> actual) {
++        if (expected.size() != actual.size()) {
++            mismatches.merge(stage, 1L, Long::sum);
++            return;
++        }
++        for (int i = 0; i < expected.size(); i++) {
++            var a = expected.get(i);
++            var b = actual.get(i);
++            if (a instanceof String s && s.startsWith("threw:")) failures.merge(stage, 1L, Long::sum);
++            if (!Objects.equals(a, b)) mismatches.merge(stage, 1L, Long::sum);
++        }
++    }
++
++    Map<String, Object> results() {
++        var out = new LinkedHashMap<String, Object>();
++        out.put("ticks", ticks);
++        out.put("sizes", Arrays.toString(sizes));
++        out.put("tasks", tasks);
++        out.put("mismatches", mismatches);
++        out.put("referenceExceptions", failures);
++        var stages = new LinkedHashMap<String, Object>();
++        for (String stage : wall.keySet()) {
++            var bySize = new LinkedHashMap<String, Object>();
++            for (int size : sizes) {
++                var entry = new LinkedHashMap<String, Object>();
++                entry.put("wallNanosPerTick", wall.get(stage).get(size).stats());
++                entry.put("cpuNanosPerTick", cpu.get(stage).get(size).stats());
++                bySize.put(size == 0 ? "caller" : "pool" + size, entry);
++            }
++            stages.put(stage, bySize);
++        }
++        out.put("stages", stages);
++        return out;
++    }
++
++    @Override
++    public void close() {
++        AnimSyncStream.FOLD_PROBE = null;
++        AnimSyncCapture.RETAIN_PROBE = null;
++        for (var pool : pools.values()) pool.shutdownNow();
++    }
++}

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "id": "blockfield",
+  "version": "${version}",
+  "name": "Blockfield",
+  "description": "Blockfield client: HUD, class/spawn screens, scoreboard, radio key.",
+  "authors": [
+    "Lunares Wolf"
+  ],
+  "license": "All Rights Reserved",
+  "environment": "client",
+  "icon": "assets/blockfield/icons/icon_256x256.png",
+  "entrypoints": {
+    "main": [
+      "com.lunares.blockfield.common.BlockFieldCommon"
+    ],
+    "client": [
+      "com.lunares.blockfield.client.BlockFieldClient"
+    ],
+    "voicechat": [
+      "com.lunares.blockfield.client.voice.ClientSVCPlugin"
+    ]
+  },
+  "mixins": [
+    "blockfield-client.mixins.json",
+    "blockfield-client-accessories.mixins.json",
+    "blockfield-sodium.mixins.json",
+    "blockfield-iris.mixins.json",
+    "blockfield-client-tweaks.mixins.json",
+    "blockfield-client-tacz.mixins.json",
+    "blockfield-client-lrtactical.mixins.json",
+    "blockfield-common-superbwarfare.mixins.json",
+    "blockfield-common-tacz.mixins.json",
+    "blockfield-common.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16",
+    "fabric-api": "*",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "blockfield_decor": ">=1.0.1",
+    "parcool": "*"
+  }
+}

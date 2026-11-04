@@ -1,0 +1,854 @@
+sourceSets.oracleTest.java.srcDir(rootProject.file('dev/oracleTest/java'))
+configurations { oracleBootstrap { transitive = false } }
+dependencies {
+    oracleBootstrap 'net.fabricmc:fabric-loader:0.19.3'
+    oracleBootstrap 'net.fabricmc:sponge-mixin:0.17.3+mixin.0.8.7'
+    ['asm', 'asm-analysis', 'asm-commons', 'asm-tree', 'asm-util'].each {
+        oracleBootstrap "org.ow2.asm:${it}:9.10.1"
+    }
+}
+// Twin of OracleMods in dev/oracle-mods.gradle: applied scripts do not share
+// top-level classes, so shard actions need their own copy. Keep both in sync.
+class OracleRunnerMods {
+    // ponytail: per-JVM memo keyed by (path, size, mtime); oracle jars are immutable downloads.
+    static final Map<String, String> hashCache = new java.util.concurrent.ConcurrentHashMap<>()
+
+    static String hash(File file, String algorithm) {
+        def key = algorithm + '|' + file.absolutePath + '|' + file.length() + '|' + file.lastModified()
+        def hit = hashCache.get(key)
+        if (hit != null) return hit
+        def digest = java.security.MessageDigest.getInstance(algorithm)
+        file.withInputStream { input ->
+            byte[] buffer = new byte[65536]
+            int count
+            while ((count = input.read(buffer)) != -1) { digest.update(buffer, 0, count) }
+        }
+        def value = digest.digest().encodeHex().toString()
+        hashCache.put(key, value)
+        return value
+    }
+
+    static File resolve(Map pins, File projectRoot, File modDir, Map unavailable, String name) {
+        if (unavailable.containsKey(name)) return null
+        def pin = pins[name]
+        if (pin == null) throw new GradleException("No oracle pack pin: ${name}")
+        def candidates = [new File(modDir, name)]
+        def parent = projectRoot.toPath()
+        while (parent != null) {
+            candidates.add(parent.resolve('.dev/release/shared/server/files/mods').resolve(name).toFile())
+            parent = parent.parent
+        }
+        def pinned = new File(projectRoot, '.gradle/pinned-mods')
+        if (pinned.isDirectory()) pinned.eachDir { candidates.add(new File(it, name)) }
+        for (File candidate : candidates) {
+            if (candidate.isFile() && hash(candidate, pin.algorithm) == pin.hash) return candidate
+        }
+        File target = new File(modDir, name)
+        target.parentFile.mkdirs()
+        File temporary = new File(modDir, "${name}.download.tmp")
+        try {
+            def connection = new URL(pin.url).openConnection()
+            connection.connectTimeout = 30000
+            connection.readTimeout = 120000
+            connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
+            connection.inputStream.withCloseable { input -> temporary.withOutputStream { it << input } }
+            if (hash(temporary, pin.algorithm) != pin.hash)
+                throw new GradleException("Oracle pack checksum mismatch: ${name}")
+            java.nio.file.Files.move(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            return target
+        } catch (IOException downloadFailed) {
+            if (name != 'blockfield-music-7.jar') throw downloadFailed
+            unavailable[name] = downloadFailed.toString()
+            return null
+        } finally { temporary.delete() }
+    }
+}
+
+// SPEED-PAR pool for the parallel gates. Sized once, at the first pooled stage start:
+// budget = MemAvailable - 2 GiB reserve (keeps the desktop and agents out of swap). A stage starts
+// while the measured footprints (heap + non-heap) of the running stages and its own fit the budget,
+// at most 4 at once; with uniform footprints that is N = clamp(floor(budget / footprint), 1, 4).
+// One stage always runs even if it alone exceeds the budget. A stage's share returns when its task
+// finishes in any way (completion listener), so a failed or timed-out stage never starves the rest.
+abstract class ParallelGatePool implements org.gradle.api.services.BuildService<org.gradle.api.services.BuildServiceParameters.None>,
+        org.gradle.tooling.events.OperationCompletionListener {
+    static final long RESERVE_MIB = 2048
+    static final int MAX_STAGES = 4
+    private long budget = -1
+    private long used
+    private final Map<String, Long> running = [:]
+    private final Map<String, Long> waiting = [:]
+    private String failed
+
+    static void requireExclusive(String task) {
+        if (System.getenv('BF_GRADLE_SLOT_EXCLUSIVE') != '1')
+            throw new GradleException("${task}: the parallel oracle gates run their stage JVMs concurrently and need " +
+                    'the whole machine. Run them through gradle-slot --exclusive (it exports BF_GRADLE_SLOT_EXCLUSIVE=1).')
+    }
+
+    synchronized void acquire(String task, long footprintMib, int maxWorkers, int pooledStages) {
+        requireExclusive(task)
+        if (budget < 0) {
+            long available = new File('/proc/meminfo').readLines().find { it.startsWith('MemAvailable:') }
+                    .tokenize()[1].toLong().intdiv(1024)
+            budget = available - RESERVE_MIB
+            println("parallel gate pool: budget = MemAvailable ${available} MiB - reserve ${RESERVE_MIB} MiB = ${budget} MiB;" +
+                    " at most ${MAX_STAGES} stages at once")
+            // A stage waiting here still holds its Gradle worker, so fewer workers than pooled stages
+            // can leave a stage that would fit without a worker.
+            if (maxWorkers < pooledStages)
+                println("parallel gate pool: WARNING --max-workers ${maxWorkers} < ${pooledStages} pooled stages;" +
+                        " run the gate with --max-workers=${pooledStages} or more")
+        }
+        // Any waiting stage that fits may start, smallest footprint first, so a large waiting stage
+        // never blocks a smaller one that fits beside the running stages.
+        waiting[task] = footprintMib
+        try {
+            while (failed == null && !mayStart(footprintMib)) wait()
+            // Like the former dependsOn chain: no new stage starts after a stage failed.
+            if (failed != null) throw new GradleException("${task}: not started, ${failed} failed")
+        } finally {
+            waiting.remove(task)
+        }
+        running[task] = footprintMib
+        used += footprintMib
+        notifyAll()
+        println("parallel gate pool: ${task} starts (footprint ${footprintMib} MiB); ${running.size()} running, ${used} of ${budget} MiB")
+    }
+
+    // Plain loops, no closures: Gradle instantiates a decorated subclass, where Groovy closures
+    // cannot see this class's private fields.
+    boolean fits(long footprint) {
+        return running.isEmpty() || (running.size() < MAX_STAGES && used + footprint <= budget)
+    }
+
+    boolean mayStart(long footprint) {
+        if (!fits(footprint)) return false
+        for (Long other : waiting.values()) {
+            if (other < footprint && fits(other)) return false
+        }
+        return true
+    }
+
+    @Override
+    synchronized void onFinish(org.gradle.tooling.events.FinishEvent event) {
+        if (!(event instanceof org.gradle.tooling.events.task.TaskFinishEvent)) return
+        Long footprint = running.remove(event.descriptor.taskPath)
+        if (footprint != null) used -= footprint
+        // Group checks are separate tasks too: any build failure must release waiting admissions.
+        if (event.result instanceof org.gradle.tooling.events.task.TaskFailureResult && failed == null)
+            failed = event.descriptor.taskPath
+        notifyAll()
+    }
+}
+abstract class ParallelGateEvents {
+    @javax.inject.Inject
+    abstract org.gradle.build.event.BuildEventsListenerRegistry getRegistry()
+}
+
+// Resume decisions are frozen before any stage mutates outputs. A completion receipt belongs to
+// one successful JavaExec, and a group may read outputs only when every receipt is available.
+class ParallelGateVerdicts {
+    static final Map<String, Long> starts = new java.util.concurrent.ConcurrentHashMap<>()
+
+    static void markStart(String stage) { starts.put(stage, System.nanoTime()) }
+
+    static String durationOf(String stage) {
+        Long start = starts.remove(stage)
+        if (start == null) return '?'
+        long seconds = (System.nanoTime() - start) / 1000000000L
+        return "${seconds.intdiv(60)}m${seconds % 60}s"
+    }
+
+    static Map readVerdict(File file) {
+        if (!file.isFile()) return null
+        try { return new groovy.json.JsonSlurper().parse(file) as Map } catch (Exception ignored) { return null }
+    }
+
+    static void atomicWrite(File file, String text) {
+        java.nio.file.Files.createDirectories(file.parentFile.toPath())
+        def temporary = java.nio.file.Files.createTempFile(file.parentFile.toPath(), file.name, '.tmp')
+        try {
+            java.nio.file.Files.writeString(temporary, text)
+            java.nio.file.Files.move(temporary, file.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        } finally { java.nio.file.Files.deleteIfExists(temporary) }
+    }
+
+    static void writeRecord(File file, Map value) {
+        atomicWrite(file, new groovy.json.JsonBuilder(value).toPrettyString())
+    }
+
+    static String[] gitInfo(String workDir) {
+        def commitProc = new ProcessBuilder('git', '-C', workDir, 'rev-parse', 'HEAD').redirectErrorStream(true).start()
+        def commit = commitProc.inputStream.getText('UTF-8').trim()
+        if (commitProc.waitFor() != 0) throw new GradleException("cannot resolve gate commit: ${commit}")
+        def statusProc = new ProcessBuilder('git', '-C', workDir, 'status', '--porcelain').redirectErrorStream(true).start()
+        def status = statusProc.inputStream.getText('UTF-8')
+        if (statusProc.waitFor() != 0) throw new GradleException("cannot resolve gate worktree status: ${status}")
+        return [commit, status.trim().isEmpty() ? 'clean' : 'dirty']
+    }
+
+    static String inputsHash(String arguments, Map runtime) {
+        def files = new LinkedHashSet<File>(runtime.files)
+        def unavailable = runtime.unavailable.isFile() ? readVerdict(runtime.unavailable) : [:]
+        runtime.packs.each { name ->
+            def file = OracleRunnerMods.resolve(runtime.pins, runtime.projectRoot, runtime.modDir, unavailable, name)
+            if (file != null) files.add(file)
+        }
+        def entries = []
+        files.each { file ->
+            if (file.isDirectory()) file.eachFileRecurse { child -> if (child.isFile()) entries.add(child) }
+            else entries.add(file)
+        }
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        digest.update(arguments.getBytes('UTF-8'))
+        entries.sort { it.absolutePath }.each { file ->
+            digest.update(('\n' + file.absolutePath + '=' +
+                    (file.isFile() ? OracleRunnerMods.hash(file, 'SHA-256') : 'missing')).getBytes('UTF-8'))
+        }
+        return digest.digest().encodeHex().toString()
+    }
+
+    static File completionFile(File root, String stage) { new File(root, ".completed-${stage}.json") }
+
+    static boolean completed(Map receipt, String stage, Map build) {
+        return receipt != null && receipt.id instanceof String && !receipt.id.isEmpty() && receipt.schema == 2 && receipt.stage == stage && receipt.result == 'PASS' &&
+                receipt.commit == build.commit && receipt.inputsHash == build.inputs[stage] && receipt.dirty == build.dirty
+    }
+
+    static boolean accepted(File root, Map verdict, Map receipt, String stage, Map build) {
+        def checked = verdict?.group == null ? null : readVerdict(new File(root, ".checked-${verdict.group}.json"))
+        return checked != null && checked.id instanceof String && checked.completions instanceof Map &&
+                checked.id == verdict.checkId && checked.completions[stage] == receipt?.id &&
+                completed(receipt, stage, build) && verdict != null && verdict.schema == 2 &&
+                verdict.stage == stage && verdict.result == 'PASS' && verdict.commit == build.commit &&
+                verdict.inputsHash == build.inputs[stage] && verdict.dirty == build.dirty &&
+                verdict.completionId == receipt.id
+    }
+
+    static void begin(File root, File buildFile, String workDir, boolean fresh, Map arguments, Map runtimes, List groups) {
+        java.nio.file.Files.createDirectories(root.toPath())
+        def info = gitInfo(workDir)
+        def build = [id: UUID.randomUUID().toString(), commit: info[0], dirty: info[1] == 'dirty', inputs: [:], skipped: []]
+        arguments.each { stage, args -> build.inputs[stage] = inputsHash(args, runtimes[stage]) }
+        arguments.keySet().each { stage ->
+            if (!fresh && !build.dirty && accepted(root, readVerdict(new File(root, "${stage}.json")),
+                    readVerdict(completionFile(root, stage)), stage, build)) build.skipped.add(stage)
+        }
+        // Invalidate the whole affected group before any member starts, including old sibling PASSes.
+        // Skipped siblings retain receipts, but an interrupted/failed group must be checked again.
+        groups.findAll { group -> group.stages.any { arguments.containsKey(it) && !build.skipped.contains(it) } }.each { group ->
+            java.nio.file.Files.deleteIfExists(new File(root, ".checked-${group.stages[0]}.json").toPath())
+            group.stages.each { stage -> java.nio.file.Files.deleteIfExists(new File(root, "${stage}.json").toPath()) }
+        }
+        arguments.keySet().findAll { !build.skipped.contains(it) }.each { stage ->
+            java.nio.file.Files.deleteIfExists(completionFile(root, stage).toPath())
+        }
+        writeRecord(buildFile, build)
+    }
+
+    static boolean shouldSkip(String stage, File buildFile) {
+        return readVerdict(buildFile).skipped.contains(stage)
+    }
+
+    static void appendLine(File progress, String line) {
+        synchronized (ParallelGateVerdicts) {
+            java.nio.file.Files.createDirectories(progress.parentFile.toPath())
+            if (!progress.isFile()) progress.text = '# anim-sync parallel gate progress\n'
+            progress.append(line + '\n')
+        }
+    }
+
+    static String tail(String text, int lines) {
+        def split = text.readLines()
+        return split.size() <= lines ? text : split[-lines..-1].join('\n')
+    }
+
+    static void runCheck(List arguments, String gateScript, List outputs) {
+        def gateProc = new ProcessBuilder(['python3', gateScript] + arguments.collect { it.toString() }).redirectErrorStream(true).start()
+        def gateOut = gateProc.inputStream.getText('UTF-8')
+        if (gateProc.waitFor() != 0) {
+            outputs.add("FAILED ${arguments[0]}: ${tail(gateOut, 40)}")
+            throw new GradleException("anim_sync_parallel_gate.py failed (${arguments[0]}): ${tail(gateOut, 40)}")
+        }
+        outputs.add(tail(gateOut, 5))
+    }
+
+    static void completeStage(String stage, File root, File buildFile) {
+        def build = readVerdict(buildFile)
+        // JavaExec has exited successfully; all its output writes precede this atomic receipt.
+        writeRecord(completionFile(root, stage), [schema: 2, id: UUID.randomUUID().toString(), run: build.id,
+                stage: stage, result: 'PASS', commit: build.commit, inputsHash: build.inputs[stage], dirty: build.dirty])
+    }
+
+    // Called by a check task depending on every member: even a late stage action must succeed.
+    // The JVM monitor also prevents overlapping FileLocks from simultaneous group checks.
+    static synchronized void groupDone(Map group, File root, File progress,
+            String gateScript, List tierStages, File buildFile) {
+        def build = readVerdict(buildFile)
+        new RandomAccessFile(new File(root, '.lock'), 'rw').withCloseable { raf ->
+            def lock = raf.channel.lock()
+            try {
+                def receipts = group.stages.collectEntries { name -> [(name): readVerdict(completionFile(root, name))] }
+                if (!group.stages.every { name -> completed(receipts[name], name, build) &&
+                        (receipts[name].run == build.id || build.skipped.contains(name)) }) {
+                    throw new GradleException("parallel gate ${group.kind}: missing successful stage completions")
+                }
+                def outputs = []
+                def result = 'FAIL'
+                def checkId = UUID.randomUUID().toString()
+                try {
+                    group.args.each { arguments -> runCheck(arguments as List, gateScript, outputs) }
+                    result = 'PASS'
+                } finally {
+                    def finishedAt = java.time.Instant.now().toString()
+                    group.stages.each { name ->
+                        writeRecord(new File(root, "${name}.json"), [schema: 2, stage: name,
+                                commit: build.commit, inputsHash: build.inputs[name], result: result,
+                                completionId: receipts[name].id, group: group.stages[0], checkId: checkId,
+                                checker: tail(outputs.join('\n'), 40),
+                                finishedAt: finishedAt, dirty: build.dirty])
+                    }
+                    def done = tierStages.count { name -> accepted(root, readVerdict(new File(root, "${name}.json")),
+                            readVerdict(completionFile(root, name)), name, build) }
+                    if (result == 'PASS') done += group.stages.size()
+                    group.stages.each { name ->
+                        appendLine(progress, "${finishedAt} ${name} ${result} ${durationOf(name)} ${done}/${tierStages.size()}")
+                    }
+                    // Publish acceptance last: partial verdict/progress writes can never authorize reuse.
+                    if (result == 'PASS') writeRecord(new File(root, ".checked-${group.stages[0]}.json"),
+                            [id: checkId, completions: receipts.collectEntries { name, value -> [(name): value.id] }])
+                }
+            } finally { lock.release() }
+        }
+    }
+}
+
+def oracleJar = tasks.register('oracleJar', Jar) {
+    dependsOn 'oracleTestClasses'
+    archiveClassifier = 'oracle-named'
+    from sourceSets.oracleTest.output
+}
+def remapOracle = tasks.register('remapOracleJar', tasks.named('remapJar').get().class.superclass) {
+    dependsOn oracleJar
+    inputFile = oracleJar.flatMap { it.archiveFile }
+    archiveClassifier = 'oracle'
+    addNestedDependencies = false
+    classpath.from(sourceSets.oracleTest.compileClasspath)
+}
+// ORACLE-TIME: the transformed oracle runs as sequential shards (dev/oracle-shards.json), each a
+// bounded JavaExec over a disjoint fixture subset through the existing blockfield.oracle.only
+// filter. Every fixture runs exactly once per :client:oracleTest gate invocation with production
+// mixins; a hung shard fails at its own hard timeout. -PoracleOnly=Name,... still works for
+// iteration: only shards containing a named fixture boot.
+def oracleShardSpec = new groovy.json.JsonSlurper().parse(rootProject.file('dev/oracle-shards.json'))[project.name]
+def oracleUserOnly = project.hasProperty('oracleOnly')
+        ? project.property('oracleOnly').toString().split(',').findAll { !it.isEmpty() } ?: null
+        : null
+def oracleBench = project.hasProperty('animSyncBench')
+def oracleWire = project.hasProperty('animSyncWire')
+def configureOracleShard = { JavaExec exec, List<String> selected, boolean clearFragments, int timeoutMinutes ->
+    // Everything below used to live in doFirst and touched Project at execution (no CC reuse).
+    // It now resolves here, at task configuration: shard tasks only realize in oracle graphs,
+    // so unrelated builds never pay for it. doFirst keeps only file writes, hashing and own-task
+    // wiring (systemProperty/classpath/workingDir), using these locals.
+    // Resolved file lists freeze at configuration; dependency changes reconfigure anyway.
+    def bootstrapJars = new ArrayList(configurations.oracleBootstrap.files)
+    def loomJarPaths = loom.intermediaryMinecraftProvider.minecraftJarPaths.collect { it.toFile() }
+    def oracleMainCp = new ArrayList(sourceSets.oracleTest.runtimeClasspath.files)
+    def mainCompileCp = new ArrayList(sourceSets.main.compileClasspath.files)
+    def mainRuntimeCp = new ArrayList(sourceSets.main.runtimeClasspath.files)
+    def packList = new ArrayList(project.ext.oraclePackFiles[project.name])
+    def oraclePins = project.ext.oracleModPins
+    def oracleProjectRoot = rootDir
+    def oracleModDir = project.ext.oracleModDir
+    def unavailableSidecar = layout.buildDirectory.file('anim-sync-oracle/unavailable.json')
+    def blockfieldJar = tasks.named('remapJar').flatMap { it.archiveFile }
+    def remappedOracleJar = remapOracle.flatMap { it.archiveFile }
+    def fragmentsDir = layout.buildDirectory.dir('anim-sync-oracle/fragments')
+    def runDir = layout.buildDirectory.dir('anim-sync-oracle/run')
+    def artifactsSidecar = layout.buildDirectory.file('anim-sync-oracle/artifacts.json')
+    def benchScript = rootProject.file('dev/anim_sync_bench_jar.py')
+    def benchDerivedJar = layout.buildDirectory.file('anim-sync-bench/measurement-only.jar')
+    def benchPayloadCapValue = (oracleBench && project.hasProperty('benchPayloadCap')) ? project.property('benchPayloadCap') : null
+    exec.dependsOn remapOracle, 'remapJar', 'oracleFetchMods'
+    exec.dependsOn rootProject.tasks.named('checkPinnedMod')
+    exec.mainClass = project.name == 'client'
+            ? 'com.lunares.blockfield.client.combat.oracle.TransformedOracleMain'
+            : 'com.lunares.blockfield.server.combat.oracle.ServerTransformedOracleMain'
+    exec.maxHeapSize = '1g'
+    exec.timeout = java.time.Duration.ofMinutes(timeoutMinutes)
+    exec.systemProperty 'java.awt.headless', 'true'
+    exec.systemProperty 'joml.fastmath', 'false'
+    exec.systemProperty 'joml.useMathFma', 'false'
+    exec.environment.remove('DISPLAY')
+    exec.environment.remove('WAYLAND_DISPLAY')
+    exec.systemProperty 'blockfield.oracle.only', selected.join(',')
+    if (project.hasProperty('animSyncWorkers'))
+        exec.systemProperty 'blockfield.animSync.workers', project.property('animSyncWorkers')
+    if (project.hasProperty('benchWorkers'))
+        exec.systemProperty 'blockfield.animSync.workers', project.property('benchWorkers')
+    // UOPT CPU benchmark (docs/review/anim-sync-perf.md): runs instead of the fixtures, keeps their fragments.
+    // BENCH-CTL: bench JVMs are deterministic; fixture and gate JVMs above are untouched.
+    if (oracleBench) {
+        exec.systemProperty 'blockfield.animSync.bench', project.property('animSyncBench')
+        ['benchTicks', 'benchWarmup', 'benchDebug', 'benchVerify', 'benchSeconds', 'benchCombatOnly', 'benchFlight', 'benchASpread', 'benchWallAt'].each { key ->
+            if (project.hasProperty(key)) exec.systemProperty "blockfield.animSync.${key}", project.property(key)
+        }
+        exec.systemProperty 'blockfield.animSync.benchOut', project.layout.buildDirectory.dir('anim-sync-bench').get().asFile.absolutePath
+        exec.jvmArgs '-XX:FlightRecorderOptions:stackdepth=512'
+        // Fixed heap with pre-touch: no heap sizing noise between fresh JVMs.
+        exec.minHeapSize = '1g'
+        // One explicit collector: ParallelGC has no concurrent threads, so both sides share one stop-the-world profile.
+        exec.jvmArgs '-XX:+UseParallelGC'
+        exec.jvmArgs '-XX:+AlwaysPreTouch'
+        // Fixed compiler parallelism; visible CPUs default to the 6-CPU bench window.
+        def benchCpus = project.hasProperty('benchActiveProcessors') ? project.property('benchActiveProcessors').toString() : '6'
+        exec.jvmArgs "-XX:ActiveProcessorCount=${benchCpus}"
+        exec.jvmArgs '-XX:CICompilerCount=4'
+        exec.timeout = java.time.Duration.ofMinutes(90)
+    }
+    // WIRE-1b/WIRE-CODEC measurement matrix (docs/review/anim-sync-wire-amendment.md): like the bench.
+    if (oracleWire) {
+        exec.systemProperty 'blockfield.animSync.wire', project.property('animSyncWire')
+        if (project.hasProperty('wireTicks')) exec.systemProperty 'blockfield.animSync.wireTicks', project.property('wireTicks')
+        if (project.hasProperty('wireSource')) exec.systemProperty 'blockfield.animSync.wireSource', project.property('wireSource')
+        exec.systemProperty 'blockfield.animSync.wireOut', project.layout.buildDirectory.dir('anim-sync-wire').get().asFile.absolutePath
+        exec.timeout = java.time.Duration.ofMinutes(90)
+    }
+    def execName = exec.name
+    exec.doFirst {
+        if (clearFragments && !oracleBench && !oracleWire) fragmentsDir.get().asFile.deleteDir()
+        def loader = bootstrapJars.find { it.name == 'fabric-loader-0.19.3.jar' }
+        if (OracleRunnerMods.hash(loader, 'SHA-256') != '73eed8c34bbad0320a2a3cba5346351e822f74f82b3f3c060574068474132958')
+            throw new GradleException('Oracle loader 0.19.3 digest mismatch')
+        new java.util.zip.ZipFile(loader).withCloseable { installer ->
+            def manifest = new groovy.json.JsonSlurper().parse(installer.getInputStream(installer.getEntry('fabric-installer.json')))
+            manifest.libraries.common.each { pin ->
+                def artifact = pin.name.tokenize(':')
+                def jar = bootstrapJars.find { it.name == "${artifact[1]}-${artifact[2]}.jar" }
+                if (jar == null || OracleRunnerMods.hash(jar, 'SHA-256') != pin.sha256)
+                    throw new GradleException("Loader library digest mismatch: ${pin.name}")
+            }
+        }
+        def runtime = new LinkedHashSet<File>(bootstrapJars)
+        runtime.add(remappedOracleJar.get().asFile)
+        runtime.addAll(loomJarPaths)
+        def library = { File file ->
+            if (!file.isFile() || !file.name.endsWith('.jar')) return false
+            if (file.name.startsWith('fabric-loader-') || file.name.startsWith('sponge-mixin-')
+                    || file.name.startsWith('mixinextras-') || file.name.startsWith('kotlin-')
+                    || file.name.startsWith('minecraft-merged') || file.name ==~ /asm(-analysis|-commons|-tree|-util)?-[0-9].*/) return false
+            new java.util.zip.ZipFile(file).withCloseable { it.getEntry('fabric.mod.json') == null }
+        }
+        runtime.addAll((oracleMainCp + mainCompileCp + mainRuntimeCp).findAll(library))
+        classpath.from(runtime)
+        def localUnavailable = unavailableSidecar.get().asFile.isFile()
+                ? new groovy.json.JsonSlurper().parse(unavailableSidecar.get().asFile)
+                : [:]
+        def mods = packList.collect { OracleRunnerMods.resolve(oraclePins, oracleProjectRoot, oracleModDir, localUnavailable, it) }
+        mods = mods.findAll { it != null }
+        def blockfield = blockfieldJar.get().asFile
+        // §10 large-cohort measurement only. Normal oracle and distributable jars keep every cap.
+        // Parallel stages set the cap through their own system properties (configuration); the
+        // bench path takes it from -PbenchPayloadCap instead. Own-task reads only, no Project.
+        def measurementCap = benchPayloadCapValue != null
+                ? benchPayloadCapValue : systemProperties['blockfield.animSync.benchPayloadCap']
+        def measurement = oracleBench || systemProperties['blockfield.animSync.bench'] != null
+                || systemProperties['blockfield.parallel.cohort'] != null
+        if (measurementCap != null && measurement) {
+            def derived = benchDerivedJar.get().asFile
+            derived.parentFile.mkdirs()
+            def benchProc = new ProcessBuilder(['python3', benchScript.absolutePath, blockfield.absolutePath,
+                    derived.absolutePath, measurementCap.toString()]).redirectErrorStream(true).start()
+            def benchOut = benchProc.inputStream.getText('UTF-8')
+            if (benchProc.waitFor() != 0) throw new GradleException("anim_sync_bench_jar.py failed: ${benchOut}")
+            blockfield = derived
+            systemProperty 'blockfield.animSync.benchPayloadCap', measurementCap
+        }
+        mods.add(blockfield)
+        systemProperty 'fabric.addMods', mods.collect { it.absolutePath }.join(File.pathSeparator)
+        def proofOutput = systemProperties['blockfield.parallel.output']
+        systemProperty 'blockfield.test.oracleDir', proofOutput == null
+                ? fragmentsDir.get().asFile.absolutePath
+                : new File(proofOutput.toString(), 'fragments').absolutePath
+        // Fabric remaps the game jar into <gameDir>/.fabric on first boot; parallel stage JVMs
+        // sharing one game dir race on its .tmp file on a cold cache, so each stage gets its own.
+        def runDirectory = proofOutput == null
+                ? runDir.get().asFile
+                : new File(runDir.get().asFile, "parallel/${execName}")
+        runDirectory.mkdirs()
+        workingDir runDirectory
+        def artifacts = mods.collect { file -> [file: file.name, sha256: OracleRunnerMods.hash(file, 'SHA-256')] }
+        def evidence = artifactsSidecar.get().asFile
+        evidence.text = new groovy.json.JsonBuilder(artifacts).toPrettyString()
+        systemProperty 'blockfield.oracle.artifacts', evidence.absolutePath
+        def unavailableOut = unavailableSidecar.get().asFile
+        unavailableOut.text = new groovy.json.JsonBuilder(localUnavailable).toPrettyString()
+        systemProperty 'blockfield.oracle.unavailable', unavailableOut.absolutePath
+    }
+    return [files: bootstrapJars + loomJarPaths + oracleMainCp + mainCompileCp + mainRuntimeCp +
+            [blockfieldJar.get().asFile, remappedOracleJar.get().asFile], packs: packList, pins: oraclePins,
+            projectRoot: oracleProjectRoot, modDir: oracleModDir, unavailable: unavailableSidecar.get().asFile]
+}
+// Partition check: fails the gate when a registered session fixture is in no shard or in two.
+// Spec and session source are read at configuration (shard tasks); doLast uses those locals only.
+def oracleShardsFile = rootProject.file('dev/oracle-shards.json')
+def oracleSessionFile = rootProject.file(oracleShardSpec.sessionSource)
+tasks.register('verifyOracleShards') {
+    group = 'verification'
+    description = "Checks dev/oracle-shards.json partitions this side's transformed oracle FIXTURES exactly once."
+    doLast {
+        def spec = oracleShardSpec
+        def source = oracleSessionFile.getText('UTF-8')
+        def block = source.substring(source.indexOf('FIXTURES ='))
+        block = block.substring(0, block.indexOf(');'))
+        def registered = (block =~ /(\w+)\.class/).collect { it[1] }.unique()
+        def problems = []
+        if (registered.isEmpty()) problems.add('no fixtures parsed from ' + spec.sessionSource)
+        def names = spec.shards.collect { it.name }
+        if (names.unique(false).size() != names.size()) problems.add('duplicate shard names')
+        spec.shards.each { shard ->
+            if (!shard.fixtures) problems.add(shard.name + ' lists no fixtures')
+            if (!(shard.timeoutMinutes instanceof Number) || shard.timeoutMinutes < 1)
+                problems.add(shard.name + ' needs a positive timeoutMinutes')
+        }
+        def union = spec.shards.collectMany { it.fixtures }
+        def missing = registered - union
+        def extra = union - registered
+        def duplicated = union.findAll { union.count(it) > 1 }.unique()
+        if (missing) problems.add('fixtures in no shard: ' + missing)
+        if (extra) problems.add('shard entries naming no registered fixture: ' + extra)
+        if (duplicated) problems.add('fixtures in more than one shard: ' + duplicated)
+        if (oracleUserOnly != null) {
+            def unknown = oracleUserOnly - registered
+            if (unknown) problems.add('-PoracleOnly names no registered fixture: ' + unknown)
+        }
+        if (!problems.isEmpty())
+            throw new GradleException('oracle shard partition is incomplete:\n' + problems.join('\n'))
+        println("oracle shards verified: ${registered.size()} fixtures in ${spec.shards.size()} shards")
+    }
+}
+def oracleShardTasks = []
+def oracleFirstRunning = null
+oracleShardSpec.shards.each { shard ->
+    def selected = oracleUserOnly == null
+            ? new ArrayList(shard.fixtures)
+            : new ArrayList(shard.fixtures.intersect(oracleUserOnly))
+    if (oracleFirstRunning == null && !selected.isEmpty()) oracleFirstRunning = shard.name
+    def first = oracleShardTasks.isEmpty()
+    def predecessor = first ? null : oracleShardTasks.last()
+    def clear = shard.name == oracleFirstRunning
+    def provider = tasks.register("oracle${shard.name.capitalize()}", JavaExec) { task ->
+        dependsOn 'verifyOracleShards'
+        if (predecessor != null) dependsOn predecessor
+        // Iteration subset or bench: shards with nothing to do stay skipped, never vacuous passes.
+        onlyIf { !selected.isEmpty() && (!(oracleBench || oracleWire) || first) }
+        configureOracleShard(task, selected, clear, shard.timeoutMinutes as int)
+    }
+    oracleShardTasks.add(provider)
+}
+// UPAR merge gates (docs/review/anim-sync-parallel.md §6, §14). Isolated production loaders share
+// one JVM's collection salt, never mod state: each stage process boots one fresh Knot session per
+// worker count and compares raw bytes against its own serial session. oracleParallelGate is the
+// bounded tier (standalone: too long for just test / CI); oracleParallelFullGate is the complete
+// acceptance matrix (all eight cohorts, the fresh-JVM worker memory budget and the GC-variant
+// stress), run before integration.
+if (project.name == 'server') {
+    def gateScript = rootProject.file('dev/anim_sync_parallel_gate.py')
+    def parallelRoot = layout.buildDirectory.dir('anim-sync-parallel').get().asFile
+    def stages = [ci: [], full: []]
+    def checks = [ci: [], full: []]
+    // SPEED-PAR: pooled stages run concurrently under ParallelGatePool; stages that measure memory or
+    // a collector variant run alone, in order, after every pooled stage of their tier. Each stage keeps
+    // its arguments, output dir and timeout; existing oracle shard deadlines stay unchanged.
+    // Heaps and footprints are measured (docs/review/anim-sync-parallel.md §14.7): -Xmx = peak live
+    // heap + 30 %, never below the 384 MiB heap-pressure proof and never above the former 1 GiB;
+    // footprint = peak RSS of the stage JVM.
+    def pooled = [ci: [], full: []]
+    def alone = [ci: [], full: []]
+    def pool = gradle.sharedServices.registerIfAbsent('parallelGatePool', ParallelGatePool) {}
+    def maxWorkers = gradle.startParameter.maxWorkerCount
+    def listening = false
+    // FULLGATE-RESUME wiring: the fresh flag resolves at configuration, commit and worktree
+    // status at execution (configuration-cache compatible); every value the skip predicate and
+    // the verdict writers use is a captured plain value, never Project.
+    def verdictRoot = new File(parallelRoot, 'verdicts')
+    def verdictProgress = new File(parallelRoot, 'progress.md')
+    def buildStartFile = new File(parallelRoot, '.build-start')
+    def modRoot = rootDir.absolutePath
+    def gateFresh = project.hasProperty('fullGateFresh')
+    def gateScriptHash = OracleRunnerMods.hash(gateScript, 'SHA-256')
+    def sha256text = { String text ->
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        digest.update(text.getBytes('UTF-8'))
+        return digest.digest().encodeHex().toString()
+    }
+    def stageInputs = [:]
+    def stageRuntimes = [:]
+    def stageMeta = [:]
+    def tierStageNames = [ci: [], full: []]
+    def verdictGroups = [ci: [], full: []]
+    def skipVerdict = { String name ->
+        return ParallelGateVerdicts.shouldSkip(name, buildStartFile)
+    }
+    // Freeze reuse and invalidate old receipts before any stage can enter its output directory.
+    def markBuild = tasks.register('oracleParallelBuildStart') {
+        dependsOn remapOracle, 'remapJar', 'oracleFetchMods', rootProject.tasks.named('checkPinnedMod')
+        outputs.file(buildStartFile)
+        outputs.upToDateWhen { false }
+        doLast {
+            ParallelGateVerdicts.begin(verdictRoot, buildStartFile, modRoot, gateFresh, stageInputs,
+                    stageRuntimes, verdictGroups.values().flatten())
+        }
+    }
+    def attachVerdict = { provider, String tier, String name, File output ->
+        stageMeta[name] = [tier: tier, output: output]
+        tierStageNames[tier].add(name)
+        provider.configure { task ->
+            dependsOn markBuild
+            def relevant = task.systemProperties.findAll { k, v -> k.toString().startsWith('blockfield.') }
+                    .sort().collect { k, v -> "${k}=${v}" }
+            stageInputs[name] = sha256text(([task.path] + relevant +
+                    ['jvm=' + task.jvmArgs.join(' '), 'heap=' + task.maxHeapSize]).join('|') + '|' + gateScriptHash)
+            task.onlyIf { !skipVerdict(name) }
+            task.doFirst {
+                ParallelGateVerdicts.markStart(name)
+            }
+            task.doLast {
+                ParallelGateVerdicts.completeStage(name, verdictRoot, buildStartFile)
+            }
+        }
+    }
+    def stage = { String tier, String name, int timeoutMinutes, File output, String heap, int footprintMib, boolean solo, Closure configure ->
+        def previousAlone = alone[tier] ? alone[tier].last() : null
+        def tierPooled = pooled[tier]
+        // Pooled stages wait for the pool in their own admission task: the JavaExec timeout below
+        // counts from the stage's own start, never from the wait. The reservation is keyed by the
+        // stage path and returns when the stage finishes.
+        String stagePath = project.path + ":" + name
+        def admit = solo ? null : tasks.register("${name}Admit") { task ->
+            dependsOn markBuild
+            if (!listening) {
+                objects.newInstance(ParallelGateEvents).registry.onTaskCompletion(pool)
+                listening = true
+            }
+            mustRunAfter oracleShardTasks, ':client:oracleTest'
+            usesService(pool)
+            int pooledCount = tierPooled.size()
+            onlyIf { !skipVerdict(name) }
+            doLast { pool.get().acquire(stagePath, footprintMib, maxWorkers, pooledCount) }
+        }
+        def provider = tasks.register(name, JavaExec) { task ->
+            if (admit != null) dependsOn admit
+            if (solo) {
+                if (previousAlone != null) dependsOn previousAlone
+                // Realized lazily, after every stage of the tier is registered: the list is complete.
+                mustRunAfter tierPooled
+            }
+            // The client oracle JavaExec is close to its deadline; never load it with these stages.
+            mustRunAfter oracleShardTasks, ':client:oracleTest'
+            stageRuntimes[name] = configureOracleShard(task, ['AnimSyncParallelOracleFixture'], false, timeoutMinutes)
+            mainClass = 'com.lunares.blockfield.server.combat.oracle.AnimSyncParallelMatrixMain'
+            // Reads ApplicationShutdownHooks to release finished sessions (harness only).
+            jvmArgs '--add-opens=java.base/java.lang=ALL-UNNAMED'
+            maxHeapSize = heap
+            configure(task)
+            doFirst {
+                ParallelGatePool.requireExclusive(stagePath)
+                output.deleteDir()
+                output.mkdirs()
+                systemProperty 'blockfield.parallel.output', output.absolutePath
+            }
+        }
+        stages[tier].add(provider)
+        (solo ? alone : pooled)[tier].add(provider)
+        attachVerdict(provider, tier, name, output)
+    }
+    def matrix = { String tier, String cohorts ->
+        def root = new File(parallelRoot, "${tier}-matrix")
+        cohorts.split(',').eachWithIndex { cohort, index ->
+            // Four fresh 30x29 combat sessions measured ~26 min under load; small cohorts take minutes.
+            stage(tier, "oracleParallel${tier.capitalize()}Matrix${index}", tier == 'full' ? 45 : 20, new File(root, "cohort${index}"),
+                    '1g', 2000, false) { task ->
+                task.systemProperty 'blockfield.parallel.cohort', cohort
+                task.systemProperty 'blockfield.parallel.ticks', 300
+                task.systemProperty 'blockfield.parallel.serialControl', project.hasProperty('parallelSerialControl')
+                // §6.1: 30x29 snapshots exceed the 256 KiB wire cap even serially (WIRE lifted cap).
+                if (cohort.startsWith('30:29:')) task.systemProperty 'blockfield.animSync.benchPayloadCap', 16777216
+            }
+        }
+        checks[tier].add(['matrix', root, cohorts])
+    }
+    // §6.2: one serial and one random-pool session (1..4 workers drawn per tick, task-start jitter).
+    // The default collector runs as two concurrent pooled stages over contiguous run ranges
+    // (shard k skips the schedule draws of earlier runs; the gate checks the union as one session).
+    // Collector variants keep one unsharded stage and run alone.
+    def stress = { String tier, String collector, String cohort, int runs, int ticks, int timeoutMinutes ->
+        def root = new File(parallelRoot, "${tier}-stress-${collector}")
+        def sharded = collector == 'default'
+        int shards = sharded ? 2 : 1
+        int firstRun = 0
+        (0..<shards).each { shard ->
+            int count = runs.intdiv(shards) + (shard < runs % shards ? 1 : 0)
+            int from = firstRun
+            firstRun += count
+            def name = "oracleParallel${tier.capitalize()}Stress${collector.capitalize()}${sharded ? "Shard${shard}" : ''}"
+            // GC pressure: one native pack session needs ~260 MiB live, so 256 MiB cannot boot.
+            def heap = collector == 'heappressure' ? '384m' : sharded ? '640m' : '1g'
+            stage(tier, name, timeoutMinutes, sharded ? new File(root, "shard${shard}") : root, heap, 1350, !sharded) { task ->
+                if (collector == 'parallelgc') task.jvmArgs '-XX:+UseParallelGC'
+                task.systemProperty 'blockfield.parallel.cohort', cohort
+                task.systemProperty 'blockfield.parallel.stress', true
+                task.systemProperty 'blockfield.parallel.ticks', ticks
+                task.systemProperty 'blockfield.parallel.runs', count
+                task.systemProperty 'blockfield.parallel.firstRun', from
+            }
+        }
+        checks[tier].add(['stress', root, cohort, collector, runs, ticks])
+    }
+    // §6.1 failure injection: an Error in the second task key of one stage from tick 30 on.
+    // Speed-fold: the seven stages run sequentially in one JavaExec (one JVM boot; one
+    // Knot boot per worker session as before). Output dirs and gate checks are unchanged.
+    def failure = { String tier ->
+        def names = ['fold', 'retain', 'validate', 'resolve', 'evaluate', 'capture', 'stream']
+        def root = new File(parallelRoot, "${tier}-failure")
+        stage(tier, "oracleParallel${tier.capitalize()}Failure", names.size() * 20, root, '1g', 2400, false) { task ->
+            task.systemProperty 'blockfield.parallel.cohort', '4:3:true'
+            task.systemProperty 'blockfield.parallel.ticks', 60
+            task.systemProperty 'blockfield.parallel.errorStages', names.join(',')
+        }
+        names.each { name -> checks[tier].add(['failure', new File(root, name), name]) }
+    }
+    matrix('ci', project.findProperty('parallelCiCohorts') ?: '4:3:true,10:9:true')
+    stress('ci', 'default', '4:3:true', 50, 60, 30)
+    failure('ci')
+    ['heappressure', 'parallelgc', 'default'].each { stress('full', it, '4:3:true', 50, 300, 90) }
+    matrix('full', project.findProperty('parallelCohorts') ?: '2:1:false,2:1:true,10:9:false,10:9:true,30:9:false,30:9:true,30:29:false,30:29:true')
+    // Heap includes every isolated loader in a stage process. Measure the worker increment in
+    // separate fresh benchmark JVMs instead; 32 MiB acceptance bound (§4.10).
+    def memoryRoot = new File(parallelRoot, 'full-memory')
+    [0, 2].each { count ->
+        def previous = alone.full.last()
+        def tierPooled = pooled.full
+        def memOutput = new File(memoryRoot, "workers${count}")
+        def provider = tasks.register("oracleParallelFullMemoryWorkers${count}", JavaExec) { task ->
+            dependsOn previous
+            mustRunAfter tierPooled
+            stageRuntimes[task.name] = configureOracleShard(task, ['AnimSyncParallelOracleFixture'], false, 15)
+            systemProperty 'blockfield.animSync.workers', count
+            systemProperty 'blockfield.animSync.bench', '30:9,30:29'
+            systemProperty 'blockfield.animSync.benchWarmup', 120
+            systemProperty 'blockfield.animSync.benchTicks', 40
+            systemProperty 'blockfield.animSync.benchCombatOnly', true
+            systemProperty 'blockfield.animSync.benchASpread', 2.4
+            systemProperty 'blockfield.animSync.benchPayloadCap', 16777216
+            def path = task.path
+            doFirst {
+                ParallelGatePool.requireExclusive(path)
+                memOutput.deleteDir()
+                memOutput.mkdirs()
+                systemProperty 'blockfield.animSync.benchOut', memOutput.absolutePath
+            }
+        }
+        stages.full.add(provider)
+        alone.full.add(provider)
+        attachVerdict(provider, 'full', "oracleParallelFullMemoryWorkers${count}", memOutput)
+    }
+    checks.full.add(['memory', memoryRoot])
+    // FULLGATE-RESUME: derive one verdict group per check entry from the recorded stage outputs.
+    // Each group has one check task; the final gate verifies every stage's bound PASS verdict.
+    checks.each { tier, list ->
+        list.each { entry ->
+            if (entry[0] == 'failure') {
+                def root = entry[1].parentFile
+                def group = verdictGroups[tier].find { it.kind == 'failure' && it.root == root }
+                if (group == null) {
+                    group = [kind: 'failure', root: root, args: [],
+                            stages: tierStageNames[tier].findAll { n -> stageMeta[n].output == root }]
+                    verdictGroups[tier].add(group)
+                }
+                group.args.add(entry)
+            } else if (entry[0] == 'matrix' || entry[0] == 'stress' || entry[0] == 'memory') {
+                def members = tierStageNames[tier].findAll { n ->
+                    stageMeta[n].output == entry[1] || stageMeta[n].output.parentFile == entry[1]
+                }
+                verdictGroups[tier].add([kind: entry[0], root: entry[1], args: [entry], stages: members])
+            }
+        }
+    }
+    // Gradle dependencies, rather than output-file probes or task-start markers, establish the
+    // completion barrier. Failed member tasks prevent their check from running at all.
+    def groupChecks = [ci: [], full: []]
+    verdictGroups.each { tier, groups ->
+        groups.eachWithIndex { verdictGroup, index ->
+            def check = tasks.register("oracleParallel${tier.capitalize()}Check${index}") {
+                dependsOn verdictGroup.stages
+                onlyIf { !verdictGroup.stages.every { skipVerdict(it) } }
+                doLast {
+                    ParallelGateVerdicts.groupDone(verdictGroup, verdictRoot, verdictProgress,
+                            gateScript.absolutePath, tierStageNames[tier], buildStartFile)
+                }
+            }
+            groupChecks[tier].add(check)
+        }
+        // Preserve the solo chain's fail-fast barrier when checks are separate tasks.
+        def preceding = pooled[tier].collect { it.name }
+        alone[tier].each { solo ->
+            def prerequisites = groups.withIndex().findAll { group, index ->
+                group.stages.every { preceding.contains(it) }
+            }.collect { group, index -> groupChecks[tier][index] }
+            solo.configure { dependsOn prerequisites }
+            preceding.add(solo.name)
+        }
+    }
+    // Gate checks run the python checker as a plain process: project.exec at execution breaks CC.
+    // Stage lists and assertions are unchanged; only the process launch moved out of Project.
+    [ci: 'oracleParallelGate', full: 'oracleParallelFullGate'].each { tier, name ->
+        tasks.register(name) {
+            group = 'verification'
+            description = tier == 'ci'
+                    ? 'UPAR bounded serial-vs-parallel gate (standalone; run before any phase-3 release or anim-sync integration). Per-stage verdicts in build/anim-sync-parallel/verdicts, resumable; -PfullGateFresh forces a clean run.'
+                    : 'UPAR complete serial-vs-parallel acceptance matrix, memory budget and GC stress. Per-stage verdicts in build/anim-sync-parallel/verdicts, resumable; -PfullGateFresh forces a clean run.'
+            dependsOn stages[tier], groupChecks[tier]
+            doLast {
+                def build = ParallelGateVerdicts.readVerdict(buildStartFile)
+                def info = ParallelGateVerdicts.gitInfo(modRoot)
+                if (info[0] != build.commit || (info[1] == 'dirty') != build.dirty)
+                    throw new GradleException('parallel gate worktree changed during the build')
+                def problems = []
+                def lines = []
+                tierStageNames[tier].each { stageName ->
+                    def verdict = ParallelGateVerdicts.readVerdict(new File(verdictRoot, "${stageName}.json"))
+                    def receipt = ParallelGateVerdicts.readVerdict(ParallelGateVerdicts.completionFile(verdictRoot, stageName))
+                    if (ParallelGateVerdicts.accepted(verdictRoot, verdict, receipt, stageName, build) &&
+                            (receipt.run == build.id || build.skipped.contains(stageName))) {
+                        lines.add("${stageName}: PASS @ ${verdict.finishedAt}")
+                        if (build.skipped.contains(stageName))
+                            ParallelGateVerdicts.appendLine(verdictProgress,
+                                    "${java.time.Instant.now()} ${stageName} SKIPPED (PASS at ${verdict.finishedAt})")
+                    } else {
+                        problems.add("${stageName}: " + (verdict == null ? 'no verdict' : "${verdict.result} @ ${verdict.finishedAt}"))
+                    }
+                }
+                println("parallel gate verdicts (${tier}):\n" + lines.join('\n'))
+                if (!problems.isEmpty()) throw new GradleException("parallel gate ${tier} incomplete:\n" + problems.join('\n'))
+            }
+        }
+    }
+}
+tasks.register('oracleTest') {
+    group = 'verification'
+    description = 'Runs every transformed oracle shard exactly once (see dev/oracle-shards.json).'
+    dependsOn 'verifyOracleShards'
+    dependsOn oracleShardTasks
+}
+if (providers.environmentVariable('BF_SKIP_ORACLE').orNull != '1') {
+    tasks.named('check') { dependsOn 'oracleTest' }
+}
+
+tasks.named('lintJava') {
+    source sourceSets.oracleTest.allJava
+    classpath += sourceSets.oracleTest.compileClasspath
+}

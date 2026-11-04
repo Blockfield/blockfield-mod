@@ -1,0 +1,27 @@
+{
+  "server": {
+    "tests": 48,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "client": {
+    "tests": 29,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "jars": {
+    "client/build/libs/blockfield-client-1.25.2+mc1.21.1.jar": "3ba15e1a45fd357e17d1d950ee891b4fda4f09cd1a4f9d6bb4823fe5736d5799",
+    "server/build/libs/blockfield-server-1.25.2+mc1.21.1.jar": "e0a2a5a82d4d343a014e6cfa52d9101326206cdfac42eb0e85f7432d62900e5e"
+  },
+  "visual_checks": {
+    "fields": "PASS",
+    "kozyatyn": "PASS",
+    "water_1_to_20_blocks": "PASS",
+    "spawn_live_snapshot": "PASS",
+    "minimap_rotation": "PASS",
+    "window_1280x720_gui2": "PASS",
+    "window_640x360_gui1": "PASS"
+  }
+}

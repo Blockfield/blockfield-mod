@@ -1,0 +1,26 @@
+[12:26:57] [main/INFO]: [STDOUT]: WIRE 10-rifle-idle
+[12:27:09] [main/INFO]: [STDOUT]: WIRE 10-rifle-combat
+[12:27:17] [main/INFO]: [STDOUT]: WIRE 20-rifle-idle
+[12:27:33] [main/INFO]: [STDOUT]: WIRE 20-rifle-combat
+[12:27:48] [main/INFO]: [STDOUT]: WIRE 30-rifle-idle
+[12:28:09] [main/INFO]: [STDOUT]: WIRE 30-rifle-combat
+[12:28:31] [main/INFO]: [STDOUT]: WIRE 30-rifle-combat-small
+BUILD SUCCESSFUL in 2m 22s
+[12:29:12] [main/INFO]: [STDOUT]: WIRE 10-mixed-idle
+[12:29:27] [main/INFO]: [STDOUT]: WIRE 10-mixed-combat
+[12:29:39] [main/INFO]: [STDOUT]: WIRE 20-mixed-idle
+[12:30:02] [main/INFO]: [STDOUT]: WIRE 20-mixed-combat
+[12:30:26] [main/INFO]: [STDOUT]: WIRE 30-mixed-idle
+[12:31:00] [main/INFO]: [STDOUT]: WIRE 30-mixed-combat
+BUILD SUCCESSFUL in 2m 43s
+[12:42:29] [main/INFO]: [STDOUT]: WIRE 30-diverse-idle
+BUILD SUCCESSFUL in 1m 4s
+[12:46:12] [main/INFO]: [STDOUT]: WIRE 30-diverse-combat
+BUILD SUCCESSFUL in 1m 9s
+[12:52:22] [main/INFO]: [STDOUT]: WIRE 30-mixed-combat-100
+BUILD SUCCESSFUL in 1m 9s
+[12:53:30] [main/INFO]: [STDOUT]: WIRE 30-mixed-combat-200
+BUILD SUCCESSFUL in 1m 4s
+[12:54:36] [main/INFO]: [STDOUT]: WIRE 30-mixed-combat-300
+BUILD SUCCESSFUL in 1m 6s
+exit 0

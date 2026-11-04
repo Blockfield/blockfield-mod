@@ -1,0 +1,19 @@
+{
+  "id": "dm_arena",
+  "name": "Арена",
+  "supported_modes": ["deathmatch"],
+  "bounds": { "minX": -32, "maxX": 31, "minZ": -32, "maxZ": 31 },
+  "mode_data": {
+    "deathmatch": {
+      "spawn_points": [
+        { "x": -28.5, "y": 65, "z": -28.5, "yaw": -45, "pitch": 0 },
+        { "x": 28.5, "y": 65, "z": -28.5, "yaw": 45, "pitch": 0 },
+        { "x": -28.5, "y": 65, "z": 28.5, "yaw": -135, "pitch": 0 },
+        { "x": 28.5, "y": 65, "z": 28.5, "yaw": 135, "pitch": 0 },
+        { "x": 0.5, "y": 65, "z": -28.5, "yaw": 0, "pitch": 0 },
+        { "x": 0.5, "y": 65, "z": 28.5, "yaw": 180, "pitch": 0 },
+        { "x": -0.5, "y": 69, "z": -0.5, "yaw": 90, "pitch": 0 }
+      ]
+    }
+  }
+}

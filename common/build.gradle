@@ -1,0 +1,16 @@
+base { archivesName = "${mod_id}-common" }
+
+dependencies {
+    // Shared client/server reset of the existing ParCool stamina attachment.
+    modCompileOnly files(pinnedMod('parcool'))
+    // Shared PlayerAnimator graph freeze/materialize for remote presentation and server rewind.
+    modCompileOnly files(pinnedMod('playerAnimator'))
+    modCompileOnly "maven.modrinth:tacz-refabricated:${tacz_version}"
+    // Read the equipped rig on both logical sides. Optional at runtime; never bundled.
+    modCompileOnly "io.wispforest:accessories-fabric:${accessories_version}"
+}
+
+// Общий код едет внутрь client- и server-jar (см. их jar{from ...}), отдельным модом не является:
+// поэтому здесь нет fabric.mod.json и нечего запускать.
+tasks.named('runClient') { enabled = false }
+tasks.named('runServer') { enabled = false }

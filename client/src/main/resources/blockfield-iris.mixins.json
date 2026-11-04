@@ -1,0 +1,13 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.lunares.blockfield.client.mixin.iris",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.lunares.blockfield.client.mixin.iris.IrisMixinPlugin",
+  "client": [
+    "IrisShadowDisplaysMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

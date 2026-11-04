@@ -1,0 +1,114 @@
+{
+    "_comment": "ORACLE-TIME gate partition. Each side's transformed oracle runs as sequential JavaExec shards over disjoint fixture subsets (dev/oracle-runner.gradle); :client:oracleTest and :server:oracleTest aggregate them, so just test / just java-check / CI are unchanged. Every registered session FIXTURES entry must appear in exactly one shard: verifyOracleShards fails the gate otherwise, and the sessions fail closed on an unknown -PoracleOnly name. Shard timeoutMinutes = ceil((measured fixture time + 60s Knot-boot allowance) x4). Basis (2026-10-18, dev machine, typical load 1-4): client fixture totals MixedRenderer 120s, LrMixedRenderer 22s, ParCoolPresentation 18s, ParCoolYaw 15s, SceneTiming 7s, rest <=6s each; server total ~20s. Factor 4 covers ~4x loaded slowdown (observed loaded/quiet 1.65x at load 3-4). Rebalance when a shard approaches half its timeout.",
+    "client": {
+        "sessionSource": "client/src/oracleTest/java/com/lunares/blockfield/client/combat/oracle/TransformedOracleSession.java",
+        "shards": [
+            {
+                "name": "shard1",
+                "timeoutMinutes": 12,
+                "fixtures": [
+                    "MixedRendererOracleFixture"
+                ]
+            },
+            {
+                "name": "shard2",
+                "timeoutMinutes": 8,
+                "fixtures": [
+                    "ParCoolYawOracleFixture",
+                    "ParCoolPresentationOracleFixture",
+                    "LrMixedRendererOracleFixture"
+                ]
+            },
+            {
+                "name": "shard3",
+                "timeoutMinutes": 6,
+                "fixtures": [
+                    "VanillaSetupAnimOracleFixture",
+                    "ParCoolReducerOracleFixture",
+                    "ParCoolCheckpointOracleFixture",
+                    "ParCoolProjectionOracleFixture",
+                    "ParCoolZiplineOracleFixture",
+                    "ParCoolStagesOracleFixture",
+                    "ParCoolAcceptedOracleFixture",
+                    "PaGraphOracleFixture",
+                    "LrTransitionOracleFixture",
+                    "TaczRemoteOracleFixture",
+                    "LrSelectorOracleFixture",
+                    "AnimationResourcesOracleFixture",
+                    "SceneTimingOracleFixture",
+                    "DrivenInputsOracleFixture"
+                ]
+            },
+            {
+                "name": "shard4",
+                "timeoutMinutes": 5,
+                "fixtures": [
+                    "AnimSyncFixtureRegistryTest",
+                    "TaczReadClosureOracleFixture",
+                    "VanillaAnimSyncOracleFixture",
+                    "ParCoolAttachmentOracleFixture",
+                    "ParCoolReadLayoutOracleFixture",
+                    "ParCoolPolicyOracleFixture",
+                    "VehicleOracleFixture",
+                    "CreateHangingOracleFixture",
+                    "BlockfieldMixinOracleFixture",
+                    "ThirdPartyTransformOracleFixture",
+                    "PaObserverOracleFixture",
+                    "AnimationPolicyOracleFixture",
+                    "FrameEntryOracleFixture",
+                    "ExactSceneOracleFixture",
+                    "FxClientWireOracleFixture",
+                    "AnimationWireOracleFixture",
+                    "NativeCapsuleOracleFixture",
+                    "ModelTargetAuditFixture",
+                    "WireReportsOracleFixture",
+                    "StanceEaseOracleFixture"
+                ]
+            }
+        ]
+    },
+    "server": {
+        "sessionSource": "server/src/oracleTest/java/com/lunares/blockfield/server/combat/oracle/ServerTransformedOracleSession.java",
+        "shards": [
+            {
+                "name": "shard1",
+                "timeoutMinutes": 6,
+                "fixtures": [
+                    "ServerMixinOracleFixture",
+                    "DisconnectThreadOracleFixture",
+                    "AnimSyncWorkersOracleFixture",
+                    "AnimSyncParallelOracleFixture",
+                    "ParCoolCaptureOracleFixture",
+                    "ParCoolProjectionOracleFixture",
+                    "ParCoolZiplineOracleFixture",
+                    "ParCoolStagesOracleFixture",
+                    "ParCoolPresentationOracleFixture",
+                    "CreateSbwServerOracleFixture",
+                    "PaGraphOracleFixture",
+                    "PoseBoundOracleFixture",
+                    "PaObserverOracleFixture",
+                    "LrTransitionOracleFixture",
+                    "AnimSyncJournalOracleFixture",
+                    "AnimSyncTrustOracleFixture",
+                    "AnimationResourcesServerOracleFixture",
+                    "MixedRendererOracleFixture",
+                    "AnimationAdmissionOracleFixture",
+                    "EquipmentMemoOracleFixture",
+                    "FlightContinuationOracleFixture",
+                    "WireCodecOracleFixture",
+                    "WireReportsOracleFixture",
+                    "StanceEaseOracleFixture",
+                    "RemoteMotionOracleFixture"
+                ]
+            },
+            {
+                "name": "shard2",
+                "timeoutMinutes": 10,
+                "fixtures": [
+                    "WireServerOracleFixture",
+                    "WireGateCodecOracleFixture"
+                ]
+            }
+        ]
+    }
+}

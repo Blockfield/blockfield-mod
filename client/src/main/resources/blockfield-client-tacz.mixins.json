@@ -1,0 +1,41 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.lunares.blockfield.client.tacz",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.lunares.blockfield.client.tacz.TaczClientMixinPlugin",
+  "client": [
+    "AbstractGunItemMixin",
+    "AnimationControllerAccessor",
+    "CrawlTimingMixin",
+    "CameraOverhaulAimMixin",
+    "ExhaustedAnimationControllerMixin",
+    "ExhaustedModifierLayerMixin",
+    "ExhaustedPlayerPoseMixin",
+    "ExhaustedReloadAnimationMixin",
+    "GunAnimationStateContextMixin",
+    "GunHudCache",
+    "GunHudOverlayMixin",
+    "InteractKeyTacticalMixin",
+    "InteractKeyTextOverlayMixin",
+    "LocalPlayerAimInspectMixin",
+    "LocalPlayerDrawSoundMixin",
+    "LocalPlayerDrawGuardMixin",
+    "LocalPlayerEquipmentInspectMixin",
+    "LocalPlayerReloadSprintMixin",
+    "MuzzleFlashRenderMixin",
+    "ParCoolFastRunWeightMixin",
+    "RemotePaStackTickMixin",
+    "RemotePaTickDeltaMixin",
+    "RemoteTaczAnimationMixin",
+    "RemoteTaczAdjustmentMixin",
+    "RemoteTaczFallbackMixin",
+    "ShootRotationSyncMixin",
+    "TabletAimBlockMixin",
+    "ClientShootGateMixin",
+    "TickAnimationEventMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

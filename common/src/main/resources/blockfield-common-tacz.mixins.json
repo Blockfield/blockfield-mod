@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.lunares.blockfield.common.mixin.tacz",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.lunares.blockfield.common.mixin.tacz.TaczMixinPlugin",
+  "mixins": [
+    "AttachmentNbtMigrationMixin",
+    "GunIndexAccessor",
+    "GunPropertyMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

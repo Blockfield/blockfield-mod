@@ -1,0 +1,12 @@
+{
+  "values": [
+    {
+      "id": "superbwarfare:drone",
+      "required": false
+    },
+    {
+      "id": "superbwarfare:scout_drone",
+      "required": false
+    }
+  ]
+}

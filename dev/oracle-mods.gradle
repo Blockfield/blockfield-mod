@@ -1,0 +1,92 @@
+// Raw production jars are resolved at task execution, never at configuration/import time.
+ext.oracleModDir = rootProject.file('.gradle/oracle-mods')
+
+// Static helper: task actions must not touch Project at execution (CC), so resolve/hash
+// take plain data plus a local unavailable map. oracleFetchMods records that map into
+// buildDir anim-sync-oracle/unavailable.json; shard tasks (dev/oracle-runner.gradle)
+// read it back instead of sharing live Project state.
+class OracleMods {
+    // ponytail: per-JVM memo keyed by (path, size, mtime); oracle jars are immutable downloads.
+    static final Map<String, String> hashCache = new java.util.concurrent.ConcurrentHashMap<>()
+    static final String MIRROR = 'https://github.com/Blockfield/blockfield-pack-mirror/releases/download/files/'
+
+    static String hash(File file, String algorithm) {
+        def key = algorithm + '|' + file.absolutePath + '|' + file.length() + '|' + file.lastModified()
+        def hit = hashCache.get(key)
+        if (hit != null) return hit
+        def digest = java.security.MessageDigest.getInstance(algorithm)
+        file.withInputStream { input ->
+            byte[] buffer = new byte[65536]
+            int count
+            while ((count = input.read(buffer)) != -1) { digest.update(buffer, 0, count) }
+        }
+        def value = digest.digest().encodeHex().toString()
+        hashCache.put(key, value)
+        return value
+    }
+
+    static File resolve(Map pins, File projectRoot, File modDir, Map unavailable, String name) {
+        if (unavailable.containsKey(name)) return null
+        def pin = pins[name]
+        if (pin == null) throw new GradleException("No oracle pack pin: ${name}")
+        def candidates = [new File(modDir, name)]
+        def parent = projectRoot.toPath()
+        while (parent != null) {
+            candidates.add(parent.resolve('.dev/release/shared/server/files/mods').resolve(name).toFile())
+            parent = parent.parent
+        }
+        def pinned = new File(projectRoot, '.gradle/pinned-mods')
+        if (pinned.isDirectory()) pinned.eachDir { candidates.add(new File(it, name)) }
+        for (File candidate : candidates) {
+            if (candidate.isFile() && hash(candidate, pin.algorithm) == pin.hash) return candidate
+        }
+        File target = new File(modDir, name)
+        target.parentFile.mkdirs()
+        // client and server fetch tasks run in parallel into this shared directory.
+        File temporary = File.createTempFile("${name}.", '.download.tmp', modDir)
+        try {
+            // Private Blockfield repos answer 404 without credentials; the public pack mirror
+            // names every pack file by the hash the pack declares, which is this pin's hash.
+            IOException failed = null
+            for (String url : [pin.url, MIRROR + pin.hash]) {
+                try {
+                    def connection = new URL(url).openConnection()
+                    connection.connectTimeout = 30000
+                    connection.readTimeout = 120000
+                    connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
+                    connection.inputStream.withCloseable { input -> temporary.withOutputStream { it << input } }
+                    failed = null
+                    break
+                } catch (IOException e) {
+                    failed = e
+                }
+            }
+            if (failed != null) throw failed
+            if (hash(temporary, pin.algorithm) != pin.hash)
+                throw new GradleException("Oracle pack checksum mismatch: ${name}")
+            java.nio.file.Files.move(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            return target
+        } catch (IOException downloadFailed) {
+            if (name != 'blockfield-music-7.jar') throw downloadFailed
+            unavailable[name] = downloadFailed.toString()
+            return null
+        } finally { temporary.delete() }
+    }
+}
+
+// Only plain data below: task actions capture these locals, never Project.
+def oracleFetchPack = new ArrayList(project.ext.oraclePackFiles[project.name])
+def oracleFetchPins = project.ext.oracleModPins
+def oracleFetchRoot = rootDir
+def oracleFetchDir = project.ext.oracleModDir
+def oracleUnavailableSidecar = layout.buildDirectory.file('anim-sync-oracle/unavailable.json')
+tasks.register('oracleFetchMods') {
+    doLast {
+        def unavailable = [:]
+        oracleFetchPack.each { OracleMods.resolve(oracleFetchPins, oracleFetchRoot, oracleFetchDir, unavailable, it) }
+        unavailable.each { name, err -> println("Oracle unavailable ${name}: ${err}") }
+        def sidecar = oracleUnavailableSidecar.get().asFile
+        sidecar.parentFile.mkdirs()
+        sidecar.text = new groovy.json.JsonBuilder(unavailable).toPrettyString()
+    }
+}

@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:rails",
+    { "id": "#create:tracks", "required": false }
+  ]
+}

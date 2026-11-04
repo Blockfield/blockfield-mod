@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.lunares.blockfield.common.mixin.superbwarfare",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["AmmoConsumerRigCountMixin", "InventoryToolMixin"],
+  "injectors": {"defaultRequire": 1}
+}

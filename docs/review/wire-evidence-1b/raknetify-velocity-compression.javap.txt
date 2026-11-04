@@ -1,0 +1,62 @@
+# raknetify-velocity-0.1.0+alpha.5.196-all.jar sha256 87fc0ca3ac5614c77f657c2c1337e589438f4d1bf4a8e90523409ea15d6465bd
+# javap -p -c com.ishland.raknetify.velocity.connection.RakNetVelocityChannelEventListener (excerpt)
+Compiled from "RakNetVelocityChannelEventListener.java"
+public class com.ishland.raknetify.velocity.connection.RakNetVelocityChannelEventListener extends io.netty.channel.ChannelDuplexHandler {
+  public static final java.lang.String NAME;
+
+  private javax.crypto.SecretKey encryptionKey;
+
+  public com.ishland.raknetify.velocity.connection.RakNetVelocityChannelEventListener();
+    Code:
+       0: aload_0
+       1: invokespecial #1                  // Method io/netty/channel/ChannelDuplexHandler."<init>":()V
+       4: aload_0
+       5: aconst_null
+       6: putfield      #7                  // Field encryptionKey:Ljavax/crypto/SecretKey;
+       9: return
+
+  public void write(io.netty.channel.ChannelHandlerContext, java.lang.Object, io.netty.channel.ChannelPromise) throws java.lang.Exception;
+    Code:
+       0: aload_2
+       1: instanceof    #13                 // class com/velocitypowered/proxy/protocol/packet/SetCompressionPacket
+       4: ifeq          64
+       7: aload_1
+       8: invokeinterface #15,  1           // InterfaceMethod io/netty/channel/ChannelHandlerContext.channel:()Lio/netty/channel/Channel;
+      13: invokeinterface #21,  1           // InterfaceMethod io/netty/channel/Channel.pipeline:()Lio/netty/channel/ChannelPipeline;
+      18: ldc           #27                 // class com/ishland/raknetify/common/connection/MultiChannelingStreamingCompression
+      20: invokeinterface #29,  2           // InterfaceMethod io/netty/channel/ChannelPipeline.get:(Ljava/lang/Class;)Lio/netty/channel/ChannelHandler;
+      25: checkcast     #27                 // class com/ishland/raknetify/common/connection/MultiChannelingStreamingCompression
+      28: astore        4
+      30: aload         4
+      32: ifnull        61
+      35: aload         4
+      37: invokevirtual #35                 // Method com/ishland/raknetify/common/connection/MultiChannelingStreamingCompression.isActive:()Z
+      40: ifeq          61
+      43: getstatic     #39                 // Field com/ishland/raknetify/velocity/RaknetifyVelocityPlugin.LOGGER:Lorg/slf4j/Logger;
+      46: ldc           #45                 // String Preventing vanilla compression as streaming compression is enabled
+      48: invokeinterface #47,  2           // InterfaceMethod org/slf4j/Logger.info:(Ljava/lang/String;)V
+      53: aload_3
+      54: invokeinterface #53,  1           // InterfaceMethod io/netty/channel/ChannelPromise.setSuccess:()Lio/netty/channel/ChannelPromise;
+      59: pop
+      60: return
+      61: goto          135
+      64: aload_2
+      65: instanceof    #59                 // class com/velocitypowered/proxy/protocol/packet/RespawnPacket
+      68: ifne          92
+      71: aload_2
+      72: instanceof    #61                 // class com/velocitypowered/proxy/protocol/packet/JoinGamePacket
+      75: ifne          92
+      78: aload_2
+      79: instanceof    #63                 // class com/velocitypowered/proxy/protocol/packet/config/StartUpdatePacket
+      82: ifne          92
+      85: aload_2
+      86: instanceof    #65                 // class com/velocitypowered/proxy/protocol/packet/config/FinishedUpdatePacket
+      89: ifeq          110
+      92: aload_1
+      93: getstatic     #67                 // Field com/ishland/raknetify/common/connection/SynchronizationLayer.SYNC_REQUEST_OBJECT:Ljava/lang/Object;
+      96: invokeinterface #73,  2           // InterfaceMethod io/netty/channel/ChannelHandlerContext.write:(Ljava/lang/Object;)Lio/netty/channel/ChannelFuture;
+     101: pop
+     102: aload_0
+     103: aload_1
+     104: aload_2
+     105: aload_3

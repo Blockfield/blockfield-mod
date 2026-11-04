@@ -1,0 +1,3 @@
+703x703 bake 285.5 ms, max slice 10.08 ms
+703x703 bake 165.9 ms, max slice 1.78 ms
+703x703 bake 199.7 ms, max slice 2.18 ms

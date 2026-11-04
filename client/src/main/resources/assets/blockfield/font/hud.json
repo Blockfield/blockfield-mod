@@ -1,0 +1,6 @@
+{
+  "providers": [
+    {"type": "ttf", "file": "blockfield:plex-sans-condensed-semibold.ttf", "size": 10, "oversample": 2, "shift": [0, 0]},
+    {"type": "reference", "id": "minecraft:default"}
+  ]
+}

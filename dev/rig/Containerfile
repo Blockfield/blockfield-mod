@@ -1,0 +1,3 @@
+# podman build -t bf-xvfb -f Containerfile .
+FROM registry.fedoraproject.org/fedora:42
+RUN dnf -y install xorg-x11-server-Xvfb mesa-dri-drivers mesa-libGL xdotool ImageMagick VirtualGL && dnf clean all

@@ -1,0 +1,291 @@
+plugins {
+    id 'idea'
+    id 'fabric-loom' version '1.11-SNAPSHOT' apply false
+    id 'com.diffplug.spotless' version '7.2.1'
+}
+
+repositories { mavenCentral() }
+
+spotless {
+    java {
+        target 'common/src/**/*.java', 'client/src/**/*.java',
+                'dev/rig/testbot/src/**/*.java', 'dev/test/**/*.java', 'dev/oracleTest/**/*.java'
+        googleJavaFormat('1.36.1').aosp()
+    }
+}
+
+// Коммит, из которого собран jar: /bf version и build.json показывают его в рантайме.
+// Без времени сборки: одинаковый коммит -> одинаковый jar.
+// Ленивый ValueSource: git опрашивается только в execution (processResources expand
+// и task input), а не в configuration, — иначе CC считал бы вывод git своим входом.
+abstract class GitCommitValueSource implements ValueSource<String, GitCommitValueSource.Params> {
+    interface Params extends ValueSourceParameters {
+        DirectoryProperty getWorkingDir()
+    }
+
+    @Override
+    String obtain() {
+        try {
+            def git = { String... args ->
+                def process = new ProcessBuilder(['git'] + args.toList())
+                        .directory(parameters.workingDir.asFile.get()).start()
+                def out = process.inputStream.getText('UTF-8').trim()
+                process.waitFor()
+                return out
+            }
+            def rev = git('rev-parse', '--short=10', 'HEAD')
+            def dirty = git('status', '--porcelain', '--untracked-files=no')
+            return rev + (dirty ? '-dirty' : '')
+        } catch (ignored) { return 'unknown' }
+    }
+}
+
+def gitCommit = providers.of(GitCommitValueSource) {
+    parameters { workingDir.set(rootDir) }
+}
+
+// One content-addressed cache for every checkout: each worktree used to keep its own copy of the JARs and
+// of the 430 MB client archive behind lrTactical. CI keeps the path its actions/cache restores.
+def pinnedCacheDir = System.getenv('CI') ? new File(rootDir, '.cache/quality/pinned-mods')
+        : new File(gradle.gradleUserHomeDir, 'caches/blockfield-pinned-mods')
+
+// Pack APIs/test artifacts that are not usable as plain Maven deps (fork release, jars built by a newer
+// Loom). Cached in pinnedCacheDir and checked by sha256 whenever requested.
+// stripLoomVersion drops Fabric-Loom-Version from the manifest: Loom 1.11 rejects "static"-mixin jars built
+// by a newer Loom ("Mod was built with a newer version of Loom"); classes stay untouched.
+def pinnedMods = [
+        raknetify: [url: 'https://cdn.modrinth.com/data/5IovSY3u/versions/4kUkTS6R/raknetify-fabric-0.1.0%2Balpha.5.196-all.jar',
+                    sha256: 'c7ed7782a940b1e880c1c1d1639a2cc27a176c228ec2a7c99435d5a13edbc741'],
+        raknetifyVelocity: [url: 'https://cdn.modrinth.com/data/5IovSY3u/versions/u3LRuC7t/raknetify-velocity-0.1.0%2Balpha.5.196-all.jar',
+                           sha256: '87fc0ca3ac5614c77f657c2c1337e589438f4d1bf4a8e90523409ea15d6465bd'],
+        worldedit   : [url: 'https://cdn.modrinth.com/data/1u6JkXh5/versions/WTAFvuRx/worldedit-mod-7.3.8.jar',
+                       sha256: '5e7752c97876d87411e3760bcc573cc431f43c453722e6959fa7fe54db1b01ca'],
+        voicechat    : [url: 'https://cdn.modrinth.com/data/9eGKb6K1/versions/VS5X7jZd/voicechat-fabric-1.21.1-2.6.22.jar',
+                        sha256: '972a01592f670aa57f2dc2e3587a656b798106037468c61e4bfb49eba7d6ae36'],
+        forgeConfigApi: [url: 'https://cdn.modrinth.com/data/ohNO6lps/versions/N5qzq0XV/ForgeConfigAPIPort-v21.1.6-1.21.1-Fabric.jar',
+                         sha256: '2e3a8f0e3bda85a7d722720e7ce879cbd9d028d9395c6fc224d329b3c982d9b1'],
+        parcool       : [url: 'https://github.com/Blockfield/parcool-fabric/releases/download/bf8/ParCool-1.21.1-3.4.3.3-fabric-bf8.jar',
+                         sha256: '7caaddc5ee48aefad610d520c4cbd92426561df9f29cc56a9ca60c4eeb61800b'],
+        playerAnimator: [url: 'https://cdn.modrinth.com/data/gedNE4y2/versions/CkedfDp3/player-animation-lib-fabric-2.0.4%2B1.21.1.jar',
+                         sha256: '86ef8a23a5bc8f86d67ed37f3a93380d3946bad64123b22862ed057e7b624efd'],
+        sodium        : [url: 'https://cdn.modrinth.com/data/AANobbMI/versions/SMxNOGZ6/sodium-fabric-0.8.13%2Bmc1.21.1.jar',
+                         sha256: '3d43c14985a4deb19c654aad3393b454cf57e1ebcbba86c4ae6a98dfc60eca2d', stripLoomVersion: true],
+        cameraOverhaul: [url: 'https://cdn.modrinth.com/data/m0oRwcZx/versions/zDas2ZO2/CameraOverhaul-v2.1.1-fabric%2Bmc%5B1.21-1.21.2%5D.jar',
+                         sha256: 'a8a82ccb209537522e5dde2cbf644fc29bd3808b4dec5f310c794da9bb3ba96c', stripLoomVersion: true],
+        superbwarfare : [url: 'https://github.com/Blockfield/superbwarfare-fabric/releases/download/bf25/superbwarfare-0.8.9.1-mc1.21.1-bf25.jar',
+                         sha256: '2c62c1295f7ccf4522da7f997896ef38b64701988208ad20acfa398f2ff75251'],
+        taczPack      : [url: 'https://github.com/Blockfield/tacz-refabricated/releases/download/bf11/TACZ-Refabricated-1.21.1-0.7.0-bf11.jar',
+                         sha256: '5cf6208fcbebdc72fcf0404925f71a6d9fd7d62fd6d9321ad425cd4b5456e91a',
+                         archiveUrl: 'https://github.com/Blockfield/blockfield-releases/releases/download/v2.79.2/Blockfield-client.zip',
+                         archiveSha256: '43aa9b10a16e8f21e6e300ac5f6cf0f649e3384b732c1ea005b6227f2e03e1c6',
+                         archiveEntry: 'mods/TACZ-Refabricated-1.21.1-0.7.0-bf11.jar'],
+        eliteXPack    : [url: 'https://github.com/Blockfield/elite-x/releases/download/bf10/Elite.x.Quality.Guns.Fabric.v4.2.1.-.1.21.1-bf10.jar',
+                         sha256: '20dc574d54830387805cd6b400788c209c484b14963caeab31e7ad9e2b117fb4',
+                         archiveUrl: 'https://github.com/Blockfield/blockfield-releases/releases/download/v2.72.0/Blockfield-client.zip',
+                         archiveSha256: 'f25b7034db062327b17871b9d0f5ba416dcf650a26157492a8e36955f5d8193f',
+                         archiveEntry: 'mods/Elite x Quality Guns Fabric v4.2.1 - 1.21.1-bf10.jar'],
+        lrTactical    : [url: 'https://github.com/Blockfield/lr-tactical/releases/download/bf5/lrtactical-1.21.1-0.4.1-bf5.jar',
+                         sha256: 'bc76627ee188de7b092e61f9b3c303c1ea47f2216e16e94929dc1cb7f455afd7',
+                         // The same published JAR ships in the pinned client release.
+                         archiveUrl: 'https://github.com/Blockfield/blockfield-releases/releases/download/v2.79.2/Blockfield-client.zip',
+                         archiveSha256: '43aa9b10a16e8f21e6e300ac5f6cf0f649e3384b732c1ea005b6227f2e03e1c6',
+                         archiveEntry: 'mods/lrtactical-1.21.1-0.4.1-bf5.jar'],
+        taczTweaks    : [url: 'https://cdn.modrinth.com/data/H8peNuJG/versions/wEKCLlcc/tacz-tweaks-3.0.0-alpha.10%2B1.21.1-fabric.jar',
+                         sha256: '9b8606ee22a59ad1a618813110818b7f03cf8aa58e6b28ccf6b9ec8c76a965df',
+                         stripLoomVersion: true],
+]
+ext.pinnedMod = { String id ->
+    def mod = pinnedMods[id]
+    def dir = new File(pinnedCacheDir, mod.sha256)
+    def jar = new File(dir, URLDecoder.decode(mod.url.substring(mod.url.lastIndexOf('/') + 1), 'UTF-8'))
+    def upstream = new File(dir, 'upstream.jar')
+    def sha256 = { File f ->
+        def digest = java.security.MessageDigest.getInstance('SHA-256')
+        f.withInputStream { input ->
+            byte[] buffer = new byte[65536]
+            int count
+            while ((count = input.read(buffer)) != -1) { digest.update(buffer, 0, count) }
+        }
+        digest.digest().encodeHex().toString()
+    }
+    def download = { String url, File target ->
+        def connection = new URL(url).openConnection()
+        connection.connectTimeout = 30000
+        connection.readTimeout = 120000
+        connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
+        connection.inputStream.withCloseable { input ->
+            target.withOutputStream { output -> output << input }
+        }
+    }
+    if (!upstream.isFile() || sha256(upstream) != mod.sha256) {
+        dir.mkdirs()
+        def tmp = File.createTempFile('download', '.tmp', dir)
+        try {
+            if (mod.archiveEntry) {
+                // CI preserves this cache across clean checkouts; downloading the whole pack is only needed once.
+                def archive = new File(pinnedCacheDir, "${mod.archiveSha256}.zip")
+                if (!archive.isFile() || sha256(archive) != mod.archiveSha256) {
+                    archive.parentFile.mkdirs()
+                    def archiveTmp = File.createTempFile("${mod.archiveSha256}.", '.tmp', archive.parentFile)
+                    try {
+                        download(mod.archiveUrl, archiveTmp)
+                        def got = sha256(archiveTmp)
+                        if (got != mod.archiveSha256) { throw new GradleException("${mod.archiveUrl}: sha256 ${got}, expected ${mod.archiveSha256}") }
+                        java.nio.file.Files.move(archiveTmp.toPath(), archive.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+                    } finally { archiveTmp.delete() }
+                }
+                new java.util.zip.ZipFile(archive).withCloseable { zip ->
+                    def entry = zip.getEntry(mod.archiveEntry)
+                    if (entry == null || entry.isDirectory()) { throw new GradleException("${mod.archiveUrl}: missing file ${mod.archiveEntry}") }
+                    zip.getInputStream(entry).withCloseable { input ->
+                        tmp.withOutputStream { output -> output << input }
+                    }
+                }
+            } else { download(mod.url, tmp) }
+            def got = sha256(tmp)
+            if (got != mod.sha256) { throw new GradleException("${mod.url}: sha256 ${got}, expected ${mod.sha256}") }
+            // The directory is keyed by sha256, so a replaced upstream is byte-identical: never delete a JAR
+            // another checkout may have just staged and returned.
+            java.nio.file.Files.move(tmp.toPath(), upstream.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        } finally { tmp.delete() }
+    }
+    // A stripped JAR has no pinned hash, so its own is recorded beside it: every checkout shares this copy,
+    // and a damaged or swapped one must be rebuilt from the verified upstream rather than silently reused.
+    def recorded = new File(dir, "${jar.name}.sha256")
+    def expected = !mod.stripLoomVersion ? mod.sha256 : recorded.isFile() ? recorded.text : ''
+    if (!jar.isFile() || sha256(jar) != expected) {
+        // Another checkout may be reading this shared JAR: stage it and rename it into place.
+        def staged = File.createTempFile('jar', '.tmp.jar', dir)
+        def stagedHash = File.createTempFile('jar', '.tmp.sha256', dir)
+        try {
+            java.nio.file.Files.copy(upstream.toPath(), staged.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            if (mod.stripLoomVersion) {
+                java.nio.file.FileSystems.newFileSystem(staged.toPath()).withCloseable { fs ->
+                    def mf = fs.getPath('META-INF/MANIFEST.MF')
+                    java.nio.file.Files.writeString(mf, java.nio.file.Files.readString(mf).replaceAll(/(?m)^Fabric-Loom-Version:.*\r?\n/, ''))
+                }
+                stagedHash.text = sha256(staged)
+            }
+            java.nio.file.Files.move(staged.toPath(), jar.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            if (mod.stripLoomVersion) {
+                java.nio.file.Files.move(stagedHash.toPath(), recorded.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+            }
+        } finally { staged.delete(); stagedHash.delete() }
+    }
+    return jar
+}
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'fabric-loom'
+    apply plugin: 'idea'
+
+    group = mod_group_id
+    version = "${mod_version}+mc${minecraft_version}"
+
+    java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+    if (name == 'client') {
+        sourceSets.test.java.srcDir rootProject.file('dev/test')
+    }
+
+    repositories {
+        mavenCentral()
+        maven { url = 'https://maven.parchmentmc.org' }
+        maven { url = 'https://maven.maxhenkel.de/repository/public' }
+        maven { url = 'https://maven.wispforest.io' }
+        maven { url = 'https://maven.nucleoid.xyz' }
+        exclusiveContent {
+            forRepository { maven { url = 'https://maven.enginehub.org/repo/' } }
+            filter { includeGroup 'com.sk89q.worldedit'; includeGroup 'com.sk89q.worldedit.worldedit-libs'; includeGroup 'org.enginehub'; includeGroup 'org.enginehub.piston'; includeGroup 'org.enginehub.lin-bus'; includeGroupByRegex 'org\\.enginehub\\..*' }
+        }
+        exclusiveContent {
+            forRepository { maven { url = 'https://api.modrinth.com/maven' } }
+            filter { includeGroup 'maven.modrinth' }
+        }
+    }
+
+    dependencies {
+        minecraft "com.mojang:minecraft:${minecraft_version}"
+        mappings loom.layered {
+            officialMojangMappings()
+            parchment("org.parchmentmc.data:parchment-${parchment_minecraft_version}:${parchment_mappings_version}@zip")
+        }
+        modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+        modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_version}"
+    }
+
+    // Одинаковые исходники -> одинаковый jar: bump-mod.sh оставляет клиентский пин, если клиент не менялся.
+    tasks.withType(AbstractArchiveTask).configureEach {
+        preserveFileTimestamps = false
+        reproducibleFileOrder = true
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.release = 21
+    }
+
+    tasks.register('lintJava', JavaCompile) {
+        dependsOn 'classes'
+        source sourceSets.main.allJava, sourceSets.test.allJava
+        classpath = sourceSets.main.compileClasspath + sourceSets.test.compileClasspath
+        destinationDirectory = layout.buildDirectory.dir('classes/java/lint')
+        options.annotationProcessorPath = files()
+        // Mixin processor diagnostics stay in normal compilation. The existing Accessories API has
+        // removal deprecations; this gate fails only actionable javac control-flow warnings.
+        options.compilerArgs += ['-proc:none', '-Xlint:divzero,empty,fallthrough,finally,-removal', '-Werror']
+    }
+
+    tasks.named('check') {
+        dependsOn rootProject.tasks.named('spotlessCheck'), tasks.named('lintJava')
+    }
+
+    tasks.named('processResources', ProcessResources).configure {
+        // Локальные копии: expand выполняется в execution и не должен трогать project.
+        def projVersion = project.version
+        def modIdValue = mod_id
+        def modNameValue = mod_name
+        def modLicenseValue = mod_license
+        def modVersionValue = mod_version
+        def modAuthorsValue = mod_authors
+        def modDescriptionValue = mod_description
+        def minecraftVersionValue = minecraft_version
+        inputs.property 'version', projVersion
+        inputs.property 'mod_version', modVersionValue
+        inputs.property 'git_commit', gitCommit
+        filesMatching(['fabric.mod.json', 'pack.mcmeta']) {
+            expand([
+                    version          : projVersion,
+                    mod_id           : modIdValue,
+                    mod_name         : modNameValue,
+                    mod_license      : modLicenseValue,
+                    mod_version      : modVersionValue,
+                    mod_authors      : modAuthorsValue,
+                    mod_description  : modDescriptionValue,
+                    minecraft_version: minecraftVersionValue,
+                    git_commit       : gitCommit.get(),
+            ])
+        }
+    }
+}
+
+// Common classes are copied into both jars; their shadow names need the same AP mappings.
+gradle.projectsEvaluated {
+    [project(':client')].each { side ->
+        side.tasks.named('remapJar') {
+            def common = project(':common')
+            dependsOn common.tasks.named('compileJava')
+            def options = tinyRemapperServiceOptions.get()
+            options.mixinApMappings.add(net.fabricmc.loom.task.service.MixinAPMappingService.createOptions(
+                    common, common.sourceSets.main, sourceNamespace, targetNamespace))
+            tinyRemapperServiceOptions.set(options)
+        }
+    }
+}
+
+apply from: 'dev/pinned-mod-self-check.gradle'
+subprojects.each { subproject ->
+    subproject.tasks.named('test').configure {
+        dependsOn rootProject.tasks.named('checkPinnedMod')
+    }
+}

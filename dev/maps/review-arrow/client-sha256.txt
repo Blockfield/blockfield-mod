@@ -1,0 +1,1 @@
+df6127ce245ea89f28b668d401a4f85c880a23dab9ac678a92d4232c359171fe  client/build/libs/blockfield-client-1.25.2+mc1.21.1.jar

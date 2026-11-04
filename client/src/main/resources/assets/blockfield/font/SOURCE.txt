@@ -1,0 +1,13 @@
+IBM Plex Sans Regular — SIL Open Font License 1.1 (OFL.txt).
+Source: https://github.com/IBM/plex/blob/master/packages/plex-sans/fonts/complete/ttf/IBMPlexSans-Regular.ttf
+
+Rendering: ui.json uses 3x oversampling. UiFontFilterMixin enables linear sampling only for blockfield:ui/* glyph atlases so thin strokes survive fractional UI scaling.
+
+IBM Plex Sans Condensed SemiBold (plex-sans-condensed-semibold.ttf) — SIL Open Font License 1.1 (OFL.txt).
+Source: IBM/plex release @ibm/plex-sans-condensed@2.0.0, ibm-plex-sans-condensed.zip
+(sha256 f86ba73abbeed7cf7690ead863192a87211dfc2b0cef0ac6bf4700533ec5ab9e), fonts/complete/ttf/IBMPlexSansCondensed-SemiBold.ttf
+(sha256 acc2b1e3b9597ee13b08b767f845bd038fe120cbee806859af7c01b60fe6e9e6).
+
+Rendering: hud.json (labels, size 10, oversample 2), hud_figures.json (size 10, oversample 4) and hud_big.json (size 26,
+oversample 4) are rasterised near the size they are shown, since glyph atlases have no mipmaps; UiFontFilterMixin enables
+linear sampling for blockfield:hud* glyph atlases as well.

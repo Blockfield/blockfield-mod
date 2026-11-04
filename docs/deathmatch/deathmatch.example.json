@@ -1,0 +1,18 @@
+{
+  "kill_limit": 30,
+  "time_limit_seconds": 600,
+  "preparation_seconds": 15,
+  "minimum_players": 2,
+  "respawn_seconds": 3,
+  "protection_seconds": 2,
+  "streak_rewards": [
+    {"kills": 2, "item": "superbwarfare:medical_kit", "count": 1,
+     "message": "§a%s жарит без остановки — %d подряд! Медпак в карман."},
+    {"kills": 3, "item": "superbwarfare:armor_plate", "count": 1,
+     "message": "§6%s набирает обороты — %d подряд! Держи бронепластину."},
+    {"kills": 5, "item": "superbwarfare:medical_kit", "count": 1,
+     "message": "§c%s — форменный ужас арены, %d подряд! Аптечка, плита и граната за счёт заведения."},
+    {"kills": 5, "item": "superbwarfare:armor_plate", "count": 1},
+    {"kills": 5, "item": "lrtactical:throwable", "count": 1, "throwable_id": "lrtactical:m67"}
+  ]
+}

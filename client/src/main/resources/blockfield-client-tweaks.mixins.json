@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.lunares.blockfield.client.mixin.tweaks",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.lunares.blockfield.client.mixin.tweaks.AnimationPolicyTweaksPlugin",
+  "client": [
+    "AnimationPolicyTweaksMixin",
+    "AnimationPolicyTweaksScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.lunares.blockfield.client.mixin.sodium",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.lunares.blockfield.client.mixin.sodium.SodiumMixinPlugin",
+  "client": [
+    "CenteredFlatWidgetMixin",
+    "ControlElementMixin",
+    "FlatButtonWidgetMixin",
+    "PageListWidgetMixin",
+    "SodiumThemeMixin",
+    "VideoSettingsScreenMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

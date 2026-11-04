@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.lunares.blockfield.client.mixin.accessories",
+  "plugin": "com.lunares.blockfield.client.mixin.accessories.AccessoriesMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "AccessoriesSyncEntireContainerMixin",
+    "AccessoriesSyncContainerDataMixin",
+    "AccessoriesInvalidateEntityCacheMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

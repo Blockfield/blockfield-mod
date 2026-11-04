@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "bf.testbot.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "KeyMappingAccessor",
+    "SoundManagerAccessor",
+    "SoundEngineAccessor",
+    "TestCapeMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

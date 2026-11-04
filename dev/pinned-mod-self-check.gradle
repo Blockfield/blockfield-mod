@@ -1,0 +1,109 @@
+// just gradle --no-daemon --max-workers=2 --offline checkPinnedMod
+// The task exercises the production resolver with file:// fixtures.
+// buildFile читается в configuration: doLast не должен трогать project (иначе CC reuse невозможен).
+def pinnedSelfCheckSource = project.buildFile.getText('UTF-8')
+tasks.register('checkPinnedMod') {
+    doLast {
+        def source = pinnedSelfCheckSource
+        def start = source.indexOf('def pinnedMods = [')
+        def end = source.indexOf('\nsubprojects {', start)
+        assert start >= 0 && end > start
+        def work = java.nio.file.Files.createTempDirectory('bf pinned mod ').toFile()
+        try {
+            def sha256 = { byte[] bytes -> java.security.MessageDigest.getInstance('SHA-256').digest(bytes).encodeHex().toString() }
+            byte[] payload = 'published native JAR bytes'.getBytes('UTF-8')
+            def payloadHash = sha256(payload)
+            def fixture = new File(work, 'published client.zip')
+            fixture.withOutputStream { output ->
+                new java.util.zip.ZipOutputStream(output).withCloseable { zip ->
+                    zip.putNextEntry(new java.util.zip.ZipEntry('mods/native.jar'))
+                    zip.write(payload)
+                    zip.closeEntry()
+                }
+            }
+            byte[] zipBytes = fixture.bytes
+            def archiveHash = sha256(zipBytes)
+            def archivePin = [url: 'https://example.invalid/private/native.jar', sha256: payloadHash,
+                              archiveUrl: fixture.toURI().toString(), archiveSha256: archiveHash, archiveEntry: 'mods/native.jar']
+            def cache = new File(work, 'shared cache')
+            def binding = new Binding([rootDir: work, ext: [:], pinnedCacheDir: cache])
+            def noTemp = { ->
+                def left = []
+                if (cache.isDirectory()) cache.eachFileRecurse { if (it.name.contains('.tmp')) left << it.name }
+                assert left.isEmpty()
+            }
+            def actual = new GroovyShell(getClass().classLoader, binding).evaluate(
+                    'import org.gradle.api.GradleException\n' + source.substring(start, end) + '\n[pins: pinnedMods, resolve: ext.pinnedMod]')
+            actual.pins.clear()
+            actual.pins.archive = archivePin
+            def jar = actual.resolve('archive')
+            def upstream = new File(jar.parentFile, 'upstream.jar')
+            def cachedArchive = new File(cache, "${archiveHash}.zip")
+            assert jar.name == 'native.jar' && jar.bytes == payload && upstream.bytes == payload
+            assert cachedArchive.bytes == zipBytes
+
+            // A warm verified archive must recover either damaged JAR without contacting its now-absent origin.
+            assert fixture.delete()
+            jar.text = 'damaged returned JAR'
+            assert actual.resolve('archive').bytes == payload
+            upstream.text = 'damaged upstream JAR'
+            assert actual.resolve('archive').bytes == payload && upstream.bytes == payload
+            assert upstream.delete()
+            fixture.bytes = zipBytes
+            cachedArchive.text = 'damaged cached archive'
+            assert actual.resolve('archive').bytes == payload && cachedArchive.bytes == zipBytes
+
+            def reject = { String id, String message ->
+                try {
+                    actual.resolve(id)
+                    throw new AssertionError("${id}: invalid bytes were accepted")
+                } catch (org.gradle.api.GradleException expected) { assert expected.message.contains(message) }
+                def pin = actual.pins[id]
+                noTemp()
+                assert !new File(cache, "${pin.sha256}/upstream.jar").exists()
+            }
+            assert upstream.delete()
+            actual.pins.badArchive = archivePin + [archiveSha256: '0' * 64]
+            reject('badArchive', 'expected ' + '0' * 64)
+            assert !new File(cache, '0' * 64 + '.zip').exists()
+            actual.pins.badJar = archivePin + [sha256: '1' * 64]
+            reject('badJar', 'expected ' + '1' * 64)
+            actual.pins.missingEntry = archivePin + [sha256: '2' * 64, archiveEntry: 'mods/absent.jar']
+            reject('missingEntry', 'missing file mods/absent.jar')
+
+            byte[] directBytes = 'direct pinned JAR bytes'.getBytes('UTF-8')
+            def direct = new File(work, 'direct+1.jar')
+            direct.bytes = directBytes
+            actual.pins.direct = [url: direct.toURI().toASCIIString().replace('+', '%2B'), sha256: sha256(directBytes)]
+            def directJar = actual.resolve('direct')
+            assert directJar.name == direct.name && directJar.bytes == directBytes
+            directJar.text = 'damaged direct JAR'
+            assert actual.resolve('direct').bytes == directBytes
+            def loomJar = new File(work, 'newer-loom.jar')
+            loomJar.withOutputStream { output ->
+                new java.util.zip.ZipOutputStream(output).withCloseable { zip ->
+                    zip.putNextEntry(new java.util.zip.ZipEntry('META-INF/MANIFEST.MF'))
+                    zip.write('Manifest-Version: 1.0\r\nFabric-Loom-Version: 1.14\r\n\r\n'.getBytes('UTF-8'))
+                    zip.closeEntry()
+                }
+            }
+            actual.pins.loom = [url: loomJar.toURI().toString(), sha256: sha256(loomJar.bytes), stripLoomVersion: true]
+            def strippedJar = actual.resolve('loom')
+            def recorded = new File(strippedJar.parentFile, "${strippedJar.name}.sha256")
+            def assertStripped = { ->
+                new java.util.zip.ZipFile(strippedJar).withCloseable { zip ->
+                    assert !zip.getInputStream(zip.getEntry('META-INF/MANIFEST.MF')).withCloseable { it.getText('UTF-8') }.contains('Fabric-Loom-Version:')
+                }
+                assert recorded.text == sha256(strippedJar.bytes)
+            }
+            assertStripped()
+            assert new File(strippedJar.parentFile, 'upstream.jar').bytes == loomJar.bytes
+            // The shared stripped JAR has no pinned hash: a damaged copy must be rebuilt, not reused.
+            strippedJar.text = 'damaged stripped JAR'
+            assert actual.resolve('loom') == strippedJar
+            assertStripped()
+            noTemp()
+            println 'Pinned mod resolver: cold archive/direct, warm repair, both checksums, missing entry, temp cleanup and Loom stripping with stripped-JAR repair PASS'
+        } finally { assert work.deleteDir() }
+    }
+}

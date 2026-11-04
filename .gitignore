@@ -1,0 +1,50 @@
+# IDE / Editor folders
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+.metadata
+bin/
+out/
+*.launch
+
+# Gradle build files and caches
+.gradle/
+build/
+**/build/
+**/.gradle/
+
+# Minecraft runtime folders and files
+**/run/
+run/
+**/logs/
+**/crash-reports/
+**/saves/
+**/world/
+**/dimensions/
+usernamecache.json
+usercache.json
+options.txt
+optionsof.txt
+
+# OS-specific files
+Thumbs.db
+.DS_Store
+
+# Forge / Build temp files
+forge*changelog.txt
+*.log
+
+# Project specific exclusions
+Docs/
+OldProject/
+.api-classpath
+
+# Python caches (dev/ scripts)
+__pycache__/
+
+.cache/quality/

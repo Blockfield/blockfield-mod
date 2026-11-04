@@ -1,0 +1,148 @@
+base { archivesName = "${mod_id}-client" }
+
+apply from: rootProject.file('dev/oracle-mod-pins.gradle')
+apply from: rootProject.file('dev/oracle-mods.gradle')
+
+configurations {
+    taczBundledApi {
+        canBeResolved = true
+        canBeConsumed = false
+        transitive = false
+    }
+    testCompileOnly.extendsFrom compileOnly
+}
+
+sourceSets {
+    oracleTest
+}
+
+configurations {
+    oracleTestImplementation.extendsFrom(testImplementation)
+    oracleTestCompileOnly.extendsFrom(testCompileOnly)
+    oracleTestRuntimeOnly.extendsFrom(testRuntimeOnly)
+    // Oracle fixtures compile against the same named Minecraft, loader and remapped mods as
+    // the main sources (plus the JUnit/Mockito test APIs).
+    oracleTestCompileClasspath.extendsFrom(compileClasspath, modCompileClasspathMapped)
+}
+
+repositories {
+    maven { url = 'https://maven.fabricmc.net/' }
+}
+
+// These APIs already ship inside TACZ; expose the verified nested jars only to compilation.
+def taczBundledJar = { String name, String expectedSha ->
+    providers.provider {
+        def jar = zipTree(configurations.taczBundledApi.singleFile)
+                .matching { include "META-INF/jars/${name}" }.singleFile
+        def actualSha = java.security.MessageDigest.getInstance('SHA-256')
+                .digest(jar.bytes).encodeHex().toString()
+        if (actualSha != expectedSha) {
+            throw new GradleException("TACZ ${name}: sha256 ${actualSha}, expected ${expectedSha}")
+        }
+        jar
+    }
+}
+
+dependencies {
+    // namedElements -- jar :common в namespace named, каким его и ждёт dev-запуск; обычный
+    // project(':common') отдаёт remapJar (intermediary) и роняет загрузчик на net.minecraft.class_*.
+    // transitive = false: fabric-зависимости объявлены в корневом build.gradle и уже ремапнуты здесь.
+    implementation(project(path: ':common', configuration: 'namedElements')) { transitive = false }
+
+    // Плагинный API Simple Voice Chat: уровни микрофона и чужого голоса для голосового HUD.
+    compileOnly "de.maxhenkel.voicechat:voicechat-api:${voicechat_api_version}"
+
+    // Форма рисуется рендерером Accessories. Мягкая зависимость: код за FabricLoader.isModLoaded.
+    modCompileOnly "io.wispforest:accessories-fabric:${accessories_version}"
+
+    // Флаг прицеливания TaCZ (первое лицо при ADS) и цели миксинов Ping Wheel (пинг с дрона).
+    modCompileOnly "maven.modrinth:tacz-refabricated:${tacz_version}"
+    modCompileOnly files(pinnedMod('forgeConfigApi'))
+    taczBundledApi "maven.modrinth:tacz-refabricated:${tacz_version}"
+    compileOnly files(taczBundledJar('luaj-core-3.0.8-figura.jar',
+            'c3c35095b818865659b817d9945ee25710d7e575b2065f76ccd65502e862bdaa'))
+    compileOnly files(taczBundledJar('luaj-jse-3.0.8-figura.jar',
+            '2984cb57496fc812b035d24162c4aaf38c1a283c7095a28f68aa79b8d7896a09'))
+    modCompileOnly files(taczBundledJar('simplebedrockmodel-fabric-2.3.0.1+mc1.21.1.jar',
+            '8e5a006c01636565a80c8563655370c0a8776523e999a46a9ef8a26d8e80b21c'))
+    modCompileOnly "maven.modrinth:ping-wheel:${pingwheel_version}"
+    // pinnedMod: URL + sha256 в корневом build.gradle; в рантайме всё это даёт модпак.
+    // Стамина ParCool (форк parcool-fabric) для штрафов оружия.
+    modCompileOnly files(pinnedMod('parcool'))
+    // Замедление позы перезарядки игроков при истощении (через него TACZ рисует третье лицо).
+    modCompileOnly files(pinnedMod('playerAnimator'))
+    // Перекраска экрана настроек Sodium под BfTheme: миксины блочатся плагином, если sodium нет.
+    modCompileOnly files(pinnedMod('sodium'))
+    // Camera Overhaul 2.1.1 из пака: его наклон вида добавляется к выстрелу (CameraOverhaulAimMixin).
+    modCompileOnly files(pinnedMod('cameraOverhaul'))
+    // Pinned snapshot vehicle/motion targets; supplied by the client pack at runtime.
+    modCompileOnly files(pinnedMod('superbwarfare'))
+    oracleTestImplementation sourceSets.main.output
+    // Policy-forced smoother-crawl getter (ADR4 6); supplied by the client pack at runtime.
+    modCompileOnly files(pinnedMod('taczTweaks'))
+    compileOnly 'org.jetbrains.kotlin:kotlin-stdlib:2.1.20'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testImplementation 'org.mockito:mockito-core:5.14.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // Exercise persistence against the installed native APIs; these jars never enter the mod.
+    testRuntimeOnly files(pinnedMod('voicechat'), pinnedMod('forgeConfigApi'))
+    testRuntimeOnly files(providers.provider {
+        zipTree(pinnedMod('forgeConfigApi')).matching {
+            include 'META-INF/jars/core-3.8.0.jar', 'META-INF/jars/toml-3.8.0.jar'
+        }.files
+    })
+}
+
+test {
+    classpath += sourceSets.main.compileClasspath
+    useJUnitPlatform()
+    maxHeapSize = '256m'
+}
+
+// Shared Knot oracle task and production loader classpath.
+apply from: rootProject.file('dev/oracle-runner.gradle')
+
+jar {
+    from project(':common').sourceSets.main.output
+}
+
+tasks.named('runServer') { enabled = false }
+
+// Inspect upstream bytes; Raknetify is optional and never enters the shipped Blockfield jar.
+// Providers resolve at configuration (see inputs below); doFirst only reads them back (CC-safe).
+def raknetifyTestJar = providers.provider { pinnedMod('raknetify') }
+def raknetifyVelocityTestJar = providers.provider { pinnedMod('raknetifyVelocity') }
+def sbwClientTestJar = providers.provider { pinnedMod('superbwarfare') }
+def parcoolTestJar = providers.provider { pinnedMod('parcool') }
+def taczPackClientTestJar = providers.provider { pinnedMod('taczPack') }
+def lrClientTestJar = providers.provider { pinnedMod('lrTactical') }
+def taczTweaksTestJar = providers.provider { pinnedMod('taczTweaks') }
+test {
+    inputs.file(raknetifyTestJar)
+    inputs.file(raknetifyVelocityTestJar)
+    inputs.file(sbwClientTestJar)
+    inputs.file(parcoolTestJar)
+    inputs.file(taczPackClientTestJar)
+    inputs.file(lrClientTestJar)
+    inputs.file(taczTweaksTestJar)
+    doFirst {
+        systemProperty 'blockfield.test.raknetifyJar', raknetifyTestJar.get().absolutePath
+        systemProperty 'blockfield.test.raknetifyVelocityJar', raknetifyVelocityTestJar.get().absolutePath
+        systemProperty 'blockfield.test.sbwJar', sbwClientTestJar.get().absolutePath
+        systemProperty 'blockfield.test.parcoolJar', parcoolTestJar.get().absolutePath
+        systemProperty 'blockfield.test.taczJar', taczPackClientTestJar.get().absolutePath
+        systemProperty 'blockfield.test.lrJar', lrClientTestJar.get().absolutePath
+        systemProperty 'blockfield.test.taczTweaksJar', taczTweaksTestJar.get().absolutePath
+    }
+}
+
+def combatPackRoot = rootDir.toPath()
+while (combatPackRoot != null && !combatPackRoot.resolve('client/mods/raknetify.pw.toml').toFile().isFile()) {
+    combatPackRoot = combatPackRoot.parent
+}
+if (combatPackRoot != null) {
+    test {
+        inputs.file(combatPackRoot.resolve('client/mods/raknetify.pw.toml').toFile())
+        doFirst { systemProperty 'blockfield.test.combatPackRoot', combatPackRoot.toString() }
+    }
+}

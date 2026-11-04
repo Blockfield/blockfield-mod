@@ -1,0 +1,47 @@
+{
+  "id": "dm_arena",
+  "name": "Example FFA arena (not a supplied world)",
+  "supported_modes": [
+    "deathmatch"
+  ],
+  "bounds": {
+    "minX": -64,
+    "maxX": 64,
+    "minZ": -64,
+    "maxZ": 64
+  },
+  "mode_data": {
+    "deathmatch": {
+      "spawn_points": [
+        {
+          "x": -32,
+          "y": 65,
+          "z": 0,
+          "yaw": -90,
+          "pitch": 0
+        },
+        {
+          "x": 32,
+          "y": 65,
+          "z": 0,
+          "yaw": 90,
+          "pitch": 0
+        },
+        {
+          "x": 0,
+          "y": 65,
+          "z": -32,
+          "yaw": 0,
+          "pitch": 0
+        },
+        {
+          "x": 0,
+          "y": 65,
+          "z": 32,
+          "yaw": 180,
+          "pitch": 0
+        }
+      ]
+    }
+  }
+}

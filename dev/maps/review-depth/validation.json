@@ -1,0 +1,224 @@
+{
+  "base_commit": "efe4047b4c",
+  "suites": [
+    {
+      "module": "client",
+      "name": "com.lunares.blockfield.client.gui.screen.MenuLayoutTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "client",
+      "name": "com.lunares.blockfield.client.gui.tablet.MapPlayerMotionTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "client",
+      "name": "com.lunares.blockfield.client.gui.tablet.MapTileAssemblyTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "client",
+      "name": "com.lunares.blockfield.client.gui.tablet.MapViewTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "client",
+      "name": "com.lunares.blockfield.client.gui.tablet.MinimapViewTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "client",
+      "name": "com.lunares.blockfield.client.gui.tablet.TabletCanvasTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "client",
+      "name": "com.lunares.blockfield.client.gui.tablet.ZoneMapTest",
+      "tests": 7,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.HubMatchmakingTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapConfigBoundsTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapConfigDeathmatchTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapConfigOverlayTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapConfigTabletMapTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapConfigTrainingTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapLocationTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapPingsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapSnapshotsTest",
+      "tests": 6,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapTeammatesTest",
+      "tests": 2,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.MapTerrainTest",
+      "tests": 3,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.RoomMapPreparationTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.WorkshopMapsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.WorkshopMembersTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.core.WorkshopRulesTest",
+      "tests": 4,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.modes.campaign.MapReadyCountdownTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.modes.campaign.ModeVoteSettingsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.modes.campaign.TeamSpawnsTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    },
+    {
+      "module": "server",
+      "name": "com.lunares.blockfield.server.statistics.StatsRecorderTest",
+      "tests": 1,
+      "failures": 0,
+      "skipped": 0
+    }
+  ],
+  "total_tests": 73,
+  "final_image_different_pixels": 0,
+  "after_render_resolution": {
+    "fields": [
+      703,
+      703
+    ],
+    "kozyatyn": [
+      409,
+      703
+    ],
+    "zaliznichne": [
+      381,
+      797
+    ]
+  },
+  "jars": {
+    "client/build/libs/blockfield-client-1.25.2+mc1.21.1.jar": "0313819c163dfe8207ae87a81d0b29923a66352a7d9cf725507d20a192581af8",
+    "server/build/libs/blockfield-server-1.25.2+mc1.21.1.jar": "fc73c98efcc90a7ac3314b82f3ad8ef74ed53cc001d57005c328f22988a134b5"
+  },
+  "steady_state_tick_ms": {
+    "average": 2.6,
+    "p50": 2.5,
+    "p95": 3.4,
+    "p99": 4.5,
+    "samples": 100
+  },
+  "runtime_checks": [
+    "3 actual map snapshots",
+    "1280x720 tablet and HUD",
+    "640x360 tablet and HUD",
+    "two real clients entered campaign combat",
+    "zoom and drag",
+    "minimap movement and camera rotation",
+    "switch maps",
+    "final build pixel match"
+  ]
+}
