@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.lunares.blockfield.client.render.HudRenderer;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 

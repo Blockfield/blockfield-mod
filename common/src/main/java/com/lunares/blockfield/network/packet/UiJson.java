@@ -49,13 +49,23 @@ public final class UiJson {
     }
 
     public static String str(JsonObject o, String key, String def) {
-        JsonElement e = o == null ? null : o.get(key);
-        return e != null && e.isJsonPrimitive() ? e.getAsString() : def;
+        return str(o == null ? null : o.get(key), def);
+    }
+
+    /** Only a JSON string reads as text; numbers, booleans and null read as the default. */
+    public static String str(JsonElement e, String def) {
+        return e != null && e.isJsonPrimitive() && e.getAsJsonPrimitive().isString()
+                ? e.getAsString()
+                : def;
     }
 
     public static boolean bool(JsonObject o, String key, boolean def) {
-        JsonElement e = o == null ? null : o.get(key);
-        if (e == null || !e.isJsonPrimitive()) return def;
+        return bool(o == null ? null : o.get(key), def);
+    }
+
+    /** Only a JSON boolean reads as boolean; strings, numbers and null read as the default. */
+    public static boolean bool(JsonElement e, boolean def) {
+        if (e == null || !e.isJsonPrimitive() || !e.getAsJsonPrimitive().isBoolean()) return def;
         try {
             return e.getAsBoolean();
         } catch (RuntimeException bad) {
@@ -64,8 +74,12 @@ public final class UiJson {
     }
 
     public static int integer(JsonObject o, String key, int def) {
-        JsonElement e = o == null ? null : o.get(key);
-        if (e == null || !e.isJsonPrimitive()) return def;
+        return integer(o == null ? null : o.get(key), def);
+    }
+
+    /** Only a JSON number reads as int; strings, booleans and null read as the default. */
+    public static int integer(JsonElement e, int def) {
+        if (e == null || !e.isJsonPrimitive() || !e.getAsJsonPrimitive().isNumber()) return def;
         try {
             return e.getAsInt();
         } catch (RuntimeException bad) {
@@ -74,8 +88,12 @@ public final class UiJson {
     }
 
     public static double decimal(JsonObject o, String key, double def) {
-        JsonElement e = o == null ? null : o.get(key);
-        if (e == null || !e.isJsonPrimitive()) return def;
+        return decimal(o == null ? null : o.get(key), def);
+    }
+
+    /** Only a finite JSON number reads as double; anything else reads as the default. */
+    public static double decimal(JsonElement e, double def) {
+        if (e == null || !e.isJsonPrimitive() || !e.getAsJsonPrimitive().isNumber()) return def;
         try {
             double value = e.getAsDouble();
             return Double.isFinite(value) ? value : def;

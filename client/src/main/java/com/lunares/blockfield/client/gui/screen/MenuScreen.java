@@ -161,26 +161,20 @@ public class MenuScreen extends Screen {
         this.data = next;
         if (fresh) page = 0;
         if (next.has("timer")) {
-            try {
-                int seconds = next.get("timer").getAsInt();
-                // timer 0 = the server cleared the countdown; an empty "0 С" box only confuses.
-                this.timerEndMs = seconds > 0 ? System.currentTimeMillis() + seconds * 1000L : -1;
-            } catch (Exception e) {
-                this.timerEndMs = -1;
-            }
+            int seconds = UiJson.integer(next, "timer", 0);
+            // timer 0 = the server cleared the countdown; an empty "0 С" box only confuses.
+            this.timerEndMs = seconds > 0 ? System.currentTimeMillis() + seconds * 1000L : -1;
         } else if (fresh) {
             this.timerEndMs = -1;
         }
     }
 
     private static String str(JsonObject o, String key, String def) {
-        JsonElement e = o == null ? null : o.get(key);
-        return e != null && e.isJsonPrimitive() ? e.getAsString() : def;
+        return UiJson.str(o, key, def);
     }
 
     private static boolean bool(JsonObject o, String key, boolean def) {
-        JsonElement e = o == null ? null : o.get(key);
-        return e != null && e.isJsonPrimitive() ? e.getAsBoolean() : def;
+        return UiJson.bool(o, key, def);
     }
 
     static boolean shouldCloseOnClick(JsonObject btn, JsonObject menu) {
@@ -211,8 +205,10 @@ public class MenuScreen extends Screen {
 
     private List<String> sectionLines(JsonObject section, int width) {
         List<String> lines = new ArrayList<>();
-        for (JsonElement line : UiJson.arr(section, "lines"))
-            if (line.isJsonPrimitive()) lines.addAll(wrap(line.getAsString(), width));
+        for (JsonElement line : UiJson.arr(section, "lines")) {
+            String text = UiJson.str(line, null);
+            if (text != null) lines.addAll(wrap(text, width));
+        }
         return lines;
     }
 
@@ -800,12 +796,12 @@ public class MenuScreen extends Screen {
                 this.minecraft != null && this.minecraft.player != null
                         ? this.minecraft.player.getGameProfile().getName()
                         : "";
-        boolean mine = cells.size() > 1 && own.equals(cells.get(1).getAsString());
+        boolean mine = cells.size() > 1 && own.equals(UiJson.str(cells.get(1), ""));
         if (mine) ownRowSurface(g, it, y);
         else if (it.tableRow() % 2 == 1)
             g.fill(it.x(), y, it.x() + it.w(), y + ROW_H, BfTheme.BG_ELEVATED);
         boolean podium =
-                cells.size() > 0 && List.of("1", "2", "3").contains(cells.get(0).getAsString());
+                cells.size() > 0 && List.of("1", "2", "3").contains(UiJson.str(cells.get(0), ""));
         tableRow(
                 g,
                 it,
@@ -833,18 +829,18 @@ public class MenuScreen extends Screen {
         while (nums > 1 && it.w() - 30 - nums * NUM_COL_W < 90) nums--;
         int ty = y + (ROW_H - 8) / 2;
         if (cells.size() > 0)
-            g.drawString(this.font, cells.get(0).getAsString(), it.x() + 6, ty, rankInk, false);
+            g.drawString(this.font, UiJson.str(cells.get(0), ""), it.x() + 6, ty, rankInk, false);
         int nameW = it.w() - 30 - nums * NUM_COL_W - 6;
         if (cells.size() > 1)
             g.drawString(
                     this.font,
-                    ellipsize(cells.get(1).getAsString(), nameW),
+                    ellipsize(UiJson.str(cells.get(1), ""), nameW),
                     it.x() + 30,
                     ty,
                     nameInk,
                     false);
         for (int i = 0; i < nums; i++) {
-            String cell = ellipsize(cells.get(2 + i).getAsString(), NUM_COL_W - 12);
+            String cell = ellipsize(UiJson.str(cells.get(2 + i), ""), NUM_COL_W - 12);
             int right = it.x() + it.w() - 6 - (nums - 1 - i) * NUM_COL_W;
             g.drawString(this.font, cell, right - this.font.width(cell), ty, numInk, false);
         }

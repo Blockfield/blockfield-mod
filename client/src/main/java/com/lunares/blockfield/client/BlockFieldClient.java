@@ -126,7 +126,7 @@ public class BlockFieldClient implements ClientModInitializer {
                     com.google.gson.JsonObject obj = p.ui();
                     String json = p.uiDataJson();
                     try {
-                        if (obj.has("resetStamina") && obj.get("resetStamina").getAsBoolean()) {
+                        if (UiJson.bool(obj, "resetStamina", false)) {
                             var local = c.player();
                             var stamina =
                                     local.getAttachedOrCreate(
@@ -143,12 +143,10 @@ public class BlockFieldClient implements ClientModInitializer {
                         }
                         if (obj.has("workshopMap")) {
                             com.lunares.blockfield.client.workshop.WorkshopAiClient.availability(
-                                    obj.has("workshopAi") && obj.get("workshopAi").getAsBoolean());
+                                    UiJson.bool(obj, "workshopAi", false));
                             com.lunares.blockfield.client.workshop.WorkshopGhostClient.update(
-                                    obj.has("workshopBuild")
-                                            && obj.get("workshopBuild").getAsBoolean(),
-                                    obj.has("workshopGhost")
-                                            && obj.get("workshopGhost").getAsBoolean());
+                                    UiJson.bool(obj, "workshopBuild", false),
+                                    UiJson.bool(obj, "workshopGhost", false));
                             com.lunares.blockfield.client.render.HudRenderer.updateHUDData(json);
                             return;
                         }
@@ -162,8 +160,7 @@ public class BlockFieldClient implements ClientModInitializer {
                         }
                         if (obj.has("removeScore")) {
                             com.lunares.blockfield.client.render.TabMenuRenderer.removePlayer(
-                                    java.util.UUID.fromString(
-                                            obj.get("removeScore").getAsString()));
+                                    java.util.UUID.fromString(UiJson.str(obj, "removeScore", "")));
                             return;
                         }
                         if (obj.has("creditGain")) {
@@ -190,13 +187,11 @@ public class BlockFieldClient implements ClientModInitializer {
                             return;
                         }
                         ClientEventHandler.handleUpdateUI(json);
-                        if (obj.has("closeDeploymentMenu")
-                                && obj.get("closeDeploymentMenu").getAsBoolean()) return;
+                        if (UiJson.bool(obj, "closeDeploymentMenu", false)) return;
                         com.lunares.blockfield.client.render.HudRenderer.updateHUDData(json);
                         if (obj.has("tabActive")) {
-                            boolean active = obj.get("tabActive").getAsBoolean();
-                            if (active
-                                    && (!obj.has("showHud") || obj.get("showHud").getAsBoolean())) {
+                            boolean active = UiJson.bool(obj, "tabActive", false);
+                            if (active && UiJson.bool(obj, "showHud", true)) {
                                 com.lunares.blockfield.client.gui.tablet.TabletResultTab.onBattle();
                             }
                             boolean wasActive =
@@ -220,7 +215,7 @@ public class BlockFieldClient implements ClientModInitializer {
                         }
                         if (obj.has("ffa")) {
                             com.lunares.blockfield.client.render.TabMenuRenderer.setFfaMode(
-                                    obj.get("ffa").getAsBoolean());
+                                    UiJson.bool(obj, "ffa", false));
                         }
                     } catch (Exception e) {
                         // Ignore parsing errors

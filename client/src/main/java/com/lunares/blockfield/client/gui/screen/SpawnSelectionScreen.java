@@ -94,39 +94,30 @@ public class SpawnSelectionScreen extends Screen {
     }
 
     JsonObject getLivePointData(String ptName) {
-        if (this.currentUiData != null
-                && this.currentUiData.has("pts")
-                && this.currentUiData.get("pts").isJsonArray()) {
-            JsonArray pts = UiJson.arr(this.currentUiData, "pts");
-            for (int i = 0; i < pts.size(); i++) {
-                JsonObject p = UiJson.asObject(pts.get(i));
-                if (p == null) continue;
-                if (p.has("n") && p.get("n").getAsString().equals(ptName)) {
-                    return p;
-                }
-            }
+        if (this.currentUiData == null) return null;
+        for (JsonObject p : UiJson.objects(UiJson.arr(this.currentUiData, "pts"))) {
+            String name = UiJson.str(p, "n", null);
+            if (name != null && name.equals(ptName)) return p;
         }
         return null;
     }
 
     /** Deathmatch: одна высадка, точку выбирает сервер; командных баз и точек нет. */
     private boolean isFfa() {
-        return this.spawnsData != null
-                && this.spawnsData.has("ffa")
-                && this.spawnsData.get("ffa").getAsBoolean();
+        return UiJson.bool(this.spawnsData, "ffa", false);
     }
 
     /** Режим с одним набором на всех (снайперы): выбирать нечего, кнопки смены класса нет. */
     private boolean fixedClass() {
-        return this.spawnsData != null
-                && this.spawnsData.has("fixedClass")
-                && this.spawnsData.get("fixedClass").getAsBoolean();
+        return UiJson.bool(this.spawnsData, "fixedClass", false);
     }
 
     private String playerTeam() {
-        return this.currentUiData != null && this.currentUiData.has("playerTeam")
-                ? this.currentUiData.get("playerTeam").getAsString()
-                : "";
+        return UiJson.str(this.currentUiData, "playerTeam", "");
+    }
+
+    private int spawnThreshold() {
+        return UiJson.integer(this.currentUiData, "safeSpawnThreshold", 90);
     }
 
     private boolean canSpawnAt(String ptName) {
@@ -134,12 +125,9 @@ public class SpawnSelectionScreen extends Screen {
 
         JsonObject liveData = getLivePointData(ptName);
         if (liveData != null) {
-            String owner = liveData.has("o") ? liveData.get("o").getAsString() : "NEUTRAL";
-            int progress = liveData.has("p") ? liveData.get("p").getAsInt() : 0;
-            int threshold =
-                    this.currentUiData != null && this.currentUiData.has("safeSpawnThreshold")
-                            ? this.currentUiData.get("safeSpawnThreshold").getAsInt()
-                            : 90;
+            String owner = UiJson.str(liveData, "o", "NEUTRAL");
+            int progress = UiJson.integer(liveData, "p", 0);
+            int threshold = spawnThreshold();
             if (this.minecraft != null && this.minecraft.player != null) {
                 String playerTeam = playerTeam();
                 if ("RED".equals(owner) && "RedTeam".equals(playerTeam) && progress >= threshold)
@@ -160,12 +148,9 @@ public class SpawnSelectionScreen extends Screen {
             return tt;
         }
 
-        String owner = liveData.has("o") ? liveData.get("o").getAsString() : "NEUTRAL";
-        int progress = liveData.has("p") ? liveData.get("p").getAsInt() : 0;
-        int threshold =
-                this.currentUiData != null && this.currentUiData.has("safeSpawnThreshold")
-                        ? this.currentUiData.get("safeSpawnThreshold").getAsInt()
-                        : 90;
+        String owner = UiJson.str(liveData, "o", "NEUTRAL");
+        int progress = UiJson.integer(liveData, "p", 0);
+        int threshold = spawnThreshold();
         String playerTeam = playerTeam();
 
         String expectedOwner = "NEUTRAL";
@@ -258,16 +243,14 @@ public class SpawnSelectionScreen extends Screen {
         int baseMy = mapY + mapH - 40;
         coords.put("BASE", new int[] {baseMx, baseMy});
 
-        if (this.spawnsData != null
-                && this.spawnsData.has("pts")
-                && this.spawnsData.get("pts").isJsonArray()) {
+        if (this.spawnsData != null) {
             JsonArray pts = UiJson.arr(this.spawnsData, "pts");
             for (int i = 0; i < pts.size(); i++) {
                 JsonObject pt = UiJson.asObject(pts.get(i));
                 if (pt == null) continue;
-                String pName = pt.has("n") ? pt.get("n").getAsString() : "Точка " + i;
-                float px = pt.has("x") ? pt.get("x").getAsFloat() : 0;
-                float pz = pt.has("z") ? pt.get("z").getAsFloat() : 0;
+                String pName = UiJson.str(pt, "n", "Точка " + i);
+                float px = (float) UiJson.decimal(pt, "x", 0);
+                float pz = (float) UiJson.decimal(pt, "z", 0);
                 int mx = mapX + (int) ((px - minX) / (maxX - minX) * mapW);
                 int my = mapY + (int) ((pz - minZ) / (maxZ - minZ) * mapH);
 
@@ -418,15 +401,11 @@ public class SpawnSelectionScreen extends Screen {
     }
 
     private boolean isDead() {
-        return this.currentUiData != null
-                && this.currentUiData.has("dead")
-                && this.currentUiData.get("dead").getAsBoolean();
+        return UiJson.bool(this.currentUiData, "dead", false);
     }
 
     private int deathTimer() {
-        return this.currentUiData != null && this.currentUiData.has("deathTimer")
-                ? this.currentUiData.get("deathTimer").getAsInt()
-                : 0;
+        return UiJson.integer(this.currentUiData, "deathTimer", 0);
     }
 
     @Override
@@ -497,11 +476,10 @@ public class SpawnSelectionScreen extends Screen {
         }
 
         BfTheme.header(guiGraphics, this.font, LIST_X, 66, LIST_WIDTH, "ТОЧКИ ВЫСАДКИ", "");
-        if (currentUiData != null
-                && currentUiData.has("battleCredits")
-                && currentUiData.has("deploymentCost")) {
-            long balance = (long) currentUiData.get("battleCredits").getAsDouble();
-            int price = currentUiData.get("deploymentCost").getAsInt();
+        double balanceValue = UiJson.decimal(currentUiData, "battleCredits", Double.NaN);
+        int price = UiJson.integer(currentUiData, "deploymentCost", Integer.MIN_VALUE);
+        if (currentUiData != null && Double.isFinite(balanceValue) && price != Integer.MIN_VALUE) {
+            long balance = (long) balanceValue;
             guiGraphics.drawString(
                     this.font,
                     price + " БК · баланс " + balance + " БК",
@@ -612,10 +590,8 @@ public class SpawnSelectionScreen extends Screen {
                                 ? BfTheme.RED_TEAM
                                 : ("BlueTeam".equals(playerTeam) ? BfTheme.BLUE_TEAM : BfTheme.OK);
             } else {
-                color =
-                        liveData != null && liveData.has("o")
-                                ? teamColor(liveData.get("o").getAsString())
-                                : BfTheme.NEUTRAL;
+                String pointOwner = liveData == null ? null : UiJson.str(liveData, "o", null);
+                color = pointOwner == null ? BfTheme.NEUTRAL : teamColor(pointOwner);
             }
             if (selectedSpawnId.equals(m.name())) {
                 color = pulse;
@@ -650,9 +626,9 @@ public class SpawnSelectionScreen extends Screen {
                                                             .PointMarkerRenderer.displayName(
                                                             m.name()))
                                     .withColor(BfTheme.AMBER));
-                    if (liveData != null && liveData.has("o")) {
-                        String owner = liveData.get("o").getAsString();
-                        int progress = liveData.has("p") ? liveData.get("p").getAsInt() : 0;
+                    if (liveData != null && UiJson.str(liveData, "o", null) != null) {
+                        String owner = UiJson.str(liveData, "o", "NEUTRAL");
+                        int progress = UiJson.integer(liveData, "p", 0);
                         if ("NEUTRAL".equals(owner)) {
                             tt.add(
                                     Component.literal("Нейтральная точка (" + progress + "%)")

@@ -36,8 +36,8 @@ public class HudRenderer {
      */
     public static boolean isDeployed() {
         JsonObject ui = latestUIData;
-        if (ui == null || !ui.has("tabActive") || !ui.get("tabActive").getAsBoolean()) return false;
-        return !(ui.has("dead") && ui.get("dead").getAsBoolean());
+        if (!UiJson.bool(ui, "tabActive", false)) return false;
+        return !UiJson.bool(ui, "dead", false);
     }
 
     private static void onClientLogout() {
@@ -84,8 +84,7 @@ public class HudRenderer {
     }
 
     private static double credits(JsonObject ui) {
-        if (ui == null || !ui.has("battleCredits")) return -1;
-        double balance = ui.get("battleCredits").getAsDouble();
+        double balance = UiJson.decimal(ui, "battleCredits", -1);
         return Double.isFinite(balance) && balance >= 0 ? balance : -1;
     }
 
@@ -107,13 +106,15 @@ public class HudRenderer {
      * месте.
      */
     public static void onCreditGain(JsonObject gain) {
-        if (latestUIData != null && latestUIData.has("battleCredits") && gain.has("balance")) {
-            latestUIData.addProperty("battleCredits", gain.get("balance").getAsDouble());
+        double balance = UiJson.decimal(gain, "balance", Double.NaN);
+        double wallet = UiJson.decimal(latestUIData, "battleCredits", Double.NaN);
+        if (latestUIData != null && Double.isFinite(wallet) && Double.isFinite(balance)) {
+            latestUIData.addProperty("battleCredits", balance);
         }
         CREDIT_FEED.add(
-                gain.get("source").getAsString(),
-                gain.get("label").getAsString(),
-                gain.get("amount").getAsDouble(),
+                UiJson.str(gain, "source", ""),
+                UiJson.str(gain, "label", ""),
+                UiJson.decimal(gain, "amount", 0),
                 net.minecraft.Util.getMillis());
     }
 
@@ -123,8 +124,7 @@ public class HudRenderer {
     }
 
     public static String playerTeam() {
-        JsonObject ui = latestUIData;
-        return ui != null && ui.has("playerTeam") ? ui.get("playerTeam").getAsString() : "";
+        return UiJson.str(latestUIData, "playerTeam", "");
     }
 
     public static int barHalfWidth() {
@@ -148,18 +148,20 @@ public class HudRenderer {
             // The active HUD can arrive after the new round's first kill.
             if (latestUIData != null
                     && next.has("tabActive")
-                    && !next.get("tabActive").getAsBoolean()
+                    && !UiJson.bool(next, "tabActive", true)
                     && !java.util.Objects.equals(
                             latestUIData.get("tabActive"), next.get("tabActive"))) clearKillFeed();
             latestUIData = next;
-            if (latestUIData.has("showHud") && !latestUIData.get("showHud").getAsBoolean()) {
+            if (!UiJson.bool(latestUIData, "showHud", true)) {
                 shouldRenderMainHud = false;
                 PointMarkerRenderer.clearAllPoints();
                 return;
             }
-            if (latestUIData.has("rT") && latestUIData.has("bT")) {
-                redTickets = latestUIData.get("rT").getAsInt();
-                blueTickets = latestUIData.get("bT").getAsInt();
+            int red = UiJson.integer(latestUIData, "rT", Integer.MIN_VALUE);
+            int blue = UiJson.integer(latestUIData, "bT", Integer.MIN_VALUE);
+            if (red != Integer.MIN_VALUE && blue != Integer.MIN_VALUE) {
+                redTickets = red;
+                blueTickets = blue;
                 shouldRenderMainHud = true;
             }
             if (latestUIData.has("pts")) {
@@ -172,8 +174,9 @@ public class HudRenderer {
 
     /** «m:ss» из timeLeft UI-пакета; null -- у матча нет лимита времени (или сервер старый). */
     static String matchTime(JsonObject ui) {
-        if (ui == null || !ui.has("timeLeft")) return null;
-        int left = Math.max(0, ui.get("timeLeft").getAsInt());
+        int left = UiJson.integer(ui, "timeLeft", Integer.MIN_VALUE);
+        if (left == Integer.MIN_VALUE) return null;
+        left = Math.max(0, left);
         return left / 60 + ":" + String.format("%02d", left % 60);
     }
 
@@ -246,13 +249,11 @@ public class HudRenderer {
             for (int i = 0; i < count; i++) {
                 JsonObject ptObj = UiJson.asObject(ptsArray.get(i));
                 if (ptObj == null) continue;
-                String name = ptObj.has("n") ? ptObj.get("n").getAsString() : "?";
-                String owner = ptObj.has("o") ? ptObj.get("o").getAsString() : "NEUTRAL";
-                double progress = ptObj.has("p") ? ptObj.get("p").getAsDouble() : 0.0;
-                String capturingTeam =
-                        ptObj.has("claiming")
-                                ? ptObj.get("claiming").getAsString()
-                                : ptObj.has("c") ? ptObj.get("c").getAsString() : "NONE";
+                String name = UiJson.str(ptObj, "n", "?");
+                String owner = UiJson.str(ptObj, "o", "NEUTRAL");
+                double progress = UiJson.decimal(ptObj, "p", 0.0);
+                String capturingTeam = UiJson.str(ptObj, "claiming", null);
+                if (capturingTeam == null) capturingTeam = UiJson.str(ptObj, "c", "NONE");
 
                 int pointX = centerX + startX + i * (size + gap);
 
@@ -323,19 +324,13 @@ public class HudRenderer {
         if (latestUIData != null && latestUIData.has("zone")) {
             JsonObject zoneObj = UiJson.obj(latestUIData, "zone");
             if (zoneObj == null) return;
-            if (zoneObj.has("active") && zoneObj.get("active").getAsBoolean()) {
-                String name =
-                        zoneObj.has("name")
-                                ? PointMarkerRenderer.displayName(zoneObj.get("name").getAsString())
-                                : "?";
-                String owner =
-                        zoneObj.has("owner") ? zoneObj.get("owner").getAsString() : "NEUTRAL";
-                int progress = zoneObj.has("progress") ? zoneObj.get("progress").getAsInt() : 0;
-                String status = zoneObj.has("status") ? zoneObj.get("status").getAsString() : "";
-                String claiming =
-                        zoneObj.has("claiming") ? zoneObj.get("claiming").getAsString() : "NONE";
-                String capturing =
-                        zoneObj.has("capturing") ? zoneObj.get("capturing").getAsString() : "NONE";
+            if (UiJson.bool(zoneObj, "active", false)) {
+                String name = PointMarkerRenderer.displayName(UiJson.str(zoneObj, "name", "?"));
+                String owner = UiJson.str(zoneObj, "owner", "NEUTRAL");
+                int progress = UiJson.integer(zoneObj, "progress", 0);
+                String status = UiJson.str(zoneObj, "status", "");
+                String claiming = UiJson.str(zoneObj, "claiming", "NONE");
+                String capturing = UiJson.str(zoneObj, "capturing", "NONE");
 
                 int startY = yPos + 40; // под лентой-компасом PointMarkerRenderer
 

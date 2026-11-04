@@ -5,11 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.serialization.JsonOps;
-
 import io.netty.buffer.Unpooled;
-
 import net.minecraft.network.FriendlyByteBuf;
-
 import org.junit.jupiter.api.Test;
 
 class UiPacketsCodecTest {

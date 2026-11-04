@@ -6,6 +6,7 @@ import com.lunares.blockfield.client.gui.UiMotion;
 import com.lunares.blockfield.client.render.HudRenderer;
 import com.lunares.blockfield.client.render.PointMarkerRenderer;
 import com.lunares.blockfield.network.packet.MapPingC2SPacket;
+import com.lunares.blockfield.network.packet.UiJson;
 import com.mojang.blaze3d.vertex.PoseStack;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,8 +48,9 @@ public final class TabletMapTab {
     public static JsonObject zone() {
         JsonObject map = HudRenderer.matchMap();
         if (map == null) return null;
+        // Bounds must be numbers: strings and booleans read as invalid, like missing keys.
         for (String key : new String[] {"minX", "maxX", "minZ", "maxZ"}) {
-            if (!map.has(key) || !map.get(key).isJsonPrimitive()) return null;
+            if (!Double.isFinite(UiJson.decimal(map, key, Double.NaN))) return null;
         }
         return map;
     }
@@ -71,13 +73,13 @@ public final class TabletMapTab {
     private static MapView view(TabletFrame f) {
         JsonObject map = zone();
         if (map == null) return null;
-        JsonObject base = map.has("base") ? map.getAsJsonObject("base") : null;
+        JsonObject base = UiJson.obj(map, "base");
         return MapView.of(
-                map.get("minX").getAsDouble(),
-                map.get("minZ").getAsDouble(),
-                map.get("maxX").getAsDouble(),
-                map.get("maxZ").getAsDouble(),
-                base != null && base.has("z") ? base.get("z").getAsDouble() : Double.NaN,
+                UiJson.decimal(map, "minX", 0),
+                UiJson.decimal(map, "minZ", 0),
+                UiJson.decimal(map, "maxX", 0),
+                UiJson.decimal(map, "maxZ", 0),
+                base == null ? Double.NaN : UiJson.decimal(base, "z", Double.NaN),
                 f.contentX() + 3,
                 f.contentY() + 3,
                 f.contentW() - 6,
@@ -141,8 +143,7 @@ public final class TabletMapTab {
         if (view == null || !f.inContent(screenX, screenY) || !view.onMap(screenX, screenY))
             return false;
         JsonObject map = zone();
-        if (snapshot(Minecraft.getInstance(), map.has("id") ? map.get("id").getAsString() : "")
-                == null) return false;
+        if (snapshot(Minecraft.getInstance(), UiJson.str(map, "id", "")) == null) return false;
         if (!ClientPlayNetworking.canSend(MapPingC2SPacket.TYPE)) return false;
         double[] world = view.world(screenX, screenY);
         ClientPlayNetworking.send(new MapPingC2SPacket(world[0], world[1]));
@@ -210,7 +211,7 @@ public final class TabletMapTab {
                 f.contentX() + f.contentW(),
                 f.contentY() + f.contentH());
 
-        String id = map.has("id") ? map.get("id").getAsString() : "";
+        String id = UiJson.str(map, "id", "");
         ResourceLocation texture = snapshot(mc, id);
         if (texture != null) {
             // Дробные сдвиг и масштаб через pose: с целыми координатами blit приближение идёт
@@ -235,11 +236,11 @@ public final class TabletMapTab {
         // нарисованные после него, оказывались под картой (видно на картах без точек захвата).
         g.flush();
         if (map.has("base")) {
-            JsonObject base = map.getAsJsonObject("base");
-            if (base.has("x") && base.has("z")) {
-                float[] at =
-                        view.clampedScreen(
-                                base.get("x").getAsDouble(), base.get("z").getAsDouble());
+            JsonObject base = UiJson.obj(map, "base");
+            double baseX = base == null ? Double.NaN : UiJson.decimal(base, "x", Double.NaN);
+            double baseZ = base == null ? Double.NaN : UiJson.decimal(base, "z", Double.NaN);
+            if (Double.isFinite(baseX) && Double.isFinite(baseZ)) {
+                float[] at = view.clampedScreen(baseX, baseZ);
                 drawBase(g, at[0], at[1], teamColor(HudRenderer.playerTeam()));
             }
         }
@@ -308,10 +309,9 @@ public final class TabletMapTab {
 
     /** Границы боя из UI-пакета относятся к этому измерению; без поля dimension сервер старый. */
     static boolean dimensionMatches(JsonObject map, String levelDimension) {
-        return map != null
-                && (!map.has("dimension")
-                        || (levelDimension != null
-                                && map.get("dimension").getAsString().equals(levelDimension)));
+        if (map == null) return false;
+        String dimension = UiJson.str(map, "dimension", null);
+        return dimension == null || (levelDimension != null && dimension.equals(levelDimension));
     }
 
     /**
@@ -352,8 +352,7 @@ public final class TabletMapTab {
                         : MapSnapshots.texture(mc, zone());
         if (live != null) return live;
         JsonObject map = zone();
-        if (map != null && map.has("serverSnapshot") && map.get("serverSnapshot").getAsBoolean())
-            return null;
+        if (map != null && UiJson.bool(map, "serverSnapshot", false)) return null;
         if (id.isEmpty()) return null;
         if (!id.equals(snapshotId)) {
             snapshotId = id;
@@ -545,7 +544,8 @@ public final class TabletMapTab {
     /** Миникарта: позиции имеют смысл, только пока сам игрок в измерении боя. */
     public static List<MapPlayerMotion.Position> players(Minecraft mc) {
         JsonObject map = zone();
-        if (map == null || !map.has("dimension") || !inMapDimension(mc, map)) return List.of();
+        if (map == null || UiJson.str(map, "dimension", null) == null || !inMapDimension(mc, map))
+            return List.of();
         return mapPlayers();
     }
 
@@ -613,8 +613,16 @@ public final class TabletMapTab {
 
     static String subtitle(JsonObject map) {
         if (map == null) return "";
-        int width = Mth.ceil(map.get("maxX").getAsDouble() - map.get("minX").getAsDouble());
-        int depth = Mth.ceil(map.get("maxZ").getAsDouble() - map.get("minZ").getAsDouble());
+        double minX = UiJson.decimal(map, "minX", Double.NaN);
+        double maxX = UiJson.decimal(map, "maxX", Double.NaN);
+        double minZ = UiJson.decimal(map, "minZ", Double.NaN);
+        double maxZ = UiJson.decimal(map, "maxZ", Double.NaN);
+        if (!Double.isFinite(minX)
+                || !Double.isFinite(maxX)
+                || !Double.isFinite(minZ)
+                || !Double.isFinite(maxZ)) return "";
+        int width = Mth.ceil(maxX - minX);
+        int depth = Mth.ceil(maxZ - minZ);
         return width + "x" + depth + " М";
     }
 }
