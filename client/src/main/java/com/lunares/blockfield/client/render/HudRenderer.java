@@ -2,8 +2,8 @@ package com.lunares.blockfield.client.render;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.lunares.blockfield.client.gui.BfTheme;
+import com.lunares.blockfield.network.packet.UiJson;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.DeltaTracker;
@@ -60,19 +60,12 @@ public class HudRenderer {
 
     /** Матч с точками захвата: без них (TDM, Deathmatch) время на точках ничего не значит. */
     public static boolean hasCapturePoints() {
-        JsonObject ui = latestUIData;
-        return ui != null
-                && ui.has("pts")
-                && ui.get("pts").isJsonArray()
-                && !ui.getAsJsonArray("pts").isEmpty();
+        return !UiJson.arr(latestUIData, "pts").isEmpty();
     }
 
     /** Боевая карта матча для планшета: id снимка и границы зоны боя; null — игрок не в бою. */
     public static JsonObject matchMap() {
-        JsonObject ui = latestUIData;
-        return ui != null && ui.has("map") && ui.get("map").isJsonObject()
-                ? ui.getAsJsonObject("map")
-                : null;
+        return UiJson.obj(latestUIData, "map");
     }
 
     /**
@@ -80,10 +73,7 @@ public class HudRenderer {
      * нужны.
      */
     public static com.google.gson.JsonArray matchPoints() {
-        JsonObject ui = latestUIData;
-        return ui != null && ui.has("pts") && ui.get("pts").isJsonArray()
-                ? ui.getAsJsonArray("pts")
-                : null;
+        return UiJson.arrOrNull(latestUIData, "pts");
     }
 
     static final CreditFeed CREDIT_FEED = new CreditFeed();
@@ -154,7 +144,7 @@ public class HudRenderer {
 
     public static void updateHUDData(String json) {
         try {
-            JsonObject next = JsonParser.parseString(json).getAsJsonObject();
+            JsonObject next = UiJson.parse(json);
             // The active HUD can arrive after the new round's first kill.
             if (latestUIData != null
                     && next.has("tabActive")
@@ -173,7 +163,7 @@ public class HudRenderer {
                 shouldRenderMainHud = true;
             }
             if (latestUIData.has("pts")) {
-                PointMarkerRenderer.updatePoints(latestUIData.getAsJsonArray("pts"));
+                PointMarkerRenderer.updatePoints(UiJson.arr(latestUIData, "pts"));
             }
         } catch (Exception e) {
             // Ignore parse errors
@@ -212,7 +202,7 @@ public class HudRenderer {
         JsonArray ptsArray = null;
 
         if (latestUIData != null && latestUIData.has("pts")) {
-            ptsArray = latestUIData.getAsJsonArray("pts");
+            ptsArray = UiJson.arr(latestUIData, "pts");
             count = ptsArray.size();
             if (count > 0) {
                 pointsWidth = count * size + (count - 1) * gap;
@@ -254,7 +244,8 @@ public class HudRenderer {
             int startX = -pointsWidth / 2 + size / 2;
 
             for (int i = 0; i < count; i++) {
-                JsonObject ptObj = ptsArray.get(i).getAsJsonObject();
+                JsonObject ptObj = UiJson.asObject(ptsArray.get(i));
+                if (ptObj == null) continue;
                 String name = ptObj.has("n") ? ptObj.get("n").getAsString() : "?";
                 String owner = ptObj.has("o") ? ptObj.get("o").getAsString() : "NEUTRAL";
                 double progress = ptObj.has("p") ? ptObj.get("p").getAsDouble() : 0.0;
@@ -330,7 +321,8 @@ public class HudRenderer {
 
         // 6. Draw Zone capture banner
         if (latestUIData != null && latestUIData.has("zone")) {
-            JsonObject zoneObj = latestUIData.getAsJsonObject("zone");
+            JsonObject zoneObj = UiJson.obj(latestUIData, "zone");
+            if (zoneObj == null) return;
             if (zoneObj.has("active") && zoneObj.get("active").getAsBoolean()) {
                 String name =
                         zoneObj.has("name")

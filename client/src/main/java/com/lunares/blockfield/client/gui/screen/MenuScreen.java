@@ -3,11 +3,11 @@ package com.lunares.blockfield.client.gui.screen;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.lunares.blockfield.client.gui.BfIcon;
 import com.lunares.blockfield.client.gui.BfTheme;
 import com.lunares.blockfield.client.gui.UiMotion;
 import com.lunares.blockfield.network.packet.MenuActionC2SPacket;
+import com.lunares.blockfield.network.packet.UiJson;
 import java.util.ArrayList;
 import java.util.List;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -154,7 +154,7 @@ public class MenuScreen extends Screen {
     private void parse(String json, boolean fresh) {
         JsonObject next;
         try {
-            next = JsonParser.parseString(json).getAsJsonObject();
+            next = UiJson.parse(json);
         } catch (Exception e) {
             return;
         }
@@ -187,11 +187,6 @@ public class MenuScreen extends Screen {
         return bool(btn, "closeOnClick", bool(menu, "closeOnClick", false));
     }
 
-    private static JsonArray array(JsonObject o, String key) {
-        JsonElement e = o == null ? null : o.get(key);
-        return e != null && e.isJsonArray() ? e.getAsJsonArray() : new JsonArray();
-    }
-
     private int secondsLeft() {
         if (this.timerEndMs < 0) return -1;
         long ms = this.timerEndMs - System.currentTimeMillis();
@@ -216,7 +211,7 @@ public class MenuScreen extends Screen {
 
     private List<String> sectionLines(JsonObject section, int width) {
         List<String> lines = new ArrayList<>();
-        for (JsonElement line : array(section, "lines"))
+        for (JsonElement line : UiJson.arr(section, "lines"))
             if (line.isJsonPrimitive()) lines.addAll(wrap(line.getAsString(), width));
         return lines;
     }
@@ -259,20 +254,18 @@ public class MenuScreen extends Screen {
 
     private int buttonColumns(JsonObject section, int width, boolean grid) {
         int minimum = grid ? MenuLayout.GRID_MIN_W : 120;
-        for (JsonElement element : array(section, "buttons"))
-            if (element.isJsonObject())
-                minimum = Math.max(minimum, Math.min(250, buttonWidth(element.getAsJsonObject())));
-        return MenuLayout.buttonColumns(width, array(section, "buttons").size(), minimum);
+        for (JsonObject button : UiJson.objects(UiJson.arr(section, "buttons")))
+            minimum = Math.max(minimum, Math.min(250, buttonWidth(button)));
+        return MenuLayout.buttonColumns(width, UiJson.arr(section, "buttons").size(), minimum);
     }
 
     private int buttonSectionHeight(JsonObject section, int width, boolean grid) {
         int columns = buttonColumns(section, width, grid);
         int buttonW = MenuLayout.segmentedButtonWidth(width, columns);
         int rowHeight = BTN_H;
-        for (JsonElement element : array(section, "buttons"))
-            if (element.isJsonObject())
-                rowHeight = Math.max(rowHeight, buttonHeight(element.getAsJsonObject(), buttonW));
-        int count = array(section, "buttons").size();
+        for (JsonObject button : UiJson.objects(UiJson.arr(section, "buttons")))
+            rowHeight = Math.max(rowHeight, buttonHeight(button, buttonW));
+        int count = UiJson.arr(section, "buttons").size();
         int lines = sectionLines(section, width).size();
         return (str(section, "label", null) == null ? 0 : 15)
                 + lines * 11
@@ -291,9 +284,8 @@ public class MenuScreen extends Screen {
                             + lines * 11
                             + (lines == 0 ? 0 : 3)
                             + 10;
-            for (JsonElement element : array(section, "buttons"))
-                if (element.isJsonObject())
-                    h += buttonHeight(element.getAsJsonObject(), columnWidth) + BTN_GAP;
+            for (JsonObject button : UiJson.objects(UiJson.arr(section, "buttons")))
+                h += buttonHeight(button, columnWidth) + BTN_GAP;
             heights.add(h);
         }
         return heights;
@@ -324,17 +316,16 @@ public class MenuScreen extends Screen {
         List<JsonObject> tableSections = new ArrayList<>();
         List<JsonObject> flow = new ArrayList<>();
         List<JsonObject> cornerButtons = new ArrayList<>();
-        for (JsonElement se : array(this.data, "sections")) {
-            if (!se.isJsonObject()) continue;
-            JsonObject section = se.getAsJsonObject();
+        for (JsonElement se : UiJson.arr(this.data, "sections")) {
+            JsonObject section = UiJson.asObject(se);
+            if (section == null) continue;
             switch (str(section, "style", "")) {
                 case "cards" -> cardSections.add(section);
                 case "segmented" -> segmentedSections.add(section);
                 case "grid" -> gridSections.add(section);
                 case "table" -> tableSections.add(section);
                 case "corner" -> {
-                    for (JsonElement be : array(section, "buttons"))
-                        if (be.isJsonObject()) cornerButtons.add(be.getAsJsonObject());
+                    cornerButtons.addAll(UiJson.objects(UiJson.arr(section, "buttons")));
                 }
                 default -> flow.add(section);
             }
@@ -405,8 +396,7 @@ public class MenuScreen extends Screen {
                 y += 15;
             }
             List<JsonObject> cards = new ArrayList<>();
-            for (JsonElement be : array(section, "buttons"))
-                if (be.isJsonObject()) cards.add(be.getAsJsonObject());
+            cards.addAll(UiJson.objects(UiJson.arr(section, "buttons")));
             int perRow = MenuLayout.cardsPerRow(contentWidth, cards.size(), cardTextWidth(cards));
             // A lone card is as wide as one of a pair, not a full-width bar.
             int slots =
@@ -474,8 +464,7 @@ public class MenuScreen extends Screen {
             }
             if (!lines.isEmpty()) y += 3;
             List<JsonObject> variants = new ArrayList<>();
-            for (JsonElement be : array(section, "buttons"))
-                if (be.isJsonObject()) variants.add(be.getAsJsonObject());
+            variants.addAll(UiJson.objects(UiJson.arr(section, "buttons")));
             int columns = buttonColumns(section, contentWidth, false);
             int w = MenuLayout.segmentedButtonWidth(contentWidth, columns);
             int rowHeight = BTN_H;
@@ -522,8 +511,7 @@ public class MenuScreen extends Screen {
             }
             if (lines.size() > 0) y += 3;
             List<JsonObject> buttons = new ArrayList<>();
-            for (JsonElement be : array(section, "buttons"))
-                if (be.isJsonObject()) buttons.add(be.getAsJsonObject());
+            buttons.addAll(UiJson.objects(UiJson.arr(section, "buttons")));
             int columns = buttonColumns(section, contentWidth, true);
             int w = MenuLayout.segmentedButtonWidth(contentWidth, columns);
             int rowHeight = BTN_H;
@@ -564,7 +552,7 @@ public class MenuScreen extends Screen {
             }
             items.add(new Item(Kind.TABLE, contentX, y, contentWidth, ROW_H, null, null, section));
             y += ROW_H;
-            int rows = Math.max(1, array(section, "rows").size());
+            int rows = Math.max(1, UiJson.arr(section, "rows").size());
             for (int row = 0; row < rows; row++, y += ROW_H)
                 items.add(
                         new Item(
@@ -608,19 +596,9 @@ public class MenuScreen extends Screen {
                 y += 11;
             }
             if (lines.size() > 0) y += 3;
-            for (JsonElement be : array(section, "buttons")) {
-                if (!be.isJsonObject()) continue;
-                int buttonH = buttonHeight(be.getAsJsonObject(), g.colW());
-                items.add(
-                        new Item(
-                                Kind.BUTTON,
-                                x,
-                                y,
-                                g.colW(),
-                                buttonH,
-                                null,
-                                null,
-                                be.getAsJsonObject()));
+            for (JsonObject be : UiJson.objects(UiJson.arr(section, "buttons"))) {
+                int buttonH = buttonHeight(be, g.colW());
+                items.add(new Item(Kind.BUTTON, x, y, g.colW(), buttonH, null, null, be));
                 y += buttonH + BTN_GAP;
             }
         }
@@ -756,8 +734,7 @@ public class MenuScreen extends Screen {
         int h = 0;
         for (JsonObject section : cardSections) {
             List<JsonObject> cards = new ArrayList<>();
-            for (JsonElement be : array(section, "buttons"))
-                if (be.isJsonObject()) cards.add(be.getAsJsonObject());
+            cards.addAll(UiJson.objects(UiJson.arr(section, "buttons")));
             int perRow = MenuLayout.cardsPerRow(width, cards.size(), cardTextWidth(cards));
             int slots =
                     cards.size() == 1 && cardTextWidth(cards) <= (width - MenuLayout.CARD_GAP) / 2
@@ -781,7 +758,7 @@ public class MenuScreen extends Screen {
 
     /** Header row, data rows (or one note row when empty), trailing section gap. */
     private static int tableHeight(JsonObject section) {
-        int rows = Math.max(1, array(section, "rows").size());
+        int rows = Math.max(1, UiJson.arr(section, "rows").size());
         return (str(section, "label", null) != null ? 15 : 0) + ROW_H + rows * ROW_H + 10;
     }
 
@@ -793,14 +770,14 @@ public class MenuScreen extends Screen {
 
     private void renderTable(GuiGraphics g, Item it) {
         JsonObject section = it.btn();
-        JsonArray rows = array(section, "rows");
+        JsonArray rows = UiJson.arr(section, "rows");
         int y = it.y();
         if (it.tableRow() < 0) {
             tableRow(
                     g,
                     it,
                     y,
-                    array(section, "columns"),
+                    UiJson.arr(section, "columns"),
                     BfTheme.MUTED_DARK,
                     BfTheme.MUTED_DARK,
                     BfTheme.MUTED_DARK);
@@ -817,8 +794,8 @@ public class MenuScreen extends Screen {
                     BfTheme.MUTED);
             return;
         }
-        if (!rows.get(it.tableRow()).isJsonArray()) return;
-        JsonArray cells = rows.get(it.tableRow()).getAsJsonArray();
+        JsonArray cells = UiJson.asArray(rows.get(it.tableRow()));
+        if (cells == null) return;
         String own =
                 this.minecraft != null && this.minecraft.player != null
                         ? this.minecraft.player.getGameProfile().getName()

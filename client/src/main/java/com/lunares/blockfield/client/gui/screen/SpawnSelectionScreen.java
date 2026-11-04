@@ -2,7 +2,7 @@ package com.lunares.blockfield.client.gui.screen;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.lunares.blockfield.network.packet.UiJson;
 import com.lunares.blockfield.client.gui.BfIcon;
 import com.lunares.blockfield.client.gui.BfTheme;
 import com.lunares.blockfield.client.gui.UiMotion;
@@ -87,7 +87,7 @@ public class SpawnSelectionScreen extends Screen {
         this.mapId = mapId;
         selectedSpawnId = LAST_SELECTION.forMap(mapId);
         try {
-            this.spawnsData = JsonParser.parseString(spawnsJson).getAsJsonObject();
+            this.spawnsData = UiJson.parse(spawnsJson);
         } catch (Exception e) {
             this.spawnsData = new JsonObject();
         }
@@ -97,10 +97,10 @@ public class SpawnSelectionScreen extends Screen {
         if (this.currentUiData != null
                 && this.currentUiData.has("pts")
                 && this.currentUiData.get("pts").isJsonArray()) {
-            JsonArray pts = this.currentUiData.getAsJsonArray("pts");
+            JsonArray pts = UiJson.arr(this.currentUiData, "pts");
             for (int i = 0; i < pts.size(); i++) {
-                if (!pts.get(i).isJsonObject()) continue;
-                JsonObject p = pts.get(i).getAsJsonObject();
+                JsonObject p = UiJson.asObject(pts.get(i));
+                if (p == null) continue;
                 if (p.has("n") && p.get("n").getAsString().equals(ptName)) {
                     return p;
                 }
@@ -216,7 +216,7 @@ public class SpawnSelectionScreen extends Screen {
         float minZ = -500;
         float maxZ = 500;
         if (this.spawnsData != null && this.spawnsData.has("bounds")) {
-            JsonObject b = this.spawnsData.getAsJsonObject("bounds");
+            JsonObject b = UiJson.obj(this.spawnsData, "bounds");
             minX = b.get("minX").getAsFloat();
             maxX = b.get("maxX").getAsFloat();
             minZ = b.get("minZ").getAsFloat();
@@ -261,10 +261,10 @@ public class SpawnSelectionScreen extends Screen {
         if (this.spawnsData != null
                 && this.spawnsData.has("pts")
                 && this.spawnsData.get("pts").isJsonArray()) {
-            JsonArray pts = this.spawnsData.getAsJsonArray("pts");
+            JsonArray pts = UiJson.arr(this.spawnsData, "pts");
             for (int i = 0; i < pts.size(); i++) {
-                if (!pts.get(i).isJsonObject()) continue;
-                JsonObject pt = pts.get(i).getAsJsonObject();
+                JsonObject pt = UiJson.asObject(pts.get(i));
+                if (pt == null) continue;
                 String pName = pt.has("n") ? pt.get("n").getAsString() : "Точка " + i;
                 float px = pt.has("x") ? pt.get("x").getAsFloat() : 0;
                 float pz = pt.has("z") ? pt.get("z").getAsFloat() : 0;
@@ -949,7 +949,7 @@ public class SpawnSelectionScreen extends Screen {
 
     public void updateModel(String updatedUiJson) {
         try {
-            this.currentUiData = JsonParser.parseString(updatedUiJson).getAsJsonObject();
+            this.currentUiData = UiJson.parse(updatedUiJson);
         } catch (Exception e) {
         }
     }
@@ -957,7 +957,7 @@ public class SpawnSelectionScreen extends Screen {
     /** Повторная выдача с сервера сохраняет выделение только на той же карте. */
     public void updateSpawnsData(String spawnsJson, String mapId) {
         try {
-            this.spawnsData = JsonParser.parseString(spawnsJson).getAsJsonObject();
+            this.spawnsData = UiJson.parse(spawnsJson);
         } catch (Exception e) {
             return;
         }
