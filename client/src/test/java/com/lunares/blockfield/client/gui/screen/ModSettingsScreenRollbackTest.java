@@ -2,13 +2,12 @@ package com.lunares.blockfield.client.gui.screen;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.jupiter.api.Test;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.Test;
 
 // Fail-before cover for U12: YACL applies staged bindings before its save
 // runnable, so ModSettingsScreen commits them with rollback (the pendingEdits
