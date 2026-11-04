@@ -1331,6 +1331,7 @@ public final class PaGraph {
         }
 
         public ModifierLayer<IAnimation> layer(LayerTag tag) {
+            requireOwnedNatives();
             ModifierLayer<IAnimation> layer = layers.get(tag);
             if (layer == null) throw new Unsupported("Not a PA root: " + tag);
             return layer;
@@ -1338,6 +1339,7 @@ public final class PaGraph {
 
         /** The layer the associated-data key resolves to (both families address the winner). */
         public ModifierLayer<IAnimation> associated(String key) {
+            requireOwnedNatives();
             LayerTag owner = aliases.get(key);
             if (owner == null) throw new Unsupported("Unknown associated key " + key);
             return layer(owner);
@@ -1352,10 +1354,12 @@ public final class PaGraph {
         }
 
         public AnimationStack nativeStack() {
+            requireOwnedNatives();
             return stack;
         }
 
         public Catalog catalog() {
+            requireOwnedNatives();
             return catalog;
         }
 
@@ -1423,6 +1427,12 @@ public final class PaGraph {
         private void requireCanonical() {
             if (sampled) throw new IllegalStateException("Sampled scratch cannot advance");
             if (sampleOnly) throw new IllegalStateException("Sample-only scratch cannot advance");
+        }
+
+        // Sample-only stacks share the catalog's clips across worker threads: no owned natives.
+        private void requireOwnedNatives() {
+            if (sampleOnly)
+                throw new IllegalStateException("Sample-only scratch shares catalog clips");
         }
 
         /**
