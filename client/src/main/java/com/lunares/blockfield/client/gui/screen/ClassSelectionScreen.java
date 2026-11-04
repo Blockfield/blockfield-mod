@@ -2,12 +2,12 @@ package com.lunares.blockfield.client.gui.screen;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.lunares.blockfield.client.gui.BfIcon;
 import com.lunares.blockfield.client.gui.BfTheme;
 import com.lunares.blockfield.client.gui.UiMotion;
 import com.lunares.blockfield.client.gui.tablet.Tablet;
 import com.lunares.blockfield.network.packet.MenuActionC2SPacket;
+import com.lunares.blockfield.network.packet.UiJson;
 import java.util.ArrayList;
 import java.util.List;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -75,7 +75,7 @@ public class ClassSelectionScreen extends Screen {
     public ClassSelectionScreen(String classesJson) {
         super(Component.literal("Выбор класса"));
         try {
-            this.classesData = JsonParser.parseString(classesJson).getAsJsonObject();
+            this.classesData = UiJson.parse(classesJson);
         } catch (Exception e) {
             this.classesData = new JsonObject();
         }
@@ -87,9 +87,8 @@ public class ClassSelectionScreen extends Screen {
                 .anyMatch(
                         entry -> {
                             if (!entry.getValue().isJsonObject()) return false;
-                            JsonObject kit = entry.getValue().getAsJsonObject();
-                            return kit.has("deploymentCost")
-                                    && kit.get("deploymentCost").getAsInt() > 0;
+                            JsonObject kit = UiJson.asObject(entry.getValue());
+                            return UiJson.integer(kit, "deploymentCost", 0) > 0;
                         });
     }
 
@@ -97,31 +96,26 @@ public class ClassSelectionScreen extends Screen {
         if (classesData != null) {
             for (String id : classesData.keySet()) {
                 if (!classesData.get(id).isJsonObject()) continue;
-                JsonObject kit = classesData.getAsJsonObject(id);
-                if (kit.has("battleCredits")) return kit.get("battleCredits").getAsDouble();
+                JsonObject kit = UiJson.obj(classesData, id);
+                double credits = UiJson.decimal(kit, "battleCredits", Double.NaN);
+                if (Double.isFinite(credits)) return credits;
             }
         }
         return 0;
     }
 
     private boolean canAfford(JsonObject kit) {
-        return !kit.has("deploymentCost")
-                || battleCredits() >= kit.get("deploymentCost").getAsInt();
+        double cost = UiJson.decimal(kit, "deploymentCost", Double.NaN);
+        return !Double.isFinite(cost) || battleCredits() >= cost;
     }
 
     private static JsonArray classPlayers(JsonObject uiData, String classId) {
-        if (uiData != null && uiData.has("classes") && uiData.get("classes").isJsonObject()) {
-            JsonObject counts = uiData.getAsJsonObject("classes");
-            if (counts.has(classId) && counts.get(classId).isJsonArray())
-                return counts.getAsJsonArray(classId);
-        }
-        return new JsonArray();
+        JsonArray mine = UiJson.arrOrNull(UiJson.obj(uiData, "classes"), classId);
+        return mine == null ? new JsonArray() : mine;
     }
 
     int getLiveCount(String classId, int fallback) {
-        if (this.currentUiData != null
-                && this.currentUiData.has("classes")
-                && this.currentUiData.get("classes").isJsonObject())
+        if (this.currentUiData != null && UiJson.obj(this.currentUiData, "classes") != null)
             return classPlayers(this.currentUiData, classId).size();
         return fallback;
     }
@@ -130,24 +124,20 @@ public class ClassSelectionScreen extends Screen {
         List<String> names = new ArrayList<>();
         JsonArray pArr = classPlayers(this.currentUiData, classId);
         for (int i = 0; i < pArr.size(); i++) {
-            if (pArr.get(i).isJsonPrimitive()) {
-                names.add(pArr.get(i).getAsString());
-            } else {
-                names.add("Игрок");
-            }
+            String name = UiJson.str(pArr.get(i), null);
+            names.add(name == null ? "Игрок" : name);
         }
         return names;
     }
 
-    private List<String> variantNames(JsonObject classObj) {
+    static List<String> variantNames(JsonObject classObj) {
         List<String> names = new ArrayList<>();
-        if (classObj.has("variants") && classObj.get("variants").isJsonArray()) {
-            JsonArray variants = classObj.getAsJsonArray("variants");
-            for (int i = 0; i < variants.size(); i++) {
-                if (!variants.get(i).isJsonObject()) continue;
-                JsonObject varObj = variants.get(i).getAsJsonObject();
-                names.add(varObj.has("name") ? varObj.get("name").getAsString() : "Вариант " + i);
-            }
+        if (classObj == null) return names;
+        JsonArray variants = UiJson.arr(classObj, "variants");
+        for (int i = 0; i < variants.size(); i++) {
+            JsonObject varObj = UiJson.asObject(variants.get(i));
+            if (varObj == null) continue;
+            names.add(UiJson.str(varObj, "name", "Вариант " + i));
         }
         return names;
     }
@@ -224,7 +214,7 @@ public class ClassSelectionScreen extends Screen {
         int maxLines = variantLinesPerRow(virtualH - 56 - PAGE_BUTTON_H - 8);
         for (String classId : ids) {
             List<Integer> widths = new ArrayList<>();
-            for (String varName : variantNames(this.classesData.getAsJsonObject(classId))) {
+            for (String varName : variantNames(UiJson.obj(this.classesData, classId))) {
                 widths.add(Math.min(this.font.width(varName) + 16, VARIANTS_WIDTH));
             }
             if (widths.isEmpty()) widths.add(80);
@@ -272,7 +262,7 @@ public class ClassSelectionScreen extends Screen {
         for (String rowId : rowIds) {
             String classId = rowClasses.get(rowId);
             List<Box> variants = new ArrayList<>();
-            List<String> names = variantNames(this.classesData.getAsJsonObject(classId));
+            List<String> names = variantNames(UiJson.obj(this.classesData, classId));
             List<List<Integer>> lines = wrapped.get(rowId);
             int vi = firstVariants.get(rowId);
             int vy = y + 8;
@@ -324,10 +314,9 @@ public class ClassSelectionScreen extends Screen {
     private boolean selectable(
             String classId, JsonObject classObj, boolean varSelected, boolean isCurrent) {
         if (classObj == null) return false;
-        boolean blocked = classObj.has("blocked") && classObj.get("blocked").getAsBoolean();
-        int limit = classObj.has("limit") ? classObj.get("limit").getAsInt() : 999;
-        int staticCount =
-                classObj.has("currentCount") ? classObj.get("currentCount").getAsInt() : 0;
+        boolean blocked = UiJson.bool(classObj, "blocked", false);
+        int limit = UiJson.integer(classObj, "limit", 999);
+        int staticCount = UiJson.integer(classObj, "currentCount", 0);
         boolean isFull = getLiveCount(classId, staticCount) >= limit;
         return !blocked && canAfford(classObj) && (varSelected || !isFull || isCurrent);
     }
@@ -337,16 +326,10 @@ public class ClassSelectionScreen extends Screen {
         List<String> order = new ArrayList<>();
         for (Row row : l.rows()) {
             JsonObject classObj =
-                    this.classesData == null
-                            ? null
-                            : this.classesData.getAsJsonObject(row.classId());
+                    this.classesData == null ? null : UiJson.obj(this.classesData, row.classId());
             if (classObj == null) continue;
-            boolean isCurrent =
-                    classObj.has("isCurrent") && classObj.get("isCurrent").getAsBoolean();
-            int selectedVariant =
-                    classObj.has("selectedVariant")
-                            ? classObj.get("selectedVariant").getAsInt()
-                            : -1;
+            boolean isCurrent = UiJson.bool(classObj, "isCurrent", false);
+            int selectedVariant = UiJson.integer(classObj, "selectedVariant", -1);
             for (int i = 0; i < row.variants().size(); i++) {
                 boolean varSelected = isCurrent && selectedVariant == row.firstVariant() + i;
                 if (selectable(row.classId(), classObj, varSelected, isCurrent)) {
@@ -384,12 +367,10 @@ public class ClassSelectionScreen extends Screen {
         } catch (NumberFormatException e) {
             return false;
         }
-        JsonObject classObj =
-                this.classesData == null ? null : this.classesData.getAsJsonObject(classId);
+        JsonObject classObj = UiJson.obj(this.classesData, classId);
         if (classObj == null) return false;
-        boolean isCurrent = classObj.has("isCurrent") && classObj.get("isCurrent").getAsBoolean();
-        int selectedVariant =
-                classObj.has("selectedVariant") ? classObj.get("selectedVariant").getAsInt() : -1;
+        boolean isCurrent = UiJson.bool(classObj, "isCurrent", false);
+        int selectedVariant = UiJson.integer(classObj, "selectedVariant", -1);
         if (!selectable(classId, classObj, isCurrent && selectedVariant == variant, isCurrent))
             return false;
         if (this.minecraft != null && this.minecraft.player != null) {
@@ -473,22 +454,15 @@ public class ClassSelectionScreen extends Screen {
 
         for (Row row : l.rows()) {
             JsonObject classObj =
-                    this.classesData == null
-                            ? null
-                            : this.classesData.getAsJsonObject(row.classId());
+                    this.classesData == null ? null : UiJson.obj(this.classesData, row.classId());
             if (classObj == null) continue;
-            String name = classObj.has("name") ? classObj.get("name").getAsString() : row.classId();
-            boolean isCurrent =
-                    classObj.has("isCurrent") && classObj.get("isCurrent").getAsBoolean();
-            int selectedVariant =
-                    classObj.has("selectedVariant")
-                            ? classObj.get("selectedVariant").getAsInt()
-                            : -1;
-            boolean blocked = classObj.has("blocked") && classObj.get("blocked").getAsBoolean();
+            String name = UiJson.str(classObj, "name", row.classId());
+            boolean isCurrent = UiJson.bool(classObj, "isCurrent", false);
+            int selectedVariant = UiJson.integer(classObj, "selectedVariant", -1);
+            boolean blocked = UiJson.bool(classObj, "blocked", false);
 
-            int staticCount =
-                    classObj.has("currentCount") ? classObj.get("currentCount").getAsInt() : 0;
-            int limit = classObj.has("limit") ? classObj.get("limit").getAsInt() : 999;
+            int staticCount = UiJson.integer(classObj, "currentCount", 0);
+            int limit = UiJson.integer(classObj, "limit", 999);
             int currentCount = getLiveCount(row.classId(), staticCount);
             boolean isFull = currentCount >= limit;
 
@@ -543,8 +517,7 @@ public class ClassSelectionScreen extends Screen {
                     textY,
                     blocked ? BfTheme.MUTED_DARK : BfTheme.TEXT,
                     false);
-            int price =
-                    classObj.has("deploymentCost") ? classObj.get("deploymentCost").getAsInt() : 0;
+            int price = UiJson.integer(classObj, "deploymentCost", 0);
             guiGraphics.drawString(
                     this.font,
                     price == 0 ? "Бесплатно" : price + " БК за высадку",
@@ -570,26 +543,25 @@ public class ClassSelectionScreen extends Screen {
                     classTooltip.add(
                             Component.literal("Недостаточно БК. Заработайте их бесплатным классом.")
                                     .withColor(BfTheme.DANGER));
-                if (blocked && classObj.has("blocked_reason")) {
-                    classTooltip.add(
-                            Component.literal(
-                                            "Причина: "
-                                                    + classObj.get("blocked_reason").getAsString())
-                                    .withColor(BfTheme.DANGER));
-                }
-                if (classObj.has("desc")) {
-                    if (classObj.get("desc").isJsonArray()) {
-                        JsonArray descArr = classObj.getAsJsonArray("desc");
-                        for (int i = 0; i < descArr.size(); i++) {
-                            classTooltip.add(
-                                    Component.literal(descArr.get(i).getAsString())
-                                            .withColor(BfTheme.TEXT_SECONDARY));
-                        }
-                    } else {
+                if (blocked) {
+                    String reason = UiJson.str(classObj, "blocked_reason", null);
+                    if (reason != null) {
                         classTooltip.add(
-                                Component.literal(classObj.get("desc").getAsString())
-                                        .withColor(BfTheme.TEXT_SECONDARY));
+                                Component.literal("Причина: " + reason).withColor(BfTheme.DANGER));
                     }
+                }
+                String desc = UiJson.str(classObj, "desc", null);
+                JsonArray descArr = UiJson.arrOrNull(classObj, "desc");
+                if (descArr != null) {
+                    for (int i = 0; i < descArr.size(); i++) {
+                        String line = UiJson.str(descArr.get(i), null);
+                        if (line != null) {
+                            classTooltip.add(
+                                    Component.literal(line).withColor(BfTheme.TEXT_SECONDARY));
+                        }
+                    }
+                } else if (desc != null) {
+                    classTooltip.add(Component.literal(desc).withColor(BfTheme.TEXT_SECONDARY));
                 }
                 classTooltip.add(
                         Component.literal(
@@ -608,16 +580,13 @@ public class ClassSelectionScreen extends Screen {
                 tooltipToRender = classTooltip;
             }
 
-            JsonArray variants =
-                    classObj.has("variants") && classObj.get("variants").isJsonArray()
-                            ? classObj.getAsJsonArray("variants")
-                            : new JsonArray();
+            JsonArray variants = UiJson.arr(classObj, "variants");
             List<String> names = variantNames(classObj);
             for (int i = 0;
                     i < Math.min(row.variants().size(), variants.size() - row.firstVariant());
                     i++) {
-                if (!variants.get(row.firstVariant() + i).isJsonObject()) continue;
-                JsonObject varObj = variants.get(row.firstVariant() + i).getAsJsonObject();
+                JsonObject varObj = UiJson.asObject(variants.get(row.firstVariant() + i));
+                if (varObj == null) continue;
                 Box v = row.variants().get(i);
                 boolean varSelected = (isCurrent && selectedVariant == row.firstVariant() + i);
                 boolean canSelect = selectable(row.classId(), classObj, varSelected, isCurrent);
@@ -648,18 +617,21 @@ public class ClassSelectionScreen extends Screen {
                     varTooltip.add(
                             Component.literal(name + " · " + names.get(row.firstVariant() + i))
                                     .withColor(BfTheme.AMBER));
-                    if (varObj.has("desc")) {
-                        if (varObj.get("desc").isJsonArray()) {
-                            JsonArray descArr = varObj.getAsJsonArray("desc");
-                            for (int j = 0; j < descArr.size(); j++) {
+                    JsonArray varDescArr = UiJson.arrOrNull(varObj, "desc");
+                    if (varDescArr != null) {
+                        for (int j = 0; j < varDescArr.size(); j++) {
+                            String varLine = UiJson.str(varDescArr.get(j), null);
+                            if (varLine != null) {
                                 varTooltip.add(
-                                        Component.literal(descArr.get(j).getAsString())
+                                        Component.literal(varLine)
                                                 .withColor(BfTheme.TEXT_SECONDARY));
                             }
-                        } else {
+                        }
+                    } else {
+                        String varDesc = UiJson.str(varObj, "desc", null);
+                        if (varDesc != null) {
                             varTooltip.add(
-                                    Component.literal(varObj.get("desc").getAsString())
-                                            .withColor(BfTheme.TEXT_SECONDARY));
+                                    Component.literal(varDesc).withColor(BfTheme.TEXT_SECONDARY));
                         }
                     }
                     varTooltip.add(Component.literal(""));
@@ -775,20 +747,16 @@ public class ClassSelectionScreen extends Screen {
 
         for (Row row : l.rows()) {
             JsonObject classObj =
-                    this.classesData == null
-                            ? null
-                            : this.classesData.getAsJsonObject(row.classId());
+                    this.classesData == null ? null : UiJson.obj(this.classesData, row.classId());
             if (classObj == null) continue;
-            boolean isCurrent =
-                    classObj.has("isCurrent") && classObj.get("isCurrent").getAsBoolean();
+            boolean isCurrent = UiJson.bool(classObj, "isCurrent", false);
 
             for (int i = 0; i < row.variants().size(); i++) {
                 Box v = row.variants().get(i);
                 boolean varSelected =
-                        (isCurrent
-                                && classObj.has("selectedVariant")
-                                && classObj.get("selectedVariant").getAsInt()
-                                        == row.firstVariant() + i);
+                        isCurrent
+                                && UiJson.integer(classObj, "selectedVariant", -1)
+                                        == row.firstVariant() + i;
                 boolean canSelect = selectable(row.classId(), classObj, varSelected, isCurrent);
 
                 if (canSelect && BfTheme.hit(l.mouseX(), l.mouseY(), v.x(), v.y(), v.w(), v.h())) {
@@ -807,13 +775,8 @@ public class ClassSelectionScreen extends Screen {
     }
 
     private static String classAction(String classId, int variant, JsonObject definition) {
-        return "class:"
-                + classId
-                + ":"
-                + variant
-                + (definition.has("selectionToken")
-                        ? "." + definition.get("selectionToken").getAsString()
-                        : "");
+        String token = UiJson.str(definition, "selectionToken", null);
+        return "class:" + classId + ":" + variant + (token == null ? "" : "." + token);
     }
 
     @Override
@@ -861,12 +824,12 @@ public class ClassSelectionScreen extends Screen {
 
     public void updateModel(String updatedUiJson) {
         try {
-            this.currentUiData = JsonParser.parseString(updatedUiJson).getAsJsonObject();
+            this.currentUiData = UiJson.parse(updatedUiJson);
             if (currentUiData.has("battleCredits") && classesData != null) {
-                for (String id : classesData.keySet())
-                    classesData
-                            .getAsJsonObject(id)
-                            .add("battleCredits", currentUiData.get("battleCredits"));
+                for (String id : classesData.keySet()) {
+                    JsonObject kit = UiJson.obj(classesData, id);
+                    if (kit != null) kit.add("battleCredits", currentUiData.get("battleCredits"));
+                }
             }
         } catch (Exception e) {
         }
@@ -874,7 +837,7 @@ public class ClassSelectionScreen extends Screen {
 
     public void updateClassesData(String classesJson) {
         try {
-            this.classesData = JsonParser.parseString(classesJson).getAsJsonObject();
+            this.classesData = UiJson.parse(classesJson);
         } catch (Exception e) {
         }
     }

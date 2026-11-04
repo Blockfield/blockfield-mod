@@ -71,18 +71,28 @@ public class BlockFieldClient implements ClientModInitializer {
         // Fabric доставляет пакеты уже в главном потоке клиента, отдельный enqueueWork не нужен.
         ClientPlayNetworking.registerGlobalReceiver(
                 OpenClassMenuS2CPacket.TYPE,
-                (p, c) -> ClientEventHandler.handleOpenClassMenu(p.classesJson, p.isUpdate));
+                (p, c) -> {
+                    if (!p.valid()) return;
+                    ClientEventHandler.handleOpenClassMenu(p.classesJson(), p.isUpdate());
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 OpenSpawnMenuS2CPacket.TYPE,
-                (p, c) -> ClientEventHandler.handleOpenSpawnMenu(p.spawnsJson, p.mapId));
+                (p, c) -> {
+                    if (!p.valid()) return;
+                    ClientEventHandler.handleOpenSpawnMenu(p.spawnsJson(), p.mapId());
+                });
         ClientPlayNetworking.registerGlobalReceiver(
-                OpenMenuS2CPacket.TYPE, (p, c) -> ClientEventHandler.handleOpenMenu(p.json));
+                OpenMenuS2CPacket.TYPE,
+                (p, c) -> {
+                    if (!p.valid()) return;
+                    ClientEventHandler.handleOpenMenu(p.json());
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 MapPlayersS2CPacket.TYPE,
                 (p, c) -> {
                     try {
                         com.lunares.blockfield.client.gui.tablet.TabletMapTab.updatePlayers(
-                                com.google.gson.JsonParser.parseString(p.json()).getAsJsonObject());
+                                UiJson.parse(p.json()));
                     } catch (Exception e) {
                         // Malformed server positions: keep the last good ones on the map.
                     }
@@ -112,11 +122,11 @@ public class BlockFieldClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(
                 UpdateUIS2CPacket.TYPE,
                 (p, c) -> {
-                    String json = p.uiDataJson;
+                    if (!p.valid()) return;
+                    com.google.gson.JsonObject obj = p.ui();
+                    String json = p.uiDataJson();
                     try {
-                        com.google.gson.JsonObject obj =
-                                com.google.gson.JsonParser.parseString(json).getAsJsonObject();
-                        if (obj.has("resetStamina") && obj.get("resetStamina").getAsBoolean()) {
+                        if (UiJson.bool(obj, "resetStamina", false)) {
                             var local = c.player();
                             var stamina =
                                     local.getAttachedOrCreate(
@@ -133,12 +143,10 @@ public class BlockFieldClient implements ClientModInitializer {
                         }
                         if (obj.has("workshopMap")) {
                             com.lunares.blockfield.client.workshop.WorkshopAiClient.availability(
-                                    obj.has("workshopAi") && obj.get("workshopAi").getAsBoolean());
+                                    UiJson.bool(obj, "workshopAi", false));
                             com.lunares.blockfield.client.workshop.WorkshopGhostClient.update(
-                                    obj.has("workshopBuild")
-                                            && obj.get("workshopBuild").getAsBoolean(),
-                                    obj.has("workshopGhost")
-                                            && obj.get("workshopGhost").getAsBoolean());
+                                    UiJson.bool(obj, "workshopBuild", false),
+                                    UiJson.bool(obj, "workshopGhost", false));
                             com.lunares.blockfield.client.render.HudRenderer.updateHUDData(json);
                             return;
                         }
@@ -152,13 +160,13 @@ public class BlockFieldClient implements ClientModInitializer {
                         }
                         if (obj.has("removeScore")) {
                             com.lunares.blockfield.client.render.TabMenuRenderer.removePlayer(
-                                    java.util.UUID.fromString(
-                                            obj.get("removeScore").getAsString()));
+                                    java.util.UUID.fromString(UiJson.str(obj, "removeScore", "")));
                             return;
                         }
                         if (obj.has("creditGain")) {
-                            com.lunares.blockfield.client.render.HudRenderer.onCreditGain(
-                                    obj.getAsJsonObject("creditGain"));
+                            com.google.gson.JsonObject gain = UiJson.obj(obj, "creditGain");
+                            if (gain == null) throw new IllegalArgumentException("creditGain");
+                            com.lunares.blockfield.client.render.HudRenderer.onCreditGain(gain);
                             return;
                         }
                         if (obj.has("matchResult")) {
@@ -171,21 +179,19 @@ public class BlockFieldClient implements ClientModInitializer {
                             return;
                         }
                         if (obj.has("presence")) {
-                            com.lunares.blockfield.client.music.MusicDirector.onPresence(
-                                    obj.getAsJsonObject("presence"));
-                            com.lunares.blockfield.client.gui.KillFeedReset.onPresence(
-                                    obj.getAsJsonObject("presence"));
-                            LauncherBridge.update(obj.getAsJsonObject("presence"));
+                            com.google.gson.JsonObject presence = UiJson.obj(obj, "presence");
+                            if (presence == null) throw new IllegalArgumentException("presence");
+                            com.lunares.blockfield.client.music.MusicDirector.onPresence(presence);
+                            com.lunares.blockfield.client.gui.KillFeedReset.onPresence(presence);
+                            LauncherBridge.update(presence);
                             return;
                         }
                         ClientEventHandler.handleUpdateUI(json);
-                        if (obj.has("closeDeploymentMenu")
-                                && obj.get("closeDeploymentMenu").getAsBoolean()) return;
+                        if (UiJson.bool(obj, "closeDeploymentMenu", false)) return;
                         com.lunares.blockfield.client.render.HudRenderer.updateHUDData(json);
                         if (obj.has("tabActive")) {
-                            boolean active = obj.get("tabActive").getAsBoolean();
-                            if (active
-                                    && (!obj.has("showHud") || obj.get("showHud").getAsBoolean())) {
+                            boolean active = UiJson.bool(obj, "tabActive", false);
+                            if (active && UiJson.bool(obj, "showHud", true)) {
                                 com.lunares.blockfield.client.gui.tablet.TabletResultTab.onBattle();
                             }
                             boolean wasActive =
@@ -209,7 +215,7 @@ public class BlockFieldClient implements ClientModInitializer {
                         }
                         if (obj.has("ffa")) {
                             com.lunares.blockfield.client.render.TabMenuRenderer.setFfaMode(
-                                    obj.get("ffa").getAsBoolean());
+                                    UiJson.bool(obj, "ffa", false));
                         }
                     } catch (Exception e) {
                         // Ignore parsing errors
@@ -344,9 +350,11 @@ public class BlockFieldClient implements ClientModInitializer {
     static void dispatchMatchResult(
             JsonElement result, Consumer<JsonObject> tablet, Consumer<String> music) {
         if (result == null || result.isJsonNull()) return;
-        if (result.isJsonObject()) {
-            tablet.accept(result.getAsJsonObject());
-        } else if (result.isJsonPrimitive() && result.getAsJsonPrimitive().isString()) {
+        JsonObject object = UiJson.asObject(result);
+        if (object != null) {
+            tablet.accept(object);
+        } else if (result instanceof com.google.gson.JsonPrimitive primitive
+                && primitive.isString()) {
             String outcome = result.getAsString();
             if (outcome.equals("win") || outcome.equals("loss") || outcome.equals("draw")) {
                 music.accept(outcome);
