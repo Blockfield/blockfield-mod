@@ -121,4 +121,21 @@ class SpawnSelectionLayoutTest {
         assertEquals("BASE", memory.forMap("konstaxa"));
         assertEquals("BASE", memory.forMap("berdichev"));
     }
+
+    @Test
+    void nullOrEmptyBoundsDoNotCrashLayout() throws Exception {
+        var layout =
+                SpawnSelectionScreen.class.getDeclaredMethod("layout", double.class, double.class);
+        layout.setAccessible(true);
+        for (String json : List.of("{\"bounds\":null}", "{\"bounds\":{}}", "{}")) {
+            var screen = new SpawnSelectionScreen(json, "layout-test");
+            screen.width = 640;
+            screen.height = 400;
+            try {
+                layout.invoke(screen, -1d, -1d);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                throw new AssertionError("layout crashed on " + json, e.getCause());
+            }
+        }
+    }
 }

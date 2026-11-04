@@ -91,4 +91,32 @@ class UiPacketsCodecTest {
         assertFalse(OpenMenuS2CPacket.decode("{\"id\": 42}").valid());
         assertTrue(OpenMenuS2CPacket.decode("{\"id\": \"vote\"}").valid());
     }
+
+    @Test
+    void explicitNullOnTypedKeyIsInvalid() {
+        var boundsNull =
+                OpenSpawnMenuS2CPacket.JSON_CODEC.parse(
+                        JsonOps.INSTANCE, JsonParser.parseString("{\"bounds\":null}"));
+        assertTrue(boundsNull.error().isPresent());
+        assertFalse(OpenSpawnMenuS2CPacket.decode("{\"bounds\":null}", "arena").valid());
+
+        var mapNull =
+                UpdateUIS2CPacket.JSON_CODEC.parse(
+                        JsonOps.INSTANCE, JsonParser.parseString("{\"map\":null}"));
+        assertTrue(mapNull.error().isPresent());
+        assertFalse(UpdateUIS2CPacket.decode("{\"map\":null}").valid());
+
+        assertFalse(OpenMenuS2CPacket.decode("{\"id\":null}").valid());
+    }
+
+    @Test
+    void nonObjectClassEntriesStayValidButReadAsNull() {
+        var scalar = OpenClassMenuS2CPacket.decode("{\"assault\":42}", false);
+        assertTrue(scalar.valid());
+        assertNull(UiJson.obj(scalar.classes(), "assault"));
+
+        var explicitNull = OpenClassMenuS2CPacket.decode("{\"assault\":null}", false);
+        assertTrue(explicitNull.valid());
+        assertNull(UiJson.obj(explicitNull.classes(), "assault"));
+    }
 }

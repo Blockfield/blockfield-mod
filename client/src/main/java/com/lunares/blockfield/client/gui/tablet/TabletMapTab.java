@@ -48,7 +48,7 @@ public final class TabletMapTab {
         JsonObject map = HudRenderer.matchMap();
         if (map == null) return null;
         for (String key : new String[] {"minX", "maxX", "minZ", "maxZ"}) {
-            if (!map.has(key)) return null;
+            if (!map.has(key) || !map.get(key).isJsonPrimitive()) return null;
         }
         return map;
     }

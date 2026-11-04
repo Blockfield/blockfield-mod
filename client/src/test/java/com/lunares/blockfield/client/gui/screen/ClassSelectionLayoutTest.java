@@ -62,4 +62,9 @@ class ClassSelectionLayoutTest {
         assertEquals("a:0", ClassSelectionScreen.cycleFocus(order, "b:1", false));
         assertEquals("page:next", ClassSelectionScreen.cycleFocus(order, "a:0", false));
     }
+
+    @Test
+    void nullClassEntryHasNoVariants() {
+        assertTrue(ClassSelectionScreen.variantNames(null).isEmpty());
+    }
 }

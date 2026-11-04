@@ -138,8 +138,9 @@ public class ClassSelectionScreen extends Screen {
         return names;
     }
 
-    private List<String> variantNames(JsonObject classObj) {
+    static List<String> variantNames(JsonObject classObj) {
         List<String> names = new ArrayList<>();
+        if (classObj == null) return names;
         if (classObj.has("variants") && classObj.get("variants").isJsonArray()) {
             JsonArray variants = UiJson.arr(classObj, "variants");
             for (int i = 0; i < variants.size(); i++) {

@@ -126,7 +126,9 @@ public final class UiJson {
     static Optional<String> problems(JsonObject o, Map<String, Kind> keys) {
         for (var entry : keys.entrySet()) {
             JsonElement e = o.get(entry.getKey());
-            if (e == null || e.isJsonNull()) continue;
+            if (e == null) continue;
+            if (e.isJsonNull())
+                return Optional.of(entry.getKey() + ": expected " + entry.getValue());
             boolean ok =
                     switch (entry.getValue()) {
                         case BOOLEAN -> e.isJsonPrimitive() && e.getAsJsonPrimitive().isBoolean();

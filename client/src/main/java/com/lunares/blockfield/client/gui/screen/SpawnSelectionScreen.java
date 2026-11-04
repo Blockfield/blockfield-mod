@@ -215,12 +215,12 @@ public class SpawnSelectionScreen extends Screen {
         float maxX = 500;
         float minZ = -500;
         float maxZ = 500;
-        if (this.spawnsData != null && this.spawnsData.has("bounds")) {
-            JsonObject b = UiJson.obj(this.spawnsData, "bounds");
-            minX = b.get("minX").getAsFloat();
-            maxX = b.get("maxX").getAsFloat();
-            minZ = b.get("minZ").getAsFloat();
-            maxZ = b.get("maxZ").getAsFloat();
+        JsonObject b = this.spawnsData == null ? null : UiJson.obj(this.spawnsData, "bounds");
+        if (b != null) {
+            minX = (float) UiJson.decimal(b, "minX", minX);
+            maxX = (float) UiJson.decimal(b, "maxX", maxX);
+            minZ = (float) UiJson.decimal(b, "minZ", minZ);
+            maxZ = (float) UiJson.decimal(b, "maxZ", maxZ);
         }
 
         float worldW = maxX - minX;
@@ -451,8 +451,7 @@ public class SpawnSelectionScreen extends Screen {
         guiGraphics.drawString(this.font, "ВЫСАДКА", LIST_X + 26, 35, BfTheme.AMBER, false);
         guiGraphics.fill(23, 54, LIST_X + LIST_WIDTH, 56, BfTheme.AMBER);
         var zone = com.lunares.blockfield.client.gui.tablet.TabletMapTab.zone();
-        String mapName =
-                zone != null && zone.has("name") ? zone.get("name").getAsString() : this.mapId;
+        String mapName = zone != null ? UiJson.str(zone, "name", this.mapId) : this.mapId;
         mapName = BfTheme.ellipsize(this.font, mapName, l.width() - 320);
         guiGraphics.drawString(
                 this.font,
