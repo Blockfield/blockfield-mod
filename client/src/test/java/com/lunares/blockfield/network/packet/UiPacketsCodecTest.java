@@ -5,8 +5,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.serialization.JsonOps;
+
 import io.netty.buffer.Unpooled;
+
 import net.minecraft.network.FriendlyByteBuf;
+
 import org.junit.jupiter.api.Test;
 
 class UiPacketsCodecTest {
@@ -118,5 +121,34 @@ class UiPacketsCodecTest {
         var explicitNull = OpenClassMenuS2CPacket.decode("{\"assault\":null}", false);
         assertTrue(explicitNull.valid());
         assertNull(UiJson.obj(explicitNull.classes(), "assault"));
+    }
+
+    @Test
+    void typedReadersRejectWrongTypesAndNull() {
+        JsonObject o = new JsonObject();
+        o.addProperty("s", 42);
+        o.addProperty("b", "true");
+        o.addProperty("i", "oops");
+        o.addProperty("d", true);
+        o.add("n", com.google.gson.JsonNull.INSTANCE);
+
+        assertEquals("text", UiJson.str(o, "missing", "text"));
+        assertEquals("def", UiJson.str(o, "s", "def"));
+        assertEquals("def", UiJson.str(o, "n", "def"));
+
+        assertTrue(UiJson.bool(o, "missing", true));
+        assertFalse(UiJson.bool(o, "b", false));
+        assertFalse(UiJson.bool(o, "n", false));
+
+        assertEquals(7, UiJson.integer(o, "missing", 7));
+        assertEquals(7, UiJson.integer(o, "i", 7));
+        assertEquals(7, UiJson.integer(o, "n", 7));
+        assertEquals(42, UiJson.integer(o, "s", 3));
+
+        assertEquals(1.5, UiJson.decimal(o, "missing", 1.5));
+        assertEquals(1.5, UiJson.decimal(o, "i", 1.5));
+        assertEquals(1.5, UiJson.decimal(o, "d", 1.5));
+        assertEquals(1.5, UiJson.decimal(o, "n", 1.5));
+        assertEquals(42.0, UiJson.decimal(o, "s", 0.0));
     }
 }

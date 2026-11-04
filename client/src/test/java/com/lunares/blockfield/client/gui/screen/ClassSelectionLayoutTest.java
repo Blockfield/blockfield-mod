@@ -1,12 +1,14 @@
 package com.lunares.blockfield.client.gui.screen;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class ClassSelectionLayoutTest {
     @Test
@@ -66,5 +68,14 @@ class ClassSelectionLayoutTest {
     @Test
     void nullClassEntryHasNoVariants() {
         assertTrue(ClassSelectionScreen.variantNames(null).isEmpty());
+    }
+
+    @Test
+    void wrongTypedDeploymentCostReadsAsFree() {
+        com.google.gson.JsonObject classes = new com.google.gson.JsonObject();
+        com.google.gson.JsonObject kit = new com.google.gson.JsonObject();
+        kit.addProperty("deploymentCost", "expensive");
+        classes.add("assault", kit);
+        assertFalse(ClassSelectionScreen.hasPaidClasses(classes));
     }
 }
