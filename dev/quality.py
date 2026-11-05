@@ -278,7 +278,25 @@ def check_java(files):
             str(jar),
             "--aosp",
             # Parity with Spotless `googleJavaFormat('1.36.1').aosp()`: its defaults
-            # sort imports and reflow long strings, so no --skip-* flags here.
+            # skip import sorting and long-string reflows (unused imports are still
+            # removed), so the sorting check below needs `--fix-imports-only`.
+            "--skip-sorting-imports",
+            "--skip-reflowing-long-strings",
+            "--dry-run",
+            "--set-exit-if-changed",
+        ],
+        files,
+    )
+    # Spotless still orders imports (ASCII single block, unlike the CLI --aosp
+    # grouping) and removes unused ones: mirror it with the pinned jar's import
+    # fixer (no --aosp, so no regrouping).
+    each(
+        [
+            "java",
+            *GJF_EXPORTS,
+            "-jar",
+            str(jar),
+            "--fix-imports-only",
             "--dry-run",
             "--set-exit-if-changed",
         ],
