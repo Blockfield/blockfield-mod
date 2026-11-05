@@ -501,7 +501,7 @@ public final class ModSettingsScreen extends OptionsSubScreen {
         try {
             if (yaclPresent()) yacl = buildYaclScreen(parent);
         } catch (Exception | LinkageError e) {
-            LOGGER.debug("YACL settings unavailable, using the vanilla list", e);
+            LOGGER.warn("YACL settings unavailable, using the vanilla list", e);
         }
         client.setScreen(yacl != null ? yacl : new ModSettingsScreen(parent));
     }
@@ -813,7 +813,9 @@ public final class ModSettingsScreen extends OptionsSubScreen {
                 yaclCall(yaclClass("controller.BooleanControllerBuilder"), "create", 1)
                         .invoke(null, option);
         if (words != null) yaclCall(box, "valueFormatter", 1).invoke(box, words);
-        return yaclCall(box, "build", 0).invoke(box);
+        // YACL's controller() takes the builder and builds it; a built Controller
+        // fails its cast in Option.build().
+        return box;
     }
 
     private static Object enumOption(
@@ -851,7 +853,8 @@ public final class ModSettingsScreen extends OptionsSubScreen {
                                                         box,
                                                         (Function<Object, Object>)
                                                                 ModSettingsScreen::valueLabel);
-                                        return yaclCall(box, "build", 0).invoke(box);
+                                        // Return the builder: YACL builds the controller itself.
+                                        return box;
                                     } catch (Exception | LinkageError e) {
                                         throw new IllegalStateException(
                                                 "YACL enum controller failed", e);
@@ -930,7 +933,8 @@ public final class ModSettingsScreen extends OptionsSubScreen {
                                                         box,
                                                         (Function<Object, Object>)
                                                                 ModSettingsScreen::valueLabel);
-                                        return yaclCall(box, "build", 0).invoke(box);
+                                        // Return the builder: YACL builds the controller itself.
+                                        return box;
                                     } catch (Exception | LinkageError e) {
                                         throw new IllegalStateException(
                                                 "YACL number controller failed", e);
