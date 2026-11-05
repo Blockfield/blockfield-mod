@@ -84,6 +84,14 @@ class FxClientWireOracleFixture {
     }
 
     static JsonObject vector() throws Exception {
+        // Committed next to the code it validates; a workspace-relative lookup would
+        // only resolve inside a workspace checkout. Client-C2S equality below fails
+        // loudly if this copy ever drifts from the recorded stream (see "regenerate").
+        if (!Files.isRegularFile(VECTOR))
+            throw new AssertionError(
+                    "committed oracle vector missing: "
+                            + VECTOR.toAbsolutePath()
+                            + " (restore docs/review/anim-sync-fx-client-wire.json)");
         return JsonParser.parseString(Files.readString(VECTOR)).getAsJsonObject();
     }
 

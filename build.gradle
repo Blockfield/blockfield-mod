@@ -65,15 +65,20 @@ def pinnedMods = [
         forgeConfigApi: [url: 'https://cdn.modrinth.com/data/ohNO6lps/versions/N5qzq0XV/ForgeConfigAPIPort-v21.1.6-1.21.1-Fabric.jar',
                          sha256: '2e3a8f0e3bda85a7d722720e7ce879cbd9d028d9395c6fc224d329b3c982d9b1'],
         parcool       : [url: 'https://github.com/Blockfield/parcool-fabric/releases/download/bf8/ParCool-1.21.1-3.4.3.3-fabric-bf8.jar',
-                         sha256: '7caaddc5ee48aefad610d520c4cbd92426561df9f29cc56a9ca60c4eeb61800b'],
+                         sha256: '7caaddc5ee48aefad610d520c4cbd92426561df9f29cc56a9ca60c4eeb61800b',
+                         // Byte-identical copy on the R2 CDN (oracle sha512 4ef4d73b…); tried first so a
+                         // github.com 504 storm (runs 42043834718, 42054850560) cannot fail configuration.
+                         mirrorUrl: 'https://r2.blockfield.pro/4ef4d73b2ecd918b7ad795332999f30eb9c5ef4b59677cd7f9d7aba7f43cb3517e6ea7851129c718bc5c9a2076425832791c3ba2dcf145b63e6e28f4ed0af1b8'],
         playerAnimator: [url: 'https://cdn.modrinth.com/data/gedNE4y2/versions/CkedfDp3/player-animation-lib-fabric-2.0.4%2B1.21.1.jar',
                          sha256: '86ef8a23a5bc8f86d67ed37f3a93380d3946bad64123b22862ed057e7b624efd'],
         sodium        : [url: 'https://cdn.modrinth.com/data/AANobbMI/versions/SMxNOGZ6/sodium-fabric-0.8.13%2Bmc1.21.1.jar',
                          sha256: '3d43c14985a4deb19c654aad3393b454cf57e1ebcbba86c4ae6a98dfc60eca2d', stripLoomVersion: true],
         cameraOverhaul: [url: 'https://cdn.modrinth.com/data/m0oRwcZx/versions/zDas2ZO2/CameraOverhaul-v2.1.1-fabric%2Bmc%5B1.21-1.21.2%5D.jar',
                          sha256: 'a8a82ccb209537522e5dde2cbf644fc29bd3808b4dec5f310c794da9bb3ba96c', stripLoomVersion: true],
-        superbwarfare : [url: 'https://github.com/Blockfield/superbwarfare-fabric/releases/download/bf25/superbwarfare-0.8.9.1-mc1.21.1-bf25.jar',
-                         sha256: '2c62c1295f7ccf4522da7f997896ef38b64701988208ad20acfa398f2ff75251'],
+        superbwarfare : [url: 'https://github.com/Blockfield/superbwarfare-fabric/releases/download/bf26/superbwarfare-0.8.9.1-mc1.21.1-bf26.jar',
+                         sha256: '2a5e4371a125e5438dd5d8035e3194819ccd874416fe17afd12dca82450022b9',
+                         // Byte-identical copy on the R2 CDN (oracle sha512 bb8b5ff2…); tried first, same reason.
+                         mirrorUrl: 'https://r2.blockfield.pro/bb8b5ff2b8fb22b25c8c5a21bd1a495515c2f653560d43ff4b65a4acae16a9bf825404960b2da4b5b6bbca5d4f2760be5543c7e6e90e1b4e861fe71ce46d0242'],
         taczPack      : [url: 'https://github.com/Blockfield/tacz-refabricated/releases/download/bf11/TACZ-Refabricated-1.21.1-0.7.0-bf11.jar',
                          sha256: '5cf6208fcbebdc72fcf0404925f71a6d9fd7d62fd6d9321ad425cd4b5456e91a',
                          archiveUrl: 'https://github.com/Blockfield/blockfield-releases/releases/download/v2.79.2/Blockfield-client.zip',
@@ -109,13 +114,36 @@ ext.pinnedMod = { String id ->
         digest.digest().encodeHex().toString()
     }
     def download = { String url, File target ->
-        def connection = new URL(url).openConnection()
-        connection.connectTimeout = 30000
-        connection.readTimeout = 120000
-        connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
-        connection.inputStream.withCloseable { input ->
-            target.withOutputStream { output -> output << input }
+        // github.com release downloads 302 to the release CDN and transiently answer 504
+        // in CI (run 42043834718): bounded retries with backoff, then the sha256 check
+        // below still decides. Redirects are followed explicitly; 404 is never retried.
+        IOException failed = null
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                def connection = new URL(url).openConnection()
+                if (connection instanceof java.net.HttpURLConnection) connection.instanceFollowRedirects = true
+                connection.connectTimeout = 30000
+                connection.readTimeout = 120000
+                connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
+                connection.setRequestProperty('Accept', '*/*')
+                if (connection instanceof java.net.HttpURLConnection
+                        && (connection.responseCode < 200 || connection.responseCode >= 300)) {
+                    throw new IOException("Server returned HTTP response code: ${connection.responseCode} for URL: ${url}")
+                }
+                connection.inputStream.withCloseable { input ->
+                    target.withOutputStream { output -> output << input }
+                }
+                return
+            } catch (IOException e) {
+                failed = e
+                def transientFailure = (e instanceof java.net.SocketTimeoutException)
+                    || (e instanceof java.net.ConnectException)
+                    || (e.message ==~ /Server returned HTTP response code: 5\d\d for URL: .*/)
+                if (!transientFailure || attempt >= 3) throw e
+                Thread.sleep(2000L * attempt)
+            }
         }
+        throw failed
     }
     if (!upstream.isFile() || sha256(upstream) != mod.sha256) {
         dir.mkdirs()
@@ -141,7 +169,18 @@ ext.pinnedMod = { String id ->
                         tmp.withOutputStream { output -> output << input }
                     }
                 }
-            } else { download(mod.url, tmp) }
+            } else {
+                // A CDN copy (mirrorUrl) is tried first when present: it serves bytes the sha256
+                // check below verifies, so CI no longer depends on the github.com release endpoint.
+                // Either URL keeps the bounded 5xx retry inside download; 404 on the first falls
+                // through to the second, and the checksum still decides.
+                IOException failed = null
+                for (String url : (mod.mirrorUrl ? [mod.mirrorUrl, mod.url] : [mod.url])) {
+                    try { download(url, tmp); failed = null; break }
+                    catch (IOException e) { failed = e }
+                }
+                if (failed != null) throw failed
+            }
             def got = sha256(tmp)
             if (got != mod.sha256) { throw new GradleException("${mod.url}: sha256 ${got}, expected ${mod.sha256}") }
             // The directory is keyed by sha256, so a replaced upstream is byte-identical: never delete a JAR
