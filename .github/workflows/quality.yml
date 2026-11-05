@@ -10,7 +10,8 @@ on:
   # same-tree check below; anything else runs full CI.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: ["**.md", "docs/**", "release-notes/**"]
+    # No paths-ignore: a docs-only PR must still create a run so the required
+    # `check` reports; `decide` scopes the Java jobs out instead.
   # Maintainer-only manual run: run it from the PR branch and record why.
   # Misuse is visible in the run history.
   workflow_dispatch:
@@ -233,7 +234,7 @@ jobs:
             client/build/reports/tests/
           retention-days: 7
   # Single required status for branch protection: records the tested tree only
-  # when lint, test and java are all green (a lint-only green must never
+  # when decide, lint, test and (if in scope) java are all green (a lint-only green must never
   # certify a tree whose tests failed).
   check:
     needs: [decide, lint, test, java]
@@ -244,14 +245,20 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Require green lint, test and java
+      - name: Require green decide, lint, test and java
+        env:
+          DECIDE: ${{ needs.decide.result }}
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+          JAVA: ${{ needs.java.result }}
+          JAVA_WANTED: ${{ needs.decide.outputs.java == 'true' && needs.decide.outputs.assemble_only != 'true' }}
         run: |
-          for result in '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.java.result }}'; do
-            case "$result" in
-              success|skipped) ;;
-              *) echo "::error::lint/test/java result: $result"; exit 1 ;;
-            esac
-          done
+          # `skipped` is fine only for java, and only when decide succeeded and scoped it out.
+          [ "$DECIDE" = success ] || { echo "::error::decide result: $DECIDE"; exit 1; }
+          [ "$LINT" = success ] || { echo "::error::lint result: $LINT"; exit 1; }
+          [ "$TEST" = success ] || { echo "::error::test result: $TEST"; exit 1; }
+          if [ "$JAVA_WANTED" = true ]; then want=success; else want=skipped; fi
+          [ "$JAVA" = "$want" ] || { echo "::error::java result: $JAVA, expected $want"; exit 1; }
       # Records the exact tree this green run tested. Main-push
       # and release lookups match it, so a merge skips even when the PR branch
       # itself was behind a main that has not moved since. Tiny file, short-lived.
