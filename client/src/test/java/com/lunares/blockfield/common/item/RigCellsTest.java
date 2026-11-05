@@ -7,7 +7,6 @@ import io.netty.buffer.Unpooled;
 import java.lang.reflect.Field;
 import java.util.List;
 import net.minecraft.SharedConstants;
-import net.minecraft.core.HolderLookup;
 import net.minecraft.core.MappedRegistry;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
@@ -33,7 +32,7 @@ import org.junit.jupiter.api.Test;
  */
 class RigCellsTest {
 
-    private static HolderLookup.Provider registries;
+    private static RegistryAccess registries;
 
     @BeforeAll
     static void bootstrap() throws Exception {
