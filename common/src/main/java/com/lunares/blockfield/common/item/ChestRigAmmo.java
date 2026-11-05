@@ -56,10 +56,10 @@ public final class ChestRigAmmo {
     public static java.util.List<ItemStack> storedStacks(
             ItemStack rig, HolderLookup.Provider registries) {
         if (rig.isEmpty() || !rig.is(ModItems.CHEST_RIG)) return java.util.List.of();
-        RigCells cells = rig.get(RigCells.TYPE);
-        if (cells != null) {
+        RigCells rigCells = rig.get(RigCells.TYPE);
+        if (rigCells != null) {
             java.util.List<ItemStack> out = new java.util.ArrayList<>();
-            for (ItemStack cell : cells.unpack(ChestRigMenu.RIG_SLOT_COUNT))
+            for (ItemStack cell : rigCells.unpack(ChestRigMenu.RIG_SLOT_COUNT))
                 if (!cell.isEmpty()) out.add(cell);
             return out;
         }
