@@ -501,7 +501,7 @@ public final class ModSettingsScreen extends OptionsSubScreen {
         try {
             if (yaclPresent()) yacl = buildYaclScreen(parent);
         } catch (Exception | LinkageError e) {
-            LOGGER.debug("YACL settings unavailable, using the vanilla list", e);
+            LOGGER.warn("YACL settings unavailable, using the vanilla list", e);
         }
         client.setScreen(yacl != null ? yacl : new ModSettingsScreen(parent));
     }
