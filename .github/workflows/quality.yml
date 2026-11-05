@@ -114,6 +114,7 @@ jobs:
       tested: ${{ steps.same.outputs.tested }}
       java: ${{ steps.scope.outputs.java }}
       assemble_only: ${{ steps.scope.outputs.assemble_only }}
+      oracle: ${{ steps.scope.outputs.oracle }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -148,6 +149,12 @@ jobs:
             fi
           fi
           echo "assemble_only=$assemble_only" >> "$GITHUB_OUTPUT"
+          # Admission oracle (issue #6 decision: oracle in CI): runs exactly when
+          # the Java gate runs with real tests, so docs/python-only and
+          # version-only diffs pay no oracle minutes.
+          oracle=false
+          if [ "$java" = true ] && [ "$assemble_only" != true ]; then oracle=true; fi
+          echo "oracle=$oracle" >> "$GITHUB_OUTPUT"
       # Main pushes usually merge a tree a green PR run already tested; re-testing
       # the identical tree wastes a full run (release.yml trusts the same lookup).
       # Review runs check out the head SHA, so head_sha's tree is the tested tree.
@@ -176,9 +183,11 @@ jobs:
     # push; review heads additionally need the gate permit on the exact SHA.
     if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (needs.bot-gate.outputs.verdict == 'permit' && needs.bot-gate.outputs.sha_match == 'true')) && needs.decide.outputs.tested != 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
-      # Full-pack oracle, U10 and wire gates run locally before release.
+      # The admission oracle runs as its own gated step below (issue #6); the
+      # shared test gates keep skipping it here so unrelated diffs pay nothing.
+      # U10 and wire gates still run locally before release.
       BF_SKIP_ORACLE: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -217,6 +226,15 @@ jobs:
       - if: needs.decide.outputs.java == 'true' && needs.decide.outputs.assemble_only != 'true'
         name: Java format, compiler lint and JUnit tests
         run: just java-check
+      # Admission oracle in PR CI (issue #6 decision): full-pack transformed
+      # oracle over production mixins, only when the Java gate runs with real
+      # tests. Runs after java-check so a red unit gate fails fast without
+      # paying oracle minutes. The step env below overrides the job-level skip.
+      - if: needs.decide.outputs.oracle == 'true'
+        name: Client admission oracle
+        env:
+          BF_SKIP_ORACLE: "0"
+        run: just gradle --max-workers=2 :client:oracleTest
       # Failures only: passing runs filled the org artifact quota for a week each.
       - name: Java test reports
         if: failure() || cancelled()
