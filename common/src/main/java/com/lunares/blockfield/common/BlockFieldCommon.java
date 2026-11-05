@@ -11,6 +11,7 @@ public class BlockFieldCommon implements ModInitializer {
     @Override
     public void onInitialize() {
         ModItems.register();
+        com.lunares.blockfield.common.item.RigCells.register();
         com.lunares.blockfield.common.item.ChestRigMenu.registerMenu();
         com.lunares.blockfield.network.NetworkHandler.register();
         DecorInteractions.register();
