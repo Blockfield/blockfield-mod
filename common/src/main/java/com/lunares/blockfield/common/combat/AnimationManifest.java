@@ -76,7 +76,7 @@ public record AnimationManifest(
                                     "playeranimator",
                                     "86ef8a23a5bc8f86d67ed37f3a93380d3946bad64123b22862ed057e7b624efd",
                                     "superbwarfare",
-                                    "24ea4e4ca87ddb53ea37ee4eb7533b8e040dec8cb1502806c98edbac9a563963",
+                                    "2a5e4371a125e5438dd5d8035e3194819ccd874416fe17afd12dca82450022b9",
                                     "create",
                                     "c61dc24635e8ce0aa84c171b96d739bb53e41686bd7d933cc11ce1ded494ce08",
                                     "tacztweaks",

@@ -15,7 +15,7 @@ import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TypeInsnNode;
 
 /**
- * Client review P0-3: the bf24 readers the driven SBW scope redirects or checks at install, pinned
+ * Client review P0-3: the bf26 readers the driven SBW scope redirects or checks at install, pinned
  * against the SBW jar (intermediary names), so a repinned SBW cannot silently read past them.
  */
 class DrivenSbwTargetTest {
@@ -165,7 +165,8 @@ class DrivenSbwTargetTest {
             var calls = calls(mixin, "setupRotations");
             for (String call :
                     List.of(
-                            "net/minecraft/class_1309.method_5668()Lnet/minecraft/class_1297;",
+                            SBW
+                                    + "entity/vehicle/utils/VehicleMounts.rootVehicleOrNull(Lnet/minecraft/class_1297;)Lnet/minecraft/class_1297;",
                             SBW
                                     + "data/vehicle/VehicleData.compute(L"
                                     + VEHICLE
