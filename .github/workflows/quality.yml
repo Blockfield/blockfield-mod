@@ -2,25 +2,18 @@ name: Code quality
 on:
   push:
     branches: [main]
-  # Bot-gate (enforcing): PR CI runs only when the GitHub App
-  # `blockfield-review-bot[bot]` approves the CURRENT head SHA. Pushes to a PR
-  # branch fire no workflow run at all; only the bot's `pull_request_review`
-  # (submitted) on the new head starts CI. A stale approval (push between the
-  # review and the run) is rejected by the commit_id == head SHA check below.
-  # Draft PRs get no bot verdict, so no CI runs until the PR is marked ready.
-  # Merge protection pairs this gate with the bot's own `bot-review` commit
-  # status on the head SHA (success = approved, failure = changes requested):
-  # require `bot-gate` + `check` + `bot-review` on main (see task report).
-  # Merge-tree note: review runs test the head tree, not the merge ref. That
-  # is safe only paired with branch protection "require up to date" (an
-  # up-to-date merge == the head tree) plus the main-push same-tree check,
-  # which runs full CI whenever a merge produces a tree no green PR run
-  # tested.
-  pull_request_review:
-    types: [submitted]
-  # Maintainer-only manual override (no bot verdict needed): run it from the
-  # PR branch and record why. Ordinary contributors cannot bypass the gate
-  # with this; misuse is visible in the run history.
+  # PR CI starts on push to the PR branch: no bot approval needed to run.
+  # The bot still posts its own `bot-review` commit status, which merge
+  # protection may require alongside `check` (see task report).
+  # Merge-tree note: PR runs test the prospective merge commit, so a merge
+  # whose tree a green PR run already tested is picked up by the main-push
+  # same-tree check below; anything else runs full CI.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    # No paths-ignore: a docs-only PR must still create a run so the required
+    # `check` reports; `decide` scopes the Java jobs out instead.
+  # Maintainer-only manual run: run it from the PR branch and record why.
+  # Misuse is visible in the run history.
   workflow_dispatch:
     inputs:
       reason:
@@ -30,83 +23,16 @@ on:
 permissions:
   contents: read
   actions: read # decide job looks up the green quality run for this tree
-  pull-requests: read # bot-gate reads blockfield-review-bot verdicts on the head SHA
+  pull-requests: read # decide job reads the PR base SHA for Java scoping
 concurrency:
   group: quality-${{ github.ref }}
-  # Nothing cancels: main pushes deliberately do NOT cancel (a version-only
-  # successor could otherwise certify a cancelled, untested predecessor:
-  # assemble_only skips tests, release then publishes jars), and a review
-  # must never cancel the run it gates. Queued runs each evaluate their own
-  # event's head SHA and attach there, so a stale-head run can never report
-  # green on the current head. Cost: superseded PR runs now queue instead of
-  # cancelling (see mod-ci-waste.md §2).
-  cancel-in-progress: false
+  # PR pushes cancel superseded runs. Main pushes deliberately do NOT cancel
+  # (a version-only successor could otherwise certify a cancelled, untested
+  # predecessor: assemble_only skips tests, release then publishes jars).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   # Cheap skip/scope decision on a free runner: already-tested main pushes
-  # never occupy a paid Blacksmith runner.
-  bot-gate:
-    # Enforcing: `check` runs on a PR head only when this job reports
-    # verdict=permit with sha_match=true for the CURRENT head SHA, resolved
-    # from the API at gate runtime (a push may have landed after the
-    # triggering review event was created; the event payload would still name
-    # the old head). The event head must equal the runtime head, and the
-    # bot's latest verdict-bearing review on that SHA must be APPROVED.
-    # Anything else (stale event, no verdict yet, REQUEST_CHANGES, DISMISSED,
-    # a verdict on an older SHA) skips `check`, so the gate fails closed.
-    # Always exits 0: denial is expressed through the outputs, and the bot's
-    # own `bot-review` commit status blocks merge.
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    if: github.event_name == 'pull_request_review'
-    outputs:
-      verdict: ${{ steps.gate.outputs.verdict }}
-      sha_match: ${{ steps.gate.outputs.sha_match }}
-      sha: ${{ steps.gate.outputs.sha }}
-    steps:
-      - name: Evaluate blockfield-review-bot verdict for the current PR head SHA
-        id: gate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          EVENT_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -u
-          bot='blockfield-review-bot[bot]'
-          repo="${{ github.repository }}"
-          # Current head, not the event snapshot: the review that triggered
-          # this run may predate a newer push. Only the still-current head
-          # may pass; a stale event waits for the newer review's run.
-          HEAD_SHA=$(gh api "repos/$repo/pulls/$PR_NUMBER" --jq '.head.sha')
-          verdict=deny-awaiting
-          sha_match=false
-          if [ "$EVENT_SHA" = "$HEAD_SHA" ]; then
-            # Latest verdict-bearing bot review on the current head,
-            # aggregated across API pages (gh --jq applies per page).
-            # COMMENTED reviews carry no verdict and are excluded, so a later
-            # comment cannot override an earlier verdict. (jq is preinstalled
-            # on the runner. The head SHA is spliced in; gh --jq takes no
-            # variable arguments.)
-            state=$(gh api "repos/$repo/pulls/$PR_NUMBER/reviews" --paginate               --jq '[.[] | select(.user.login == "'"$bot"'" and .commit_id == "'"$HEAD_SHA"'")]'               | jq -r -s '[add[] | select(.state != "COMMENTED")] | sort_by(.id) | last | .state // empty')
-            # The API returns uppercase states ("APPROVED"); normalize anyway.
-            state=$(printf '%s' "$state" | tr '[:lower:]' '[:upper:]')
-            case "$state" in
-              APPROVED)
-                verdict=permit
-                sha_match=true
-                ;;
-              # CHANGES_REQUESTED -> deny; DISMISSED / empty stay
-              # deny-awaiting (fail-closed).
-              CHANGES_REQUESTED) verdict=deny ;;
-            esac
-          fi
-          # `sha` always names the evaluated runtime head so logs and the
-          # checkout below agree on what was gated.
-          echo "event=${EVENT_SHA:0:12} head=${HEAD_SHA:0:12} bot_state=${state:-none} verdict=$verdict sha_match=$sha_match"
-          {
-            echo "verdict=$verdict"
-            echo "sha_match=$sha_match"
-            echo "sha=$HEAD_SHA"
-          } >> "$GITHUB_OUTPUT"
+  # never occupy a full CI runner.
   decide:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -150,7 +76,7 @@ jobs:
           echo "assemble_only=$assemble_only" >> "$GITHUB_OUTPUT"
       # Main pushes usually merge a tree a green PR run already tested; re-testing
       # the identical tree wastes a full run (release.yml trusts the same lookup).
-      # Review runs check out the head SHA, so head_sha's tree is the tested tree.
+      # PR runs check out the prospective merge commit, so its tree is the tested tree.
       - name: Check for green run of the same tree
         id: same
         if: github.event_name == 'push'
@@ -170,20 +96,20 @@ jobs:
           fi
           echo "Same tree $tree already tested: $tested."
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
-  check:
-    needs: [decide, bot-gate]
-    # `always()` keeps push CI working even though `bot-gate` is skipped on
-    # push; review heads additionally need the gate permit on the exact SHA.
-    if: always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || (needs.bot-gate.outputs.verdict == 'permit' && needs.bot-gate.outputs.sha_match == 'true')) && needs.decide.outputs.tested != 'true'
+  # Fast, secret-free signal (~1 min): lint and format checks incl. GJF.
+  # Runs beside the Gradle jobs instead of serially before them. Needs Java:
+  # format-check verifies Java files against google-java-format.
+  lint:
+    needs: [decide]
+    # PR heads, pushes and maintainer dispatches all run (subject to the
+    # decide job's same-tree skip); `always()` keeps the job alive when
+    # `decide` is skipped.
+    if: always() && needs.decide.outputs.tested != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      # Full-pack oracle, U10 and wire gates run locally before release.
-      BF_SKIP_ORACLE: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.event_name == 'pull_request_review' && needs.bot-gate.outputs.sha || github.sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
@@ -193,9 +119,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21.0.12"
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22.23.2"
       - name: Cache pinned project tools
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -206,6 +129,48 @@ jobs:
       - run: python -I -X utf8 scripts/toolchain.py --ci
       - name: Python, shell and workflow lint and format
         run: just check
+  # Python rig tests plus the client oracle (`:client:oracleTest`): the long
+  # pole on changes that feed the Java build. Separate runner from java-check
+  # so the two Gradle invocations overlap instead of stacking.
+  test:
+    needs: [decide]
+    # Same run conditions as lint.
+    if: always() && needs.decide.outputs.tested != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.10"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21.0.12"
+      - name: Cache pinned project tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cache/quality
+            .dev/jdk
+          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('scripts/toolchain.py', 'scripts/quality.py', 'dev/quality.py') }}
+      - run: python -I -X utf8 scripts/toolchain.py --ci
+      - name: Cache fetched mod jars
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cache/quality/pinned-mods
+            .gradle/oracle-mods
+          # Keyed by the pin files: a pin bump refetches, hits reuse verified jars.
+          key: oracle-mods-v1-${{ runner.os }}-${{ hashFiles('dev/oracle-mod-pins.gradle', 'build.gradle') }}
+          restore-keys: |
+            oracle-mods-v1-${{ runner.os }}-
+          # Save even when tests fail: without this a red run (e.g. 42050909939) stores
+          # nothing and the next run refetches every jar. Cached files are hash-verified.
+          save-always: true
       - if: needs.decide.outputs.java == 'true'
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Python and pure Java regression tests
@@ -214,8 +179,49 @@ jobs:
       - name: Version-only assemble
         if: needs.decide.outputs.assemble_only == 'true'
         run: just gradle assemble --max-workers=2
-      - if: needs.decide.outputs.java == 'true' && needs.decide.outputs.assemble_only != 'true'
-        name: Java format, compiler lint and JUnit tests
+  # Spotless, javac lint and JUnit: overlaps the oracle run above.
+  java:
+    needs: [decide]
+    # Skipped for version-only pushes (assemble covers them) and for changes
+    # outside the Java scope, exactly as the old serial step was.
+    if: always() && needs.decide.outputs.tested != 'true' && needs.decide.outputs.java == 'true' && needs.decide.outputs.assemble_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.10"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21.0.12"
+      - name: Cache pinned project tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cache/quality
+            .dev/jdk
+          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('scripts/toolchain.py', 'scripts/quality.py', 'dev/quality.py') }}
+      - run: python -I -X utf8 scripts/toolchain.py --ci
+      - name: Cache fetched mod jars
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cache/quality/pinned-mods
+            .gradle/oracle-mods
+          # Keyed by the pin files: a pin bump refetches, hits reuse verified jars.
+          key: oracle-mods-v1-${{ runner.os }}-${{ hashFiles('dev/oracle-mod-pins.gradle', 'build.gradle') }}
+          restore-keys: |
+            oracle-mods-v1-${{ runner.os }}-
+          # Save even when tests fail: without this a red run (e.g. 42050909939) stores
+          # nothing and the next run refetches every jar. Cached files are hash-verified.
+          save-always: true
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - name: Java format, compiler lint and JUnit tests
         run: just java-check
       # Failures only: passing runs filled the org artifact quota for a week each.
       - name: Java test reports
@@ -227,18 +233,44 @@ jobs:
             client/build/test-results/
             client/build/reports/tests/
           retention-days: 7
+  # Single required status for branch protection: records the tested tree only
+  # when decide, lint, test and (if in scope) java are all green (a lint-only green must never
+  # certify a tree whose tests failed).
+  check:
+    needs: [decide, lint, test, java]
+    if: always() && needs.decide.outputs.tested != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require green decide, lint, test and java
+        env:
+          DECIDE: ${{ needs.decide.result }}
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+          JAVA: ${{ needs.java.result }}
+          JAVA_WANTED: ${{ needs.decide.outputs.java == 'true' && needs.decide.outputs.assemble_only != 'true' }}
+        run: |
+          # `skipped` is fine only for java, and only when decide succeeded and scoped it out.
+          [ "$DECIDE" = success ] || { echo "::error::decide result: $DECIDE"; exit 1; }
+          [ "$LINT" = success ] || { echo "::error::lint result: $LINT"; exit 1; }
+          [ "$TEST" = success ] || { echo "::error::test result: $TEST"; exit 1; }
+          if [ "$JAVA_WANTED" = true ]; then want=success; else want=skipped; fi
+          [ "$JAVA" = "$want" ] || { echo "::error::java result: $JAVA, expected $want"; exit 1; }
       # Records the exact tree this green run tested. Main-push
       # and release lookups match it, so a merge skips even when the PR branch
       # itself was behind a main that has not moved since. Tiny file, short-lived.
       - name: Record tested merge tree
         id: tree
-        if: github.event_name == 'pull_request_review' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         run: |
           tree=$(git rev-parse "HEAD^{tree}")
           echo "$tree" > tested-tree.txt
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
       - name: Upload tested merge tree
-        if: github.event_name == 'pull_request_review' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tested-tree-${{ steps.tree.outputs.tree }}

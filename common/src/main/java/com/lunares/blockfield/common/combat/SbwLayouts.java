@@ -45,7 +45,7 @@ public final class SbwLayouts {
      * weapon-station matrices additionally read their three nullable position getters; each has an
      * explicit derived {@code $present} null-test slot and an optional vector value.
      *
-     * <p>Pinned against bf24 {@code 24ea4e4c…} by the transitive read-closure test: the enabled
+     * <p>Pinned against bf26 {@code 2a5e4371…} by the transitive read-closure test: the enabled
      * queries ({@code getTransformDirectionNoOrientation}, {@code
      * getRotationFromString(String,float)}, seat/pose/scale getters and the {@code
      * VectorTool.combineRotations*}/{@code VehicleVecUtils.getVehicle*Transform} bodies behind
