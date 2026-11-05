@@ -277,10 +277,8 @@ def check_java(files):
             "-jar",
             str(jar),
             "--aosp",
-            # Parity with Spotless `googleJavaFormat('1.36.1').aosp()`: its defaults skip
-            # import sorting and long-string reflows (unused imports are still removed).
-            "--skip-sorting-imports",
-            "--skip-reflowing-long-strings",
+            # Parity with Spotless `googleJavaFormat('1.36.1').aosp()`: its defaults
+            # sort imports and reflow long strings, so no --skip-* flags here.
             "--dry-run",
             "--set-exit-if-changed",
         ],
