@@ -47,7 +47,29 @@ class RigCellsTest {
                 new Item(new Item.Properties()));
         ModItems.register();
         RigCells.register();
+        bindComponent();
         registries = RegistryAccess.fromRegistryOfRegistries(BuiltInRegistries.REGISTRY);
+    }
+
+    /**
+     * Регистрация после freeze оставляет holder компонента несвязанным; в игре этого нет (моды
+     * регистрируются до заморозки), в тестах связываем вручную.
+     */
+    private static void bindComponent() throws Exception {
+        var holder =
+                BuiltInRegistries.DATA_COMPONENT_TYPE
+                        .getHolder(
+                                net.minecraft.resources.ResourceKey.create(
+                                        net.minecraft.core.registries.Registries
+                                                .DATA_COMPONENT_TYPE,
+                                        ResourceLocation.fromNamespaceAndPath(
+                                                "blockfield", "rig_slots")))
+                        .orElseThrow();
+        var bind =
+                net.minecraft.core.Holder.Reference.class.getDeclaredMethod(
+                        "bindValue", Object.class);
+        bind.setAccessible(true);
+        bind.invoke(holder, RigCells.TYPE);
     }
 
     private static void unfreeze(Registry<?> registry) throws Exception {
