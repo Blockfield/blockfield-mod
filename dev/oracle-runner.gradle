@@ -8,7 +8,8 @@ dependencies {
     }
 }
 // Twin of OracleMods in dev/oracle-mods.gradle: applied scripts do not share
-// top-level classes, so shard actions need their own copy. Keep both in sync.
+// top-level classes, so shard actions need their own copy. Keep both in sync,
+// including the bounded 5xx retry below.
 class OracleRunnerMods {
     // ponytail: per-JVM memo keyed by (path, size, mtime); oracle jars are immutable downloads.
     static final Map<String, String> hashCache = new java.util.concurrent.ConcurrentHashMap<>()
@@ -47,11 +48,30 @@ class OracleRunnerMods {
         target.parentFile.mkdirs()
         File temporary = new File(modDir, "${name}.download.tmp")
         try {
-            def connection = new URL(pin.url).openConnection()
-            connection.connectTimeout = 30000
-            connection.readTimeout = 120000
-            connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
-            connection.inputStream.withCloseable { input -> temporary.withOutputStream { it << input } }
+            // Single-shot downloads die on transient github.com 504s in CI (run 42043834718):
+            // bounded retries with backoff, then the hash check below still decides.
+            for (int attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    def connection = new URL(pin.url).openConnection()
+                    if (connection instanceof java.net.HttpURLConnection) connection.instanceFollowRedirects = true
+                    connection.connectTimeout = 30000
+                    connection.readTimeout = 120000
+                    connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
+                    connection.setRequestProperty('Accept', '*/*')
+                    if (connection instanceof java.net.HttpURLConnection
+                            && (connection.responseCode < 200 || connection.responseCode >= 300)) {
+                        throw new IOException("Server returned HTTP response code: ${connection.responseCode} for URL: ${pin.url}")
+                    }
+                    connection.inputStream.withCloseable { input -> temporary.withOutputStream { it << input } }
+                    break
+                } catch (IOException downloadFailed) {
+                    def transientFailure = (downloadFailed instanceof java.net.SocketTimeoutException)
+                        || (downloadFailed instanceof java.net.ConnectException)
+                        || (downloadFailed.message ==~ /Server returned HTTP response code: 5\d\d for URL: .*/)
+                    if (!transientFailure || attempt >= 3) throw downloadFailed
+                    Thread.sleep(2000L * attempt)
+                }
+            }
             if (hash(temporary, pin.algorithm) != pin.hash)
                 throw new GradleException("Oracle pack checksum mismatch: ${name}")
             java.nio.file.Files.move(temporary.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)

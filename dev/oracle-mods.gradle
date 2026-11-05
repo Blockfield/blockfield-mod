@@ -47,19 +47,35 @@ class OracleMods {
         try {
             // Private Blockfield repos answer 404 without credentials; the public pack mirror
             // names every pack file by the hash the pack declares, which is this pin's hash.
+            // github.com release downloads transiently answer 504 in CI (run 42043834718):
+            // bounded retries with backoff per URL, then the hash check below still decides.
             IOException failed = null
             for (String url : [pin.url, MIRROR + pin.hash]) {
-                try {
-                    def connection = new URL(url).openConnection()
-                    connection.connectTimeout = 30000
-                    connection.readTimeout = 120000
-                    connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
-                    connection.inputStream.withCloseable { input -> temporary.withOutputStream { it << input } }
-                    failed = null
-                    break
-                } catch (IOException e) {
-                    failed = e
+                for (int attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        def connection = new URL(url).openConnection()
+                        if (connection instanceof java.net.HttpURLConnection) connection.instanceFollowRedirects = true
+                        connection.connectTimeout = 30000
+                        connection.readTimeout = 120000
+                        connection.setRequestProperty('User-Agent', 'Blockfield-CI/1.0')
+                        connection.setRequestProperty('Accept', '*/*')
+                        if (connection instanceof java.net.HttpURLConnection
+                                && (connection.responseCode < 200 || connection.responseCode >= 300)) {
+                            throw new IOException("Server returned HTTP response code: ${connection.responseCode} for URL: ${url}")
+                        }
+                        connection.inputStream.withCloseable { input -> temporary.withOutputStream { it << input } }
+                        failed = null
+                        break
+                    } catch (IOException e) {
+                        failed = e
+                        def transientFailure = (e instanceof java.net.SocketTimeoutException)
+                            || (e instanceof java.net.ConnectException)
+                            || (e.message ==~ /Server returned HTTP response code: 5\d\d for URL: .*/)
+                        if (!transientFailure || attempt >= 3) break
+                        Thread.sleep(2000L * attempt)
+                    }
                 }
+                if (failed == null) break
             }
             if (failed != null) throw failed
             if (hash(temporary, pin.algorithm) != pin.hash)
