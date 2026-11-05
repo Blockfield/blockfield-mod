@@ -95,7 +95,10 @@ jobs:
           fi
           echo "Same tree $tree already tested: $tested."
           echo "tested=$tested" >> "$GITHUB_OUTPUT"
-  check:
+  # Fast, secret-free signal (~1 min): lint and format checks incl. GJF.
+  # Runs beside the Gradle jobs instead of serially before them. Needs Java:
+  # format-check verifies Java files against google-java-format.
+  lint:
     needs: [decide]
     # PR heads, pushes and maintainer dispatches all run (subject to the
     # decide job's same-tree skip); `always()` keeps the job alive when
@@ -115,9 +118,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21.0.12"
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
-        with:
-          node-version: "22.23.2"
       - name: Cache pinned project tools
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -128,6 +128,35 @@ jobs:
       - run: python -I -X utf8 scripts/toolchain.py --ci
       - name: Python, shell and workflow lint and format
         run: just check
+  # Python rig tests plus the client oracle (`:client:oracleTest`): the long
+  # pole on changes that feed the Java build. Separate runner from java-check
+  # so the two Gradle invocations overlap instead of stacking.
+  test:
+    needs: [decide]
+    # Same run conditions as lint.
+    if: always() && needs.decide.outputs.tested != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.10"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21.0.12"
+      - name: Cache pinned project tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cache/quality
+            .dev/jdk
+          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('scripts/toolchain.py', 'scripts/quality.py', 'dev/quality.py') }}
+      - run: python -I -X utf8 scripts/toolchain.py --ci
       - if: needs.decide.outputs.java == 'true'
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Python and pure Java regression tests
@@ -136,8 +165,36 @@ jobs:
       - name: Version-only assemble
         if: needs.decide.outputs.assemble_only == 'true'
         run: just gradle assemble --max-workers=2
-      - if: needs.decide.outputs.java == 'true' && needs.decide.outputs.assemble_only != 'true'
-        name: Java format, compiler lint and JUnit tests
+  # Spotless, javac lint and JUnit: overlaps the oracle run above.
+  java:
+    needs: [decide]
+    # Skipped for version-only pushes (assemble covers them) and for changes
+    # outside the Java scope, exactly as the old serial step was.
+    if: always() && needs.decide.outputs.tested != 'true' && needs.decide.outputs.java == 'true' && needs.decide.outputs.assemble_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12.10"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21.0.12"
+      - name: Cache pinned project tools
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            .cache/quality
+            .dev/jdk
+          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('scripts/toolchain.py', 'scripts/quality.py', 'dev/quality.py') }}
+      - run: python -I -X utf8 scripts/toolchain.py --ci
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+      - name: Java format, compiler lint and JUnit tests
         run: just java-check
       # Failures only: passing runs filled the org artifact quota for a week each.
       - name: Java test reports
@@ -149,6 +206,26 @@ jobs:
             client/build/test-results/
             client/build/reports/tests/
           retention-days: 7
+  # Single required status for branch protection: records the tested tree only
+  # when lint, test and java are all green (a lint-only green must never
+  # certify a tree whose tests failed).
+  check:
+    needs: [decide, lint, test, java]
+    if: always() && needs.decide.outputs.tested != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Require green lint, test and java
+        run: |
+          for result in '${{ needs.lint.result }}' '${{ needs.test.result }}' '${{ needs.java.result }}'; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "::error::lint/test/java result: $result"; exit 1 ;;
+            esac
+          done
       # Records the exact tree this green run tested. Main-push
       # and release lookups match it, so a merge skips even when the PR branch
       # itself was behind a main that has not moved since. Tiny file, short-lived.
