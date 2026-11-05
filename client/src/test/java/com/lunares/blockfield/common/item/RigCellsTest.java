@@ -55,6 +55,9 @@ class RigCellsTest {
         Field frozen = MappedRegistry.class.getDeclaredField("frozen");
         frozen.setAccessible(true);
         frozen.set(mapped, false);
+        // Holder-мапу трогаем только у ITEM: предмет создаёт intrusive holder в конструкторе,
+        // который freeze обнуляет. У остальных реестров сброс мапы ломает регистрацию.
+        if (registry != BuiltInRegistries.ITEM) return;
         Field intrusive = MappedRegistry.class.getDeclaredField("unregisteredIntrusiveHolders");
         intrusive.setAccessible(true);
         intrusive.set(mapped, new java.util.IdentityHashMap<>());
