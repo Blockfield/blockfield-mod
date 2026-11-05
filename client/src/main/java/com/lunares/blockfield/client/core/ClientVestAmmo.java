@@ -8,13 +8,9 @@ import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.client.Minecraft;
-import net.minecraft.core.component.DataComponents;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 
 /**
  * Клиентское чтение содержимого разгрузочного жилета (синк accessories). Нужно, чтобы гейт
@@ -64,48 +60,13 @@ public final class ClientVestAmmo {
     }
 
     /**
-     * Зеркало ChestRigManager.innerStacks: формат {stack: <полный ItemStack.save>} + старый {id,
-     * Count}.
+     * Nonempty rig cells through the shared reader (component first, legacy {@code custom_data}
+     * fallback while unmigrated rigs still sync).
      */
     private static java.util.List<ItemStack> innerStacks(ItemStack rig) {
-        java.util.List<ItemStack> slots = new java.util.ArrayList<>();
-        for (int i = 0; i < 9; i++) slots.add(ItemStack.EMPTY);
-        CompoundTag data =
-                rig.get(DataComponents.CUSTOM_DATA) == null
-                        ? null
-                        : rig.get(DataComponents.CUSTOM_DATA).copyTag();
-        if (data == null) return slots;
         var level = Minecraft.getInstance().level;
-        if (level == null) return slots;
-        Tag slotsTag = data.get("Slots");
-        if (!(slotsTag instanceof net.minecraft.nbt.ListTag list)) return slots;
-        for (int i = 0; i < list.size(); i++) {
-            CompoundTag entry = list.getCompound(i);
-            int slot = entry.getByte("Slot");
-            if (slot < 0 || slot >= 9) continue;
-            ItemStack stack = readStack(entry, level);
-            if (!stack.isEmpty()) slots.set(slot, stack);
-        }
-        return slots;
-    }
-
-    private static ItemStack readStack(CompoundTag entry, net.minecraft.world.level.Level level) {
-        ItemStack stack = readBase(entry, level);
-        // ChestRigManager keeps the real cell size in Amount: the item codec caps count at 99.
-        if (!stack.isEmpty() && entry.contains("Amount", Tag.TAG_INT))
-            stack.setCount(entry.getInt("Amount"));
-        return stack;
-    }
-
-    private static ItemStack readBase(CompoundTag entry, net.minecraft.world.level.Level level) {
-        if (entry.contains("stack", Tag.TAG_COMPOUND)) {
-            return ItemStack.parse(level.registryAccess(), entry.getCompound("stack"))
-                    .orElse(ItemStack.EMPTY);
-        }
-        ResourceLocation legacyId = ResourceLocation.tryParse(entry.getString("id"));
-        if (legacyId == null) return ItemStack.EMPTY;
-        var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(legacyId);
-        if (item == Items.AIR) return ItemStack.EMPTY;
-        return new ItemStack(item, entry.getInt("Count"));
+        if (level == null) return java.util.List.of();
+        return com.lunares.blockfield.common.item.ChestRigAmmo.storedStacks(
+                rig, level.registryAccess());
     }
 }

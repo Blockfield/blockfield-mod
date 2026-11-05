@@ -50,11 +50,19 @@ public final class ChestRigAmmo {
 
     /**
      * Nonempty rig cells, last entry per slot like ChestRigManager, Amount restored over the
-     * codec's 99 cap.
+     * codec's 99 cap. Reads the {@code rig_slots} component; rigs saved before the migration are
+     * still read from legacy {@code custom_data.Slots}.
      */
     public static java.util.List<ItemStack> storedStacks(
             ItemStack rig, HolderLookup.Provider registries) {
         if (rig.isEmpty() || !rig.is(ModItems.CHEST_RIG)) return java.util.List.of();
+        RigCells cells = rig.get(RigCells.TYPE);
+        if (cells != null) {
+            java.util.List<ItemStack> out = new java.util.ArrayList<>();
+            for (ItemStack cell : cells.unpack(ChestRigMenu.RIG_SLOT_COUNT))
+                if (!cell.isEmpty()) out.add(cell);
+            return out;
+        }
         ListTag entries =
                 rig.getOrDefault(DataComponents.CUSTOM_DATA, CustomData.EMPTY)
                         .copyTag()
