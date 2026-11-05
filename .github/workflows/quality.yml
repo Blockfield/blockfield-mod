@@ -167,6 +167,9 @@ jobs:
           key: oracle-mods-v1-${{ runner.os }}-${{ hashFiles('dev/oracle-mod-pins.gradle', 'build.gradle') }}
           restore-keys: |
             oracle-mods-v1-${{ runner.os }}-
+          # Save even when tests fail: without this a red run (e.g. 42050909939) stores
+          # nothing and the next run refetches every jar. Cached files are hash-verified.
+          save-always: true
       - if: needs.decide.outputs.java == 'true'
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Python and pure Java regression tests
@@ -213,6 +216,9 @@ jobs:
           key: oracle-mods-v1-${{ runner.os }}-${{ hashFiles('dev/oracle-mod-pins.gradle', 'build.gradle') }}
           restore-keys: |
             oracle-mods-v1-${{ runner.os }}-
+          # Save even when tests fail: without this a red run (e.g. 42050909939) stores
+          # nothing and the next run refetches every jar. Cached files are hash-verified.
+          save-always: true
       - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Java format, compiler lint and JUnit tests
         run: just java-check

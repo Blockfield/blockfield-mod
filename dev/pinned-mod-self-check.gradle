@@ -98,6 +98,33 @@ tasks.register('checkPinnedMod') {
                 assert actual.resolve('flaky').bytes == flakyBytes && flakyAttempts.get() == 3
                 println 'Pinned mod resolver: transient 504 retried with backoff, then resolved PASS'
             } finally { flakyServer.stop(0) }
+            // A CDN copy (mirrorUrl) is tried before the origin URL: the origin below 504s
+            // forever, so a resolver that ignores mirrorUrl fails this fixture (run 42054850560).
+            def cdnBytes = 'cdn mirrored JAR bytes'.getBytes('UTF-8')
+            def originHits = new java.util.concurrent.atomic.AtomicInteger()
+            def cdnServer = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress('127.0.0.1', 0), 0)
+            cdnServer.createContext('/cdn.jar', { exchange ->
+                try {
+                    exchange.sendResponseHeaders(200, cdnBytes.length)
+                    exchange.responseBody.withCloseable { it.write(cdnBytes) }
+                } finally { exchange.close() }
+            })
+            cdnServer.createContext('/origin.jar', { exchange ->
+                try { originHits.incrementAndGet(); exchange.sendResponseHeaders(504, -1) }
+                finally { exchange.close() }
+            })
+            cdnServer.start()
+            try {
+                def cdnBase = "http://127.0.0.1:${cdnServer.address.port}"
+                actual.pins.cdnFirst = [url: "${cdnBase}/origin.jar",
+                                        mirrorUrl: "${cdnBase}/cdn.jar", sha256: sha256(cdnBytes)]
+                assert actual.resolve('cdnFirst').bytes == cdnBytes && originHits.get() == 0
+                // A dead CDN must fall through to the origin URL, checksum still enforced.
+                actual.pins.cdnFallback = [url: direct.toURI().toASCIIString().replace('+', '%2B'),
+                                           mirrorUrl: "${cdnBase}/absent.jar", sha256: sha256(directBytes)]
+                assert actual.resolve('cdnFallback').bytes == directBytes
+                println 'Pinned mod resolver: CDN copy tried first, dead CDN falls back to origin PASS'
+            } finally { cdnServer.stop(0) }
             def loomJar = new File(work, 'newer-loom.jar')
             loomJar.withOutputStream { output ->
                 new java.util.zip.ZipOutputStream(output).withCloseable { zip ->
