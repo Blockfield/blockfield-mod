@@ -92,6 +92,21 @@ public final class CpSseClient {
     record StreamOutcome(int frames, boolean active) {}
 
     /**
+     * Split-credential form: the stream spends only the command bearer; the console-read bearer
+     * belongs to the server-side ConsoleLink and never leaves with this client.
+     */
+    public CpSseClient(
+            String baseUrl,
+            String agentId,
+            CpCredentials credentials,
+            CpStore store,
+            CpConsumer consumer,
+            Reporter reporter,
+            Clock clock) {
+        this(baseUrl, agentId, credentials.commandBearer(), store, consumer, reporter, clock);
+    }
+
+    /**
      * Snapshot, then stream until {@code stop} is set. Io failures back off and resume from the
      * durable cursor; any resync (epoch/generation/gap/conflict) re-snapshots before resuming. A
      * poison frame that fails contract parsing is warned and retried with backoff, never fatal: the
