@@ -367,5 +367,23 @@ class JavaFormatScope(unittest.TestCase):
             self.assertEqual(probe.stdout.strip(), ".githooks")
 
 
+class JavaImportOrderCheck(unittest.TestCase):
+    def test_check_java_mirrors_spotless_import_order(self):
+        # The AOSP pass skips import sorting, so an order-only-dirty file
+        # passes it yet fails Spotless; the second pass must catch that.
+        with (
+            patch.object(quality, "java_version"),
+            patch.object(quality, "download", return_value=Path("gjf.jar")),
+            patch.object(quality, "each") as each,
+        ):
+            quality.check_java(["common/src/main/Foo.java"])
+        self.assertEqual(each.call_count, 2)
+        first, second = (call.args[0] for call in each.call_args_list)
+        self.assertIn("--aosp", first)
+        self.assertIn("--skip-sorting-imports", first)
+        self.assertIn("--fix-imports-only", second)
+        self.assertNotIn("--aosp", second)
+
+
 if __name__ == "__main__":
     unittest.main()
