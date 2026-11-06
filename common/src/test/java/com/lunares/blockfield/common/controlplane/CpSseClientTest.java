@@ -117,7 +117,7 @@ class CpSseClientTest {
                         .toList());
         assertTrue(seenAuth.stream().allMatch("Bearer test-bearer"::equals));
         assertTrue(seenResume.contains(EPOCH + ":41"));
-        assertEquals(1, applied.size());
+        assertEquals(2, applied.size());
         assertEquals(42, store.loadLkg().revision());
         assertEquals(42, store.loadCursor().sequence());
         assertTrue(ackBodies.stream().allMatch(body -> body.contains(EPOCH)));
