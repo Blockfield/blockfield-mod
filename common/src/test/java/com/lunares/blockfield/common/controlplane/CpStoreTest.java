@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.google.gson.JsonObject;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -43,18 +44,64 @@ class CpStoreTest {
     }
 
     @Test
-    void lastKnownGoodRoundTrips() {
-        assertNull(store.loadLkg());
+    void lastKnownGoodRoundTripsPerNamespaceTarget() {
+        assertNull(store.loadLkg("gameplay", "*"));
 
         JsonObject payload = new JsonObject();
         payload.addProperty("a", 1);
-        store.saveLkg(41, payload);
+        store.saveLkg("gameplay", "*", 41, payload);
 
-        CpStore.Lkg lkg = store.loadLkg();
+        JsonObject arena = new JsonObject();
+        arena.addProperty("b", 2);
+        store.saveLkg("gameplay", "arena", 3, arena);
+
+        CpStore.Lkg lkg = store.loadLkg("gameplay", "*");
         assertEquals(41, lkg.revision());
         assertEquals(64, lkg.sha256().length());
         assertEquals(payload.toString(), lkg.payloadJson());
+        assertEquals(3, store.loadLkg("gameplay", "arena").revision());
         assertTrue(Files.isRegularFile(directory.resolve("cp/lkg.json")));
+    }
+
+    @Test
+    void cursorIfForwardSkipsUnchangedRepeat() {
+        store.saveCursor("epoch-a", 7);
+
+        store.saveCursorIfForward("epoch-a", 7);
+        store.saveCursorIfForward("epoch-a", 3);
+
+        assertEquals(7, store.loadCursor().sequence());
+        store.saveCursorIfForward("epoch-a", 8);
+        assertEquals(8, store.loadCursor().sequence());
+        store.saveCursorIfForward("epoch-b", 1);
+        assertEquals("epoch-b", store.loadCursor().epoch());
+    }
+
+    @Test
+    void pendingAcksRoundTrip() {
+        assertTrue(store.loadPendingAcks().isEmpty());
+
+        store.savePendingAcks(List.of("{\"state\":\"received\"}", "{\"state\":\"effective\"}"));
+
+        assertEquals(2, store.loadPendingAcks().size());
+        store.clearPendingAcks();
+        assertTrue(store.loadPendingAcks().isEmpty());
+    }
+
+    @Test
+    void operatorMarkersStickUntilCleared() {
+        assertFalse(store.hasOperatorNeeded());
+        assertFalse(store.isOperatorNeeded("gameplay", "*", 5));
+
+        store.markOperatorNeeded("gameplay", "*", 5);
+
+        assertTrue(store.hasOperatorNeeded());
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 5));
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 4));
+        assertFalse(store.isOperatorNeeded("gameplay", "*", 6));
+        assertFalse(store.isOperatorNeeded("gameplay", "arena", 5));
+        store.clearOperatorNeeded("gameplay", "*");
+        assertFalse(store.hasOperatorNeeded());
     }
 
     @Test

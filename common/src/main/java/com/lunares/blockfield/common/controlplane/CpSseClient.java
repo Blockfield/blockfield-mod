@@ -1,12 +1,16 @@
 package com.lunares.blockfield.common.controlplane;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.StringReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -62,23 +66,47 @@ public final class CpSseClient {
                         .build();
     }
 
+    /** Outcome of one {@code /events} connection: frames applied, and any line seen. */
+    record StreamOutcome(int frames, boolean active) {}
+
     /**
      * Snapshot, then stream until {@code stop} is set. Io failures back off and resume from the
-     * durable cursor; epoch/generation changes re-snapshot. Returns when stopped.
+     * durable cursor; any resync (epoch/generation/gap/conflict) re-snapshots before resuming. A
+     * poison frame that fails contract parsing is warned and retried with backoff, never fatal: the
+     * cursor does not advance past it, so it replays until an operator reconciles it. Keep-alive
+     * comments refresh liveness: a connection that carried any line resumes without growing the
+     * backoff; only a totally silent close backs off. Returns when stopped.
      */
     public void run(AtomicBoolean stop) {
         long backoff = BACKOFF_MIN_MILLIS;
+        boolean needsSnapshot = true;
         while (!stop.get()) {
             try {
-                CpStore.Cursor cursor = store.loadCursor();
-                if (cursor.sequence() == 0 || cursor.epoch().isEmpty()) {
+                if (needsSnapshot) {
                     resnapshot();
+                    needsSnapshot = false;
+                    dropRetiredPendings();
                 }
-                stream(stop);
-                backoff = BACKOFF_MIN_MILLIS;
+                flushPendingAcks();
+                StreamOutcome outcome = stream(stop);
+                if (outcome.frames() > 0) {
+                    backoff = BACKOFF_MIN_MILLIS;
+                } else if (outcome.active()) {
+                    backoff = BACKOFF_MIN_MILLIS;
+                    if (!sleep(backoff, stop)) return;
+                } else {
+                    if (!sleep(backoff, stop)) return;
+                    backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
+                }
             } catch (CpResyncException e) {
                 reporter.warn("control-plane resync: " + e.getMessage(), e);
-                backoff = BACKOFF_MIN_MILLIS;
+                needsSnapshot = true;
+                if (!sleep(backoff, stop)) return;
+                backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
+            } catch (RuntimeException e) {
+                reporter.warn("control-plane consumer failed, retrying", e);
+                if (!sleep(backoff, stop)) return;
+                backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
             } catch (IOException | InterruptedException e) {
                 if (stop.get() || e instanceof InterruptedException) {
                     Thread.currentThread().interrupt();
@@ -111,7 +139,7 @@ public final class CpSseClient {
         for (String error : report.errors()) reporter.info("control-plane snapshot: " + error);
     }
 
-    private void stream(AtomicBoolean stop) throws IOException, InterruptedException {
+    StreamOutcome stream(AtomicBoolean stop) throws IOException, InterruptedException {
         CpStore.Cursor cursor = store.loadCursor();
         HttpRequest request =
                 HttpRequest.newBuilder(
@@ -129,52 +157,108 @@ public final class CpSseClient {
                         .header("Last-Event-ID", cursor.epoch() + ":" + cursor.sequence())
                         .GET()
                         .build();
-        HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<InputStream> response =
+                http.send(request, HttpResponse.BodyHandlers.ofInputStream());
         if (response.statusCode() == 409) {
-            store.saveCursor(cursor.epoch(), cursor.sequence());
+            response.body().close();
             throw new CpResyncException("events refused, snapshot required");
         }
         if (response.statusCode() != 200) {
+            response.body().close();
             throw new IOException("events HTTP " + response.statusCode());
         }
-        dispatchEvents(response.body(), stop);
-    }
-
-    void dispatchEvents(String body, AtomicBoolean stop) throws IOException, InterruptedException {
-        String event = "message";
-        List<String> data = new ArrayList<>();
-        try (BufferedReader lines = new BufferedReader(new StringReader(body))) {
+        int frames = 0;
+        boolean active = false;
+        try (InputStream in = response.body();
+                BufferedReader lines =
+                        new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
+            String event = "message";
+            List<String> data = new ArrayList<>();
             String line;
             while (!stop.get() && (line = lines.readLine()) != null) {
+                active = true;
                 if (line.startsWith(":")) continue;
                 if (line.startsWith("event:")) {
                     event = line.substring("event:".length()).trim();
                 } else if (line.startsWith("data:")) {
                     data.add(line.substring("data:".length()).trim());
                 } else if (line.isEmpty()) {
-                    dispatch(event, String.join("\n", data));
+                    if (dispatch(event, String.join("\n", data))) frames++;
                     event = "message";
                     data.clear();
                 }
             }
         }
+        return new StreamOutcome(frames, active);
     }
 
-    private void dispatch(String event, String data) throws IOException, InterruptedException {
-        if (data.isEmpty()) return;
+    /**
+     * Re-post ack chains that were generated but never accepted (crash or failed POST), in exact
+     * bytes so server duplicates succeed. Runs before every stream; the cursor only advances in
+     * {@link #dispatch} after all acks of a frame are accepted.
+     */
+    void flushPendingAcks() throws IOException, InterruptedException {
+        List<String> pendings = store.loadPendingAcks();
+        if (pendings.isEmpty()) return;
+        for (String body : pendings) postAckJson(body);
+        commit(firstIdentity(pendings.get(0)));
+        store.clearPendingAcks();
+    }
+
+    /**
+     * An epoch rotation retires old-epoch frames: the server only accepts terminal receipts with a
+     * historical identity, never our non-terminal chain. Drop the retired pendings loudly; the
+     * local terminal receipts stay in the journal and the fresh snapshot replays what is needed.
+     */
+    private void dropRetiredPendings() {
+        List<String> pendings = store.loadPendingAcks();
+        if (pendings.isEmpty()) return;
+        String pendingEpoch = firstIdentity(pendings.get(0)).epoch();
+        if (pendingEpoch.equals(consumer.epoch())) return;
+        reporter.warn(
+                "control-plane dropped " + pendings.size() + " retired pending acks",
+                new CpResyncException(
+                        "pending epoch " + pendingEpoch + " retired by " + consumer.epoch()));
+        store.clearPendingAcks();
+    }
+
+    private static AckIdentity firstIdentity(String body) {
+        JsonObject ack = JsonParser.parseString(body).getAsJsonObject();
+        return new AckIdentity(ack.get("epoch").getAsString(), ack.get("sequence").getAsLong());
+    }
+
+    private record AckIdentity(String epoch, long sequence) {}
+
+    /** Advance the cursor only after the full ack chain was accepted. Never moves backwards. */
+    private void commit(AckIdentity identity) {
+        store.saveCursorIfForward(identity.epoch(), identity.sequence());
+    }
+
+    private boolean dispatch(String event, String data) throws IOException, InterruptedException {
+        if (data.isEmpty()) return false;
         if ("resync".equals(event)) throw new CpResyncException("server asked to resync");
-        if (!"control".equals(event)) return;
+        if (!"control".equals(event)) return false;
         List<CpAck> acks = consumer.onFrame(data);
+        List<String> bodies = new ArrayList<>();
+        for (CpAck ack : acks) bodies.add(ack.toJson());
+        store.savePendingAcks(bodies);
         for (CpAck ack : acks) postAck(ack);
+        commit(new AckIdentity(acks.get(0).epoch.toString(), acks.get(0).sequence));
+        store.clearPendingAcks();
+        return true;
     }
 
     void postAck(CpAck ack) throws IOException, InterruptedException {
+        postAckJson(ack.toJson());
+    }
+
+    void postAckJson(String body) throws IOException, InterruptedException {
         HttpRequest request =
                 HttpRequest.newBuilder(URI.create(baseUrl + "/v2/agents/" + agentId + "/acks"))
                         .timeout(READ_TIMEOUT)
                         .header("Authorization", "Bearer " + bearer)
                         .header("Content-Type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString(ack.toJson()))
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
                         .build();
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() == 409) {

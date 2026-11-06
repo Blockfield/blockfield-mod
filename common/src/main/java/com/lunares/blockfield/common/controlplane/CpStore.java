@@ -1,5 +1,7 @@
 package com.lunares.blockfield.common.controlplane;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import java.io.IOException;
@@ -58,22 +60,97 @@ public final class CpStore {
         writeAtomic(dir.resolve("cursor"), epoch + ":" + sequence);
     }
 
-    public synchronized Lkg loadLkg() {
-        Path file = dir.resolve("lkg.json");
-        if (!Files.isRegularFile(file)) return null;
-        JsonObject root = JsonParser.parseString(read(file)).getAsJsonObject();
+    /**
+     * Snapshot/stream resoaking: adopt the server cursor only when it moves us forward. A repeated
+     * snapshot with an unchanged cursor is a no-op instead of a throw.
+     */
+    public synchronized void saveCursorIfForward(String epoch, long sequence) {
+        Cursor current = loadCursor();
+        if (current.epoch().equals(epoch) && sequence <= current.sequence()) return;
+        writeAtomic(dir.resolve("cursor"), epoch + ":" + sequence);
+    }
+
+    /** Last-known-good and its revision, keyed by namespace/target pair. */
+    public synchronized Lkg loadLkg(String namespace, String target) {
+        JsonObject all = readJsonObject(dir.resolve("lkg.json"));
+        if (all == null) return null;
+        JsonElement entry = all.get(key(namespace, target));
+        if (entry == null || !entry.isJsonObject()) return null;
+        JsonObject root = entry.getAsJsonObject();
         return new Lkg(
                 root.get("revision").getAsLong(),
                 root.get("sha256").getAsString(),
                 root.get("payload").toString());
     }
 
-    public synchronized void saveLkg(long revision, JsonObject payload) {
+    public synchronized void saveLkg(
+            String namespace, String target, long revision, JsonObject payload) {
+        JsonObject all = readJsonObject(dir.resolve("lkg.json"));
+        if (all == null) all = new JsonObject();
         JsonObject root = new JsonObject();
         root.addProperty("revision", revision);
         root.addProperty("sha256", sha256(payload.toString()));
         root.add("payload", payload);
-        writeAtomic(dir.resolve("lkg.json"), root.toString());
+        all.add(key(namespace, target), root);
+        writeAtomic(dir.resolve("lkg.json"), all.toString());
+    }
+
+    /** Snapshot revisions whose effect is uncertain: applied once, then skipped, never retried. */
+    public synchronized void markOperatorNeeded(String namespace, String target, long revision) {
+        JsonObject all = readJsonObject(dir.resolve("operator.json"));
+        if (all == null) all = new JsonObject();
+        String k = key(namespace, target);
+        long marked = all.has(k) ? all.get(k).getAsLong() : Long.MIN_VALUE;
+        if (revision > marked) {
+            all.addProperty(k, revision);
+            writeAtomic(dir.resolve("operator.json"), all.toString());
+        }
+    }
+
+    public synchronized boolean isOperatorNeeded(String namespace, String target, long revision) {
+        JsonObject all = readJsonObject(dir.resolve("operator.json"));
+        return all != null
+                && all.has(key(namespace, target))
+                && revision <= all.get(key(namespace, target)).getAsLong();
+    }
+
+    public synchronized boolean hasOperatorNeeded() {
+        JsonObject all = readJsonObject(dir.resolve("operator.json"));
+        return all != null && !all.isEmpty();
+    }
+
+    /** A newer applied revision moots older uncertainty markers for the pair. */
+    public synchronized void clearOperatorNeeded(String namespace, String target) {
+        JsonObject all = readJsonObject(dir.resolve("operator.json"));
+        if (all != null && all.has(key(namespace, target))) {
+            all.remove(key(namespace, target));
+            writeAtomic(dir.resolve("operator.json"), all.toString());
+        }
+    }
+
+    /** Ack chain generated but not yet accepted by the server; flushed before the next stream. */
+    public synchronized void savePendingAcks(List<String> ackJson) {
+        JsonArray array = new JsonArray();
+        for (String body : ackJson) array.add(JsonParser.parseString(body));
+        writeAtomic(dir.resolve("pending-acks.json"), array.toString());
+    }
+
+    public synchronized List<String> loadPendingAcks() {
+        Path file = dir.resolve("pending-acks.json");
+        if (!Files.isRegularFile(file)) return List.of();
+        List<String> out = new ArrayList<>();
+        for (JsonElement entry : JsonParser.parseString(read(file)).getAsJsonArray()) {
+            out.add(entry.toString());
+        }
+        return out;
+    }
+
+    public synchronized void clearPendingAcks() {
+        try {
+            Files.deleteIfExists(dir.resolve("pending-acks.json"));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
     }
 
     public synchronized void recordReceipt(
@@ -138,6 +215,16 @@ public final class CpStore {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    private static String key(String namespace, String target) {
+        return namespace + "/" + target;
+    }
+
+    private JsonObject readJsonObject(Path file) {
+        if (!Files.isRegularFile(file)) return null;
+        JsonElement root = JsonParser.parseString(read(file));
+        return root.isJsonObject() ? root.getAsJsonObject() : null;
     }
 
     private void writeAtomic(Path file, String text) {
