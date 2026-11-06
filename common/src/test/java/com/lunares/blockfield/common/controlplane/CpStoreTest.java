@@ -3,14 +3,14 @@ package com.lunares.blockfield.common.controlplane;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.google.gson.JsonObject;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Durable state: atomic writes, forward-only cursor, receipt journal. */
+/** Durable state: one atomic file, forward-only cursor, terminal receipts keyed by operation. */
 class CpStoreTest {
     @TempDir Path directory;
 
@@ -25,22 +25,37 @@ class CpStoreTest {
     void cursorStartsEmptyAndMovesForwardOnly() {
         assertEquals(0, store.loadCursor().sequence());
 
-        store.saveCursor("epoch-a", 7);
+        store.saveCursorIfForward("epoch-a", 7);
 
         assertEquals("epoch-a", store.loadCursor().epoch());
         assertEquals(7, store.loadCursor().sequence());
-        assertThrows(IllegalStateException.class, () -> store.saveCursor("epoch-a", 7));
-        assertThrows(IllegalStateException.class, () -> store.saveCursor("epoch-a", 3));
+        store.saveCursorIfForward("epoch-a", 7);
+        store.saveCursorIfForward("epoch-a", 3);
+        assertEquals(7, store.loadCursor().sequence());
+        store.saveCursorIfForward("epoch-a", 8);
+        assertEquals(8, store.loadCursor().sequence());
     }
 
     @Test
     void epochChangeResetsSequenceSpace() {
-        store.saveCursor("epoch-a", 7);
+        store.saveCursorIfForward("epoch-a", 7);
 
-        store.saveCursor("epoch-b", 1);
+        store.saveCursorIfForward("epoch-b", 1);
 
         assertEquals("epoch-b", store.loadCursor().epoch());
         assertEquals(1, store.loadCursor().sequence());
+    }
+
+    @Test
+    void stateLivesInOneFile() {
+        store.saveCursorIfForward("epoch-a", 7);
+        JsonObject payload = new JsonObject();
+        payload.addProperty("a", 1);
+        store.saveAppliedSnapshot("gameplay", "*", 41, payload);
+
+        assertTrue(Files.isRegularFile(directory.resolve("cp/state.json")));
+        assertFalse(Files.exists(directory.resolve("cp/receipts.jsonl")));
+        assertFalse(Files.exists(directory.resolve("cp/pending-acks.json")));
     }
 
     @Test
@@ -49,43 +64,45 @@ class CpStoreTest {
 
         JsonObject payload = new JsonObject();
         payload.addProperty("a", 1);
-        store.saveLkg("gameplay", "*", 41, payload);
+        store.saveAppliedSnapshot("gameplay", "*", 41, payload);
 
         JsonObject arena = new JsonObject();
         arena.addProperty("b", 2);
-        store.saveLkg("gameplay", "arena", 3, arena);
+        store.saveAppliedSnapshot("gameplay", "arena", 3, arena);
 
         CpStore.Lkg lkg = store.loadLkg("gameplay", "*");
         assertEquals(41, lkg.revision());
         assertEquals(64, lkg.sha256().length());
         assertEquals(payload.toString(), lkg.payloadJson());
         assertEquals(3, store.loadLkg("gameplay", "arena").revision());
-        assertTrue(Files.isRegularFile(directory.resolve("cp/lkg.json")));
     }
 
     @Test
-    void cursorIfForwardSkipsUnchangedRepeat() {
-        store.saveCursor("epoch-a", 7);
-
+    void epochChangeDropsStaleTerminalsAndMarkers() {
         store.saveCursorIfForward("epoch-a", 7);
-        store.saveCursorIfForward("epoch-a", 3);
+        store.recordTerminal(
+                "epoch-a", "op-1", 7, CpAck.State.UNKNOWN, CpAck.Result.EFFECT_UNCERTAIN);
+        store.markActionStarted("epoch-a", "op-1", "moderation.kick");
+        store.markOperatorNeeded("gameplay", "*", 7);
 
-        assertEquals(7, store.loadCursor().sequence());
-        store.saveCursorIfForward("epoch-a", 8);
-        assertEquals(8, store.loadCursor().sequence());
         store.saveCursorIfForward("epoch-b", 1);
+
+        assertNull(store.lastTerminal("epoch-a", "op-1"));
+        assertFalse(store.isActionStarted("epoch-a", "op-1"));
+        assertFalse(store.hasOperatorNeeded());
         assertEquals("epoch-b", store.loadCursor().epoch());
+        assertEquals(1, store.loadCursor().sequence());
     }
 
     @Test
-    void pendingAcksRoundTrip() {
-        assertTrue(store.loadPendingAcks().isEmpty());
+    void uncertainMarkerIsMonotonic() {
+        store.markOperatorNeeded("gameplay", "*", 50);
 
-        store.savePendingAcks(List.of("{\"state\":\"received\"}", "{\"state\":\"effective\"}"));
+        store.saveUncertainFrame(
+                "gameplay", "*", 42, "epoch-a", "op-42", 42, CpAck.Result.EFFECT_UNCERTAIN);
 
-        assertEquals(2, store.loadPendingAcks().size());
-        store.clearPendingAcks();
-        assertTrue(store.loadPendingAcks().isEmpty());
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 50));
+        assertFalse(store.isOperatorNeeded("gameplay", "*", 51));
     }
 
     @Test
@@ -105,15 +122,57 @@ class CpStoreTest {
     }
 
     @Test
-    void receiptsKeepLatestStatePerSequence() {
-        assertNull(store.lastReceipt(9));
+    void terminalsKeyedByEpochAndOperation() {
+        assertNull(store.lastTerminal("epoch-a", "op-1"));
 
-        store.recordReceipt("op-1", 9, CpAck.State.RECEIVED, CpAck.Result.OK);
-        store.recordReceipt("op-1", 9, CpAck.State.EFFECTIVE, CpAck.Result.OK);
+        store.recordTerminal("epoch-a", "op-1", 9, CpAck.State.EFFECTIVE, CpAck.Result.OK);
+        // Same sequence in a new epoch is a different operation, never a replay.
+        assertNull(store.lastTerminal("epoch-b", "op-1"));
+        store.recordTerminal("epoch-b", "op-2", 9, CpAck.State.REJECTED, CpAck.Result.OK);
 
-        CpStore.Receipt receipt = store.lastReceipt(9);
-        assertEquals("op-1", receipt.operationId());
-        assertEquals(CpAck.State.EFFECTIVE, receipt.outcome().state());
-        assertEquals(2, store.receipts().size());
+        CpStore.Terminal terminal = store.lastTerminal("epoch-a", "op-1");
+        assertEquals("op-1", terminal.operationId());
+        assertEquals(CpAck.State.EFFECTIVE, terminal.state());
+        assertEquals(CpAck.State.REJECTED, store.lastTerminal("epoch-b", "op-2").state());
+        assertTrue(store.hasTerminalState(CpAck.State.EFFECTIVE));
+        assertFalse(store.hasTerminalState(CpAck.State.UNKNOWN));
+    }
+
+    @Test
+    void startedActionsStick() {
+        assertFalse(store.isActionStarted("epoch-a", "op-9"));
+
+        store.markActionStarted("epoch-a", "op-9", "moderation.kick");
+
+        assertTrue(store.isActionStarted("epoch-a", "op-9"));
+        assertFalse(store.isActionStarted("epoch-a", "op-10"));
+        assertFalse(store.isActionStarted("epoch-b", "op-9"));
+    }
+
+    @Test
+    void actionOperatorMarkers() {
+        assertFalse(store.hasOperatorNeeded());
+
+        store.markActionOperatorNeeded("op-9");
+
+        assertTrue(store.hasOperatorNeeded());
+        assertTrue(store.isActionOperatorNeeded("op-9"));
+        assertFalse(store.isActionOperatorNeeded("op-10"));
+    }
+
+    @Test
+    void corruptStateFailsClosedToEmpty() throws Exception {
+        Path dir = directory.resolve("cp-corrupt");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("state.json"), "{\"epoch\":", StandardCharsets.UTF_8);
+        CpStore broken = new CpStore(dir);
+
+        assertEquals(0, broken.loadCursor().sequence());
+        assertNull(broken.loadLkg("gameplay", "*"));
+        assertNull(broken.lastTerminal("epoch-a", "op-1"));
+        assertFalse(broken.hasOperatorNeeded());
+
+        broken.saveCursorIfForward("epoch-a", 1);
+        assertEquals(1, broken.loadCursor().sequence());
     }
 }
