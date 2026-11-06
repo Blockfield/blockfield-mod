@@ -63,7 +63,7 @@ SHA256 всего архива, затем прежний SHA256 конкрет�
   `core/Room` (комната = измерение Fantasy `blockfield:<map>_<n>` из эталона `maps/<map>/`, см. `MatchWorld`),
   `core/Hub` (лобби в overworld, планшет, жилет), `core/CombatKitManager` (киты из `blockfield/classes/*.json`),
   `core/ChestRigManager` + `ChestRigAccessory` + `AccessoriesBridge` (разгрузочный жилет = слот Accessories `rig`,
-  патроны в `custom_data.Slots`), `modes/campaign/CampaignMode` (голосование, точки, билеты, UI),
+  патроны в компоненте `blockfield:rig_slots`), `modes/campaign/CampaignMode` (голосование, точки, билеты, UI),
   `mixin/tacz/*` (патроны из жилета для TACZ), `mixin/{DoorBlock,TrapDoorBlock}Mixin` (железные двери руками),
   `DedicatedServerMixin` (spawn protection выкл.), `PlayerDropMixin` (нельзя выбрасывать снаряжение).
   Стекло над маяком (`CampaignMode.isBeaconGlass`) защищено от пуль TACZ (`tacz/DestroyGlassBlockMixin`), пуль
