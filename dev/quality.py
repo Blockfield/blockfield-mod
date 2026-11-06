@@ -451,6 +451,15 @@ def main(argv=None):
     if args.command == "lint":
         # actionlint only shellchecks run: blocks when it finds shellcheck; the pinned one is not on PATH.
         run("actionlint", "-shellcheck", tool("shellcheck"))
+        # Thin Workshop layer gate (S233-U1): no combat/client/game imports or
+        # game-packet references in the workshop closure (fast, no Gradle).
+        run(
+            sys.executable,
+            "-I",
+            "-X",
+            "utf8",
+            "dev/workshop-thin-check.py",
+        )
         if python:
             each(["ruff", "check"], python)
         if shell:

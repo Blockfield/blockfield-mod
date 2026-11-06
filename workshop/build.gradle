@@ -1,0 +1,29 @@
+base { archivesName = 'blockfield-workshop' }
+
+// Thin Workshop layer (S233-U1): compiles exactly workshop/thin.txt out of
+// :common (no copy, no move — the server still consumes :common sources and
+// filters the game jars per its workshop-keep.txt). The game entrypoint,
+// gate, Workshop, Playtest and map-config classes live in the private server
+// repo and ride the server-assembled thin jar, so this module declares no
+// entrypoints: its fabric.mod.json only pins the mod id (a duplicate id with
+// the game jars fails closed if both are ever installed together).
+def thin = file('thin.txt').readLines().collect { it.strip() }.findAll { it && !it.startsWith('#') }
+
+sourceSets {
+    main {
+        java {
+            srcDir rootProject.file('common/src/main/java')
+            include thin
+        }
+    }
+}
+
+dependencies {
+    // register() names game-only packets in dead code that never runs on the
+    // Workshop profile (only registerWorkshop() does); resolving those names
+    // needs :common's full API. What ships is still only `thin` (own output).
+    implementation(project(path: ':common', configuration: 'namedElements')) { transitive = false }
+}
+
+tasks.named('runClient') { enabled = false }
+tasks.named('runServer') { enabled = false }
