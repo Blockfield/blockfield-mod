@@ -90,8 +90,8 @@ public final class HitregTelemetry {
     }
 
     /**
-     * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code
-     * disputesDropped}. Values must be String, Number, Boolean, List or Map.
+     * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code disputesDropped}.
+     * Values must be String, Number, Boolean, List or Map.
      */
     public boolean noteDispute(Map<String, Object> sample) {
         if (disputes.size() >= MAX_DISPUTES) {
@@ -215,7 +215,9 @@ public final class HitregTelemetry {
                     shots,
                     fallbackShare(),
                     tickMsP50(),
-                    tickMsP99() == Double.POSITIVE_INFINITY ? "inf" : String.format("%.1f", tickMsP99()),
+                    tickMsP99() == Double.POSITIVE_INFINITY
+                            ? "inf"
+                            : String.format("%.1f", tickMsP99()),
                     ageP50(),
                     rewindP50(),
                     countersText,
