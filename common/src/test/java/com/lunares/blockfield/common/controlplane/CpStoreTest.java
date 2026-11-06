@@ -78,6 +78,34 @@ class CpStoreTest {
     }
 
     @Test
+    void epochChangeDropsStaleTerminalsAndMarkers() {
+        store.saveCursorIfForward("epoch-a", 7);
+        store.recordTerminal(
+                "epoch-a", "op-1", 7, CpAck.State.UNKNOWN, CpAck.Result.EFFECT_UNCERTAIN);
+        store.markActionStarted("epoch-a", "op-1", "moderation.kick");
+        store.markOperatorNeeded("gameplay", "*", 7);
+
+        store.saveCursorIfForward("epoch-b", 1);
+
+        assertNull(store.lastTerminal("epoch-a", "op-1"));
+        assertFalse(store.isActionStarted("epoch-a", "op-1"));
+        assertFalse(store.hasOperatorNeeded());
+        assertEquals("epoch-b", store.loadCursor().epoch());
+        assertEquals(1, store.loadCursor().sequence());
+    }
+
+    @Test
+    void uncertainMarkerIsMonotonic() {
+        store.markOperatorNeeded("gameplay", "*", 50);
+
+        store.saveUncertainFrame(
+                "gameplay", "*", 42, "epoch-a", "op-42", 42, CpAck.Result.EFFECT_UNCERTAIN);
+
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 50));
+        assertFalse(store.isOperatorNeeded("gameplay", "*", 51));
+    }
+
+    @Test
     void operatorMarkersStickUntilCleared() {
         assertFalse(store.hasOperatorNeeded());
         assertFalse(store.isOperatorNeeded("gameplay", "*", 5));

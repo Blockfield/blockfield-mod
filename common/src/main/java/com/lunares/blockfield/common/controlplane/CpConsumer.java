@@ -65,6 +65,11 @@ public final class CpConsumer {
         return epoch;
     }
 
+    /** One audience rule for snapshots and frames: missing counts as mismatch when configured. */
+    private boolean audienceMismatch(String audience) {
+        return expectedAudience != null && !expectedAudience.equals(audience);
+    }
+
     public record SnapshotReport(List<String> errors) {}
 
     /** Frame identity for the durable terminal record; null on the snapshot path. */
@@ -85,9 +90,7 @@ public final class CpConsumer {
         String snapshotEpoch = CpEnvelope.requiredString(root, "epoch");
         String snapshotGeneration = CpEnvelope.requiredString(root, "generation");
         long snapshotCursor = CpEnvelope.requiredLong(root, "cursor", 0);
-        if (expectedAudience != null
-                && root.has("audience")
-                && !expectedAudience.equals(stringField(root, "audience"))) {
+        if (audienceMismatch(stringField(root, "audience"))) {
             throw new CpResyncException("snapshot audience mismatch, refusing to adopt it");
         }
         List<String> errors = new ArrayList<>();
@@ -142,7 +145,7 @@ public final class CpConsumer {
         if (generation == null || !generation.equals(frame.generation)) {
             throw new CpResyncException("frame generation is not the snapshotted one");
         }
-        if (expectedAudience != null && !expectedAudience.equals(frame.audience)) {
+        if (audienceMismatch(frame.audience)) {
             return terminal(
                     frame,
                     CpAck.State.REJECTED,

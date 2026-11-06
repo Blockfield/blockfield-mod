@@ -47,12 +47,19 @@ public final class CpStore {
 
     /**
      * Cursors only move forward; an epoch change resets the sequence space. A repeated snapshot
-     * with an unchanged cursor is a no-op instead of a throw.
+     * with an unchanged cursor is a no-op instead of a throw. Adopting a new epoch drops the old
+     * epoch's terminals, started actions and operator markers: stale decisions must never block the
+     * new epoch (its reconciliation happens at rotation, per the v2 contract).
      */
     public synchronized void saveCursorIfForward(String epoch, long sequence) {
         Cursor current = loadCursor();
         if (current.epoch().equals(epoch) && sequence <= current.sequence()) return;
         JsonObject state = load();
+        if (!current.epoch().equals(epoch)) {
+            state.remove("terminal");
+            state.remove("started");
+            state.remove("operator");
+        }
         state.addProperty("epoch", epoch);
         state.addProperty("cursor", sequence);
         save(state);
@@ -102,7 +109,8 @@ public final class CpStore {
 
     /**
      * Effect-uncertain settings frame: operator marker plus terminal receipt, one write, so a
-     * replay re-posts UNKNOWN instead of re-applying blindly.
+     * replay re-posts UNKNOWN instead of re-applying blindly. The marker is monotonic through the
+     * same max logic as {@link #markOperatorNeeded}, never downgraded.
      */
     public synchronized void saveUncertainFrame(
             String namespace,
@@ -113,7 +121,7 @@ public final class CpStore {
             long sequence,
             CpAck.Result result) {
         JsonObject state = load();
-        operator(state).addProperty(key(namespace, target), revision);
+        markMax(operator(state), key(namespace, target), revision);
         terminal(state)
                 .add(
                         terminalKey(epoch, operationId),
@@ -181,12 +189,7 @@ public final class CpStore {
     /** Snapshot revisions whose effect is uncertain: applied once, then skipped, never retried. */
     public synchronized void markOperatorNeeded(String namespace, String target, long revision) {
         JsonObject state = load();
-        String k = key(namespace, target);
-        long marked = numberField(operator(state), k, Long.MIN_VALUE);
-        if (revision > marked) {
-            operator(state).addProperty(k, revision);
-            save(state);
-        }
+        if (markMax(operator(state), key(namespace, target), revision)) save(state);
     }
 
     public synchronized boolean isOperatorNeeded(String namespace, String target, long revision) {
@@ -230,6 +233,15 @@ public final class CpStore {
 
     private static String terminalKey(String epoch, String operationId) {
         return epoch + "|" + operationId;
+    }
+
+    /** Monotonic marker write: the single writer for operator revisions, never downgrades. */
+    private static boolean markMax(JsonObject operator, String k, long revision) {
+        if (revision > numberField(operator, k, Long.MIN_VALUE)) {
+            operator.addProperty(k, revision);
+            return true;
+        }
+        return false;
     }
 
     private static JsonObject lkgEntry(long revision, JsonObject payload) {

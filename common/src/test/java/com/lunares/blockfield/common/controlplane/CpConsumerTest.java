@@ -292,8 +292,8 @@ class CpConsumerTest {
 
     @Test
     void oldEpochReceiptDoesNotShadowNewEpochFrame() {
-        store.recordTerminal(EPOCH, "op-old", 1, CpAck.State.EFFECTIVE, CpAck.Result.OK);
         consumer.onSnapshot(snapshotWithCursor(OTHER_EPOCH, GENERATION, 0, 41));
+        store.recordTerminal(OTHER_EPOCH, "op-old", 1, CpAck.State.EFFECTIVE, CpAck.Result.OK);
         applier.calls.clear();
 
         List<CpAck> acks =
@@ -478,6 +478,59 @@ class CpConsumerTest {
         assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
         assertEquals(CpAck.Result.EFFECT_UNCERTAIN, acks.get(acks.size() - 1).result);
         assertTrue(store.isOperatorNeeded("gameplay", "*", 42));
+    }
+
+    @Test
+    void missingSnapshotAudienceRejectedWhenConfigured() {
+        JsonArray settings = new JsonArray();
+        settings.add(snapshotEntry("*", 42, gameplayValue(false)));
+        JsonObject root = new JsonObject();
+        root.addProperty("schema", 2);
+        root.addProperty("epoch", EPOCH);
+        root.addProperty("generation", GENERATION);
+        root.addProperty("cursor", 41);
+        root.add("settings", settings);
+
+        assertThrows(CpResyncException.class, () -> consumer.onSnapshot(root.toString()));
+        assertTrue(applier.calls.isEmpty(), "audience-less snapshot was applied");
+        assertEquals(41, store.loadLkg("gameplay", "*").revision());
+        assertEquals(41, store.loadCursor().sequence());
+    }
+
+    @Test
+    void uncertainMarkerNeverDowngraded() {
+        applier.throwOnApply = true;
+        consumer.onSnapshot(snapshot(EPOCH, GENERATION, 50, gameplayValue(false)));
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 50));
+        applier.throwOnApply = false;
+        int calls = applier.calls.size();
+
+        List<CpAck> acks = consumer.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+
+        assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
+        assertEquals(calls, applier.calls.size());
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 50));
+
+        // The forbidden blind retry of rev 50 stays held.
+        consumer.onSnapshot(snapshot(EPOCH, GENERATION, 50, gameplayValue(false)));
+        assertEquals(calls, applier.calls.size());
+    }
+
+    @Test
+    void epochRotationClearsStaleUncertainty() {
+        applier.throwOnApply = true;
+        consumer.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+        assertTrue(consumer.needsOperator());
+        store.markActionOperatorNeeded("op-42");
+        applier.throwOnApply = false;
+
+        consumer.onSnapshot(snapshotWithCursor(OTHER_EPOCH, GENERATION, 0, 41));
+
+        assertFalse(consumer.needsOperator());
+        assertFalse(store.isActionOperatorNeeded("op-42"));
+        List<CpAck> acks =
+                consumer.onFrame(settingsFrame(OTHER_EPOCH, 1, 42, gameplayValue(false), false));
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
     }
 
     private void commit(List<CpAck> acks) {
