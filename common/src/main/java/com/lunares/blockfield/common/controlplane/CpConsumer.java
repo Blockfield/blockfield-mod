@@ -19,19 +19,32 @@ import java.util.Set;
  * surfaced for operator reconciliation, never blindly retried.
  */
 public final class CpConsumer {
-    /** Namespaces this build applies. Gate snapshots belong to the proxy; actions land in S4b. */
+    /** Namespaces this build applies. Gate snapshots belong to the proxy. */
     private static final Set<String> SETTINGS_NAMESPACES = Set.of("gameplay");
+
+    /**
+     * Action kinds this build executes (frozen v2 contract, {@code cpv2/core.py:action}). Anything
+     * else — including owner-only console kinds — is rejected before the handler runs. Drain has no
+     * contract kind yet and stays on the existing maintenance path until the contract gains one.
+     */
+    static final Set<String> ACTION_KINDS = Set.of("moderation.kick", "moderation.ban");
 
     private final CpStore store;
     private final CpApplier applier;
+    private final CpActionHandler actions;
     private final Clock clock;
 
     private String epoch;
     private String generation;
 
     public CpConsumer(CpStore store, CpApplier applier, Clock clock) {
+        this(store, applier, null, clock);
+    }
+
+    public CpConsumer(CpStore store, CpApplier applier, CpActionHandler actions, Clock clock) {
         this.store = store;
         this.applier = applier;
+        this.actions = actions;
         this.clock = clock;
     }
 
@@ -127,9 +140,7 @@ public final class CpConsumer {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "expired, never applied");
         }
         if (frame.revision == null) {
-            // Typed moderation/drain actions are fenced until S4b wires them with the
-            // command-credential split; this consumer applies settings only.
-            return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "actions fenced");
+            return onAction(frame);
         }
         if (frame.revision < 1
                 || frame.envelopePayload == null
@@ -187,6 +198,57 @@ public final class CpConsumer {
     public synchronized boolean needsOperator() {
         return store.receipts().stream()
                 .anyMatch(receipt -> receipt.outcome().state() == CpAck.State.UNKNOWN);
+    }
+
+    private List<CpAck> onAction(CpEnvelope frame) {
+        if (actions == null) {
+            return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "actions fenced");
+        }
+        String kind = stringField(frame.envelopePayload, "kind");
+        String target = stringField(frame.envelopePayload, "target");
+        String playerId = stringField(frame.envelopePayload, "playerId");
+        String reason = stringField(frame.envelopePayload, "reason");
+        if (!ACTION_KINDS.contains(kind) || target.isEmpty() || playerId.isEmpty()) {
+            return terminal(
+                    frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
+        }
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        store.recordReceipt(
+                frame.operationId, frame.sequence, CpAck.State.RECEIVED, CpAck.Result.OK);
+        CpApplier.Outcome outcome;
+        try {
+            outcome = actions.handleAction(kind, target, playerId, reason);
+        } catch (RuntimeException e) {
+            return terminal(
+                    frame,
+                    CpAck.State.UNKNOWN,
+                    CpAck.Result.EFFECT_UNCERTAIN,
+                    "effect uncertain, needs operator");
+        }
+        if (!outcome.applied()) {
+            CpAck.Result result =
+                    outcome.result() == CpAck.Result.OK
+                            ? CpAck.Result.APPLY_FAILED
+                            : outcome.result();
+            return terminal(
+                    frame, CpAck.State.REJECTED, result, String.join("; ", outcome.errors()));
+        }
+        List<CpAck> acks =
+                List.of(
+                        CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
+                        CpAck.forEnvelope(frame, CpAck.State.VALIDATED, now),
+                        CpAck.forEnvelope(frame, CpAck.State.APPLIED, now),
+                        CpAck.forEnvelope(frame, CpAck.State.EFFECTIVE, now));
+        store.recordReceipt(
+                frame.operationId, frame.sequence, CpAck.State.EFFECTIVE, CpAck.Result.OK);
+        store.saveCursor(frame.epoch.toString(), frame.sequence);
+        return acks;
+    }
+
+    private static String stringField(JsonObject payload, String key) {
+        return payload != null && payload.has(key) && payload.get(key).isJsonPrimitive()
+                ? payload.get(key).getAsString()
+                : "";
     }
 
     private static String namespaceOf(CpEnvelope frame) {

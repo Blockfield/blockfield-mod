@@ -26,16 +26,24 @@ class CpConsumerTest {
     @TempDir Path directory;
 
     private CpStore store;
+    private CpStore actionStore;
     private RecordingApplier applier;
+    private RecordingHandler handler;
     private CpConsumer consumer;
+    private CpConsumer actions;
 
     @BeforeEach
     void setUp() {
         store = new CpStore(directory.resolve("cp"));
         applier = new RecordingApplier();
+        handler = new RecordingHandler();
         consumer = new CpConsumer(store, applier, CLOCK);
         consumer.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        actionStore = new CpStore(directory.resolve("cp-actions"));
+        actions = new CpConsumer(actionStore, applier, handler, CLOCK);
+        actions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
         applier.calls.clear();
+        handler.calls.clear();
     }
 
     @Test
@@ -135,6 +143,63 @@ class CpConsumerTest {
         assertTrue(applier.calls.isEmpty());
         assertEquals(CpAck.State.REJECTED, acks.get(acks.size() - 1).state);
         assertEquals(41, store.loadLkg().revision());
+    }
+
+    @Test
+    void typedKickAndBanApplyThroughHandler() {
+        List<CpAck> kick = actions.onFrame(actionFrame(42, "moderation.kick", "player-1"));
+        List<CpAck> ban = actions.onFrame(actionFrame(43, "moderation.ban", "player-2"));
+
+        assertEquals(List.of("moderation.kick:player-1", "moderation.ban:player-2"), handler.calls);
+        for (List<CpAck> acks : List.of(kick, ban)) {
+            assertEquals(
+                    List.of(
+                            CpAck.State.RECEIVED,
+                            CpAck.State.VALIDATED,
+                            CpAck.State.APPLIED,
+                            CpAck.State.EFFECTIVE),
+                    acks.stream().map(ack -> ack.state).toList());
+            assertEquals(CpAck.Result.OK, acks.get(acks.size() - 1).result);
+        }
+        assertEquals(43, actionStore.loadCursor().sequence());
+        assertEquals(41, actionStore.loadLkg().revision());
+    }
+
+    @Test
+    void ownerOnlyKindRejectedWithoutHandlerCall() {
+        List<CpAck> acks = actions.onFrame(actionFrame(42, "console.raw", "player-1"));
+
+        assertTrue(handler.calls.isEmpty());
+        assertEquals(CpAck.State.REJECTED, acks.get(acks.size() - 1).state);
+        assertEquals(CpAck.Result.INVALID_SCHEMA, acks.get(acks.size() - 1).result);
+        assertEquals(42, actionStore.loadCursor().sequence());
+    }
+
+    @Test
+    void actionMissingPlayerRejected() {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", "moderation.kick");
+        payload.addProperty("target", "some-player");
+
+        List<CpAck> acks = actions.onFrame(rawActionFrame(42, payload));
+
+        assertTrue(handler.calls.isEmpty());
+        assertEquals(CpAck.State.REJECTED, acks.get(acks.size() - 1).state);
+        assertEquals(CpAck.Result.INVALID_SCHEMA, acks.get(acks.size() - 1).result);
+        assertEquals(42, actionStore.loadCursor().sequence());
+    }
+
+    @Test
+    void uncertainActionEffectIsTerminalAndFlagged() {
+        handler.throwOnHandle = true;
+
+        List<CpAck> acks = actions.onFrame(actionFrame(42, "moderation.kick", "player-1"));
+
+        assertEquals(1, handler.calls.size());
+        assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
+        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, acks.get(acks.size() - 1).result);
+        assertTrue(actions.needsOperator());
+        assertEquals(41, actionStore.loadLkg().revision());
     }
 
     @Test
@@ -250,6 +315,26 @@ class CpConsumerTest {
                 null);
     }
 
+    private String actionFrame(long sequence, String kind, String playerId) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", kind);
+        payload.addProperty("target", "some-player");
+        payload.addProperty("playerId", playerId);
+        payload.addProperty("reason", "test");
+        return rawActionFrame(sequence, payload);
+    }
+
+    private String rawActionFrame(long sequence, JsonObject payload) {
+        return frame(
+                EPOCH,
+                sequence,
+                payload,
+                null,
+                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                true,
+                null);
+    }
+
     private String nonExecutableFrame(long sequence, String reason) {
         return frame(
                 EPOCH,
@@ -293,6 +378,19 @@ class CpConsumerTest {
         if (payload == null) frame.add("payload", null);
         else frame.add("payload", payload);
         return frame.toString();
+    }
+
+    static final class RecordingHandler implements CpActionHandler {
+        final List<String> calls = new ArrayList<>();
+        boolean throwOnHandle;
+
+        @Override
+        public CpApplier.Outcome handleAction(
+                String kind, String target, String playerId, String reason) {
+            calls.add(kind + ":" + playerId);
+            if (throwOnHandle) throw new RuntimeException("boom");
+            return CpApplier.Outcome.ok();
+        }
     }
 
     static final class RecordingApplier implements CpApplier {
