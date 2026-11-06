@@ -13,7 +13,7 @@ public class BlockFieldCommon implements ModInitializer {
         ModItems.register();
         com.lunares.blockfield.common.item.RigCells.register();
         com.lunares.blockfield.common.item.ChestRigMenu.registerMenu();
-        com.lunares.blockfield.network.NetworkHandler.register();
+        com.lunares.blockfield.network.GameNetworkHandler.register();
         DecorInteractions.register();
         LOGGER.info("Blockfield Common Setup Complete.");
     }

@@ -1,0 +1,25 @@
+base { archivesName = 'blockfield-workshop' }
+
+// Thin Workshop layer (S233-U1): compiles exactly workshop/thin.txt out of
+// :common (no copy, no move — the server still consumes :common sources and
+// filters the game jars per its workshop-keep.txt). The game entrypoint,
+// gate, Workshop, Playtest and map-config classes live in the private server
+// repo and ride the server-assembled thin jar, so this module declares no
+// entrypoints: its fabric.mod.json only pins the mod id (a duplicate id with
+// the game jars fails closed if both are ever installed together).
+def thin = file('thin.txt').readLines().collect { it.strip() }.findAll { it && !it.startsWith('#') }
+
+sourceSets {
+    main {
+        java {
+            // No :common dependency by design: this module compiles exactly
+            // thin.txt, so any reference outside thin.txt fails compilation
+            // here instead of surfacing as NoClassDefFoundError on Workshop.
+            srcDir rootProject.file('common/src/main/java')
+            include thin
+        }
+    }
+}
+
+tasks.named('runClient') { enabled = false }
+tasks.named('runServer') { enabled = false }

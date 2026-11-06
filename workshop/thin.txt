@@ -1,0 +1,49 @@
+# Thin Workshop layer (S233-U1): the only common sources the Workshop profile
+# loads. Mirrors the common entries of server/mod-server workshop-keep.txt
+# (same files, .class -> .java); that file stays the image-packaging authority
+# for the full thin jar (it also allowlists the server-side gate, Workshop,
+# Playtest and map-config classes, which live in the private server repo and
+# can never move here). Paths are relative to common/src/main/java/.
+# No combat netcode: nothing here may import common.combat, client code or
+# server-game code (dev/workshop-thin-check.py fails `just lint` on drift).
+# Game-side registries (game packet register(), wire codecs, configuration
+# pair, 2D sound) live in GameNetworkHandler next to NetworkHandler and are
+# deliberately not listed here, so they never ship in the workshop module.
+com/lunares/blockfield/network/NetworkHandler.java
+com/lunares/blockfield/network/PackContract.java
+com/lunares/blockfield/network/PackVersion.java
+com/lunares/blockfield/api/mode/GameState.java
+com/lunares/blockfield/api/mode/IGameMode.java
+com/lunares/blockfield/workshop/WorkshopActionCoverage.java
+com/lunares/blockfield/workshop/WorkshopAiProgress.java
+com/lunares/blockfield/workshop/WorkshopBlockStates.java
+com/lunares/blockfield/workshop/WorkshopChainPlacement.java
+com/lunares/blockfield/workshop/WorkshopGeometry.java
+com/lunares/blockfield/workshop/WorkshopMaterials.java
+com/lunares/blockfield/common/CaptureZone.java
+com/lunares/blockfield/common/DecorInteractions.java
+com/lunares/blockfield/common/WorkshopToolItems.java
+com/lunares/blockfield/network/packet/WorkshopAiRequestC2SPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiAudioC2SPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiTransformC2SPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiLibraryC2SPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiFillC2SPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiLibraryS2CPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiSketchPlanS2CPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiStateS2CPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiPreviewS2CPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiV2S2CPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiProgressS2CPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiPlanChunkS2CPacket.java
+com/lunares/blockfield/network/packet/WorkshopAiV3S2CPacket.java
+com/lunares/blockfield/network/packet/MapPlayersS2CPacket.java
+com/lunares/blockfield/network/packet/MapSnapshotS2CPacket.java
+com/lunares/blockfield/network/packet/MapImageS2CPacket.java
+com/lunares/blockfield/network/packet/MapTileS2CPacket.java
+com/lunares/blockfield/network/packet/MapTerrainS2CPacket.java
+com/lunares/blockfield/network/packet/MapPingC2SPacket.java
+com/lunares/blockfield/network/packet/MapPingS2CPacket.java
+com/lunares/blockfield/network/packet/MenuActionC2SPacket.java
+com/lunares/blockfield/network/packet/OpenMenuS2CPacket.java
+com/lunares/blockfield/network/packet/UpdateUIS2CPacket.java
+com/lunares/blockfield/network/packet/UiJson.java

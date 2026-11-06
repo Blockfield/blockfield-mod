@@ -71,7 +71,7 @@ public final class ClientAnimationResources {
     private ClientAnimationResources() {}
 
     public static void register() {
-        com.lunares.blockfield.network.NetworkHandler.registerConfiguration();
+        com.lunares.blockfield.network.GameNetworkHandler.registerConfiguration();
         AnimationWireReceiver.register();
         ClientConfigurationNetworking.registerGlobalReceiver(
                 AnimationManifestS2CPacket.TYPE,

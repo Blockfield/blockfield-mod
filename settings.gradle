@@ -6,4 +6,4 @@ pluginManagement {
 }
 
 rootProject.name = 'blockfield'
-include 'common', 'client'
+include 'common', 'client', 'workshop'
