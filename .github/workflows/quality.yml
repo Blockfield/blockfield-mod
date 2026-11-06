@@ -175,6 +175,12 @@ jobs:
         uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Python and pure Java regression tests
         if: needs.decide.outputs.assemble_only != 'true'
+        env:
+          # Non-Java changes (docs, scripts, workflows: decide's java scope is
+          # false) cannot change game behavior: run the Python rig only and
+          # skip the ~7-minute client oracle. Java-touching diffs and unknown
+          # bases still run it (fail-closed: empty/unset never equals '1').
+          BF_SKIP_ORACLE: ${{ needs.decide.outputs.java == 'false' && '1' || '' }}
         run: just test
       - name: Version-only assemble
         if: needs.decide.outputs.assemble_only == 'true'
