@@ -467,8 +467,8 @@ def main(argv=None):
     if args.command == "lint":
         # actionlint only shellchecks run: blocks when it finds shellcheck; the pinned one is not on PATH.
         run("actionlint", "-shellcheck", tool("shellcheck"))
-        # Thin Workshop layer gate (S233-U1): no combat/client/game imports or
-        # game-packet references in the workshop closure (fast, no Gradle).
+        # Thin Workshop layer gate (S233-U1): the thin wiring javac cannot see
+        # (closure itself is enforced by compilation, no sibling dep).
         run(
             sys.executable,
             "-I",

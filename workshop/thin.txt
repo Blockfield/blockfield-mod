@@ -46,3 +46,4 @@ com/lunares/blockfield/network/packet/MapPingS2CPacket.java
 com/lunares/blockfield/network/packet/MenuActionC2SPacket.java
 com/lunares/blockfield/network/packet/OpenMenuS2CPacket.java
 com/lunares/blockfield/network/packet/UpdateUIS2CPacket.java
+com/lunares/blockfield/network/packet/UiJson.java

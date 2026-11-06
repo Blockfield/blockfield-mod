@@ -12,17 +12,13 @@ def thin = file('thin.txt').readLines().collect { it.strip() }.findAll { it && !
 sourceSets {
     main {
         java {
+            // No :common dependency by design: this module compiles exactly
+            // thin.txt, so any reference outside thin.txt fails compilation
+            // here instead of surfacing as NoClassDefFoundError on Workshop.
             srcDir rootProject.file('common/src/main/java')
             include thin
         }
     }
-}
-
-dependencies {
-    // register() names game-only packets in dead code that never runs on the
-    // Workshop profile (only registerWorkshop() does); resolving those names
-    // needs :common's full API. What ships is still only `thin` (own output).
-    implementation(project(path: ':common', configuration: 'namedElements')) { transitive = false }
 }
 
 tasks.named('runClient') { enabled = false }
