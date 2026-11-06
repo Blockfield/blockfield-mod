@@ -8,6 +8,13 @@ dependencies {
     modCompileOnly "maven.modrinth:tacz-refabricated:${tacz_version}"
     // Read the equipped rig on both logical sides. Optional at runtime; never bundled.
     modCompileOnly "io.wispforest:accessories-fabric:${accessories_version}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    maxHeapSize = '256m'
 }
 
 // Общий код едет внутрь client- и server-jar (см. их jar{from ...}), отдельным модом не является:
