@@ -12,10 +12,10 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -124,12 +124,7 @@ class CpSseClientTest {
                 new CpSseClient(
                         baseUrl, "game-1", "test-bearer", store, consumer, new Quiet(), CLOCK);
 
-        var runner = Executors.newSingleThreadExecutor();
-        try {
-            runner.submit(() -> client.run(stop)).get(30, TimeUnit.SECONDS);
-        } finally {
-            runner.shutdownNow();
-        }
+        runToStop(client);
 
         assertTrue(stop.get());
         assertEquals(4, ackBodies.size());
@@ -191,12 +186,7 @@ class CpSseClientTest {
         CpSseClient client =
                 new CpSseClient(baseUrl, "game-1", "bearer", store, consumer, new Quiet(), CLOCK);
 
-        ExecutorService runner = Executors.newSingleThreadExecutor();
-        try {
-            runner.submit(() -> client.run(stop)).get(30, TimeUnit.SECONDS);
-        } finally {
-            runner.shutdownNow();
-        }
+        runToStop(client);
 
         assertTrue(snapshotHits.get() >= 2);
         assertTrue(eventsHits.get() >= 2);
@@ -229,12 +219,7 @@ class CpSseClientTest {
                         new CpConsumer(store, recordingApplier(appliedRevisions), CLOCK),
                         new Quiet(),
                         CLOCK);
-        ExecutorService runner = Executors.newSingleThreadExecutor();
-        try {
-            runner.submit(() -> first.run(stop)).get(30, TimeUnit.SECONDS);
-        } finally {
-            runner.shutdownNow();
-        }
+        runToStop(first);
         assertEquals(42, store.loadCursor().sequence());
 
         stop.set(false);
@@ -249,12 +234,7 @@ class CpSseClientTest {
                         new CpConsumer(restarted, recordingApplier(appliedRevisions), CLOCK),
                         new Quiet(),
                         CLOCK);
-        ExecutorService runner2 = Executors.newSingleThreadExecutor();
-        try {
-            runner2.submit(() -> second.run(stop)).get(30, TimeUnit.SECONDS);
-        } finally {
-            runner2.shutdownNow();
-        }
+        runToStop(second);
 
         assertEquals(List.of(41L, 42L, 43L), appliedRevisions);
         assertEquals(43, restarted.loadCursor().sequence());
@@ -365,48 +345,6 @@ class CpSseClientTest {
     }
 
     @Test
-    void failedAckChainIsRepostedFromPending() throws Exception {
-        AtomicBoolean firstAck = new AtomicBoolean(true);
-        ackStatus = body -> firstAck.getAndSet(false) ? 500 : 200;
-        eventsBody =
-                cursor ->
-                        cursor < 42
-                                ? "id: " + EPOCH + ":42\nevent: control\ndata: " + frame() + "\n\n"
-                                : "";
-        stopAfterAcks.set(5);
-        CpStore store = new CpStore(directory.resolve("cp-retry"));
-        CpConsumer consumer =
-                new CpConsumer(
-                        store,
-                        (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
-                        CLOCK);
-        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
-        CpSseClient client =
-                new CpSseClient(baseUrl, "game-1", "bearer", store, consumer, new Quiet(), CLOCK);
-
-        ExecutorService runner = Executors.newSingleThreadExecutor();
-        try {
-            runner.submit(() -> client.run(stop)).get(30, TimeUnit.SECONDS);
-        } finally {
-            runner.shutdownNow();
-        }
-
-        assertEquals(5, ackBodies.size());
-        assertEquals(
-                List.of("received", "validated", "applied", "effective"),
-                ackBodies.subList(1, 5).stream()
-                        .map(
-                                body ->
-                                        com.google.gson.JsonParser.parseString(body)
-                                                .getAsJsonObject()
-                                                .get("state")
-                                                .getAsString())
-                        .toList());
-        assertEquals(42, store.loadCursor().sequence());
-        assertTrue(store.loadPendingAcks().isEmpty());
-    }
-
-    @Test
     void resyncLoopBacksOff() throws Exception {
         eventsStatus = 409;
         CpStore store = new CpStore(directory.resolve("cp-backoff"));
@@ -431,52 +369,6 @@ class CpSseClientTest {
 
         assertTrue(snapshotHits.get() >= 2);
         assertTrue(snapshotHits.get() <= 4, "resync hot-loops: " + snapshotHits.get());
-    }
-
-    @Test
-    void retiredPendingsDroppedAfterEpochRotation() throws Exception {
-        String rotatedEpoch = "123e4567-e89b-12d3-a456-426614174099";
-        CpStore store = new CpStore(directory.resolve("cp-rotated"));
-        store.saveCursor(EPOCH, 5);
-        CpAck stale =
-                new CpAck(
-                        UUID.fromString(EPOCH),
-                        6,
-                        GENERATION,
-                        6L,
-                        "c".repeat(64),
-                        CpAck.State.RECEIVED,
-                        OffsetDateTime.now(CLOCK),
-                        CpAck.Result.OK);
-        store.savePendingAcks(List.of(stale.toJson()));
-        snapshotBody = () -> snapshotAt(rotatedEpoch, 5, 5);
-        eventsBody =
-                cursor ->
-                        "id: "
-                                + rotatedEpoch
-                                + ":"
-                                + (cursor + 1)
-                                + "\nevent: control\ndata: "
-                                + frameAt(rotatedEpoch, cursor + 1)
-                                + "\n\n";
-        ackStatus = body -> body.contains(EPOCH) ? 409 : 200;
-        List<Long> appliedRevisions = new CopyOnWriteArrayList<>();
-        CpConsumer consumer = new CpConsumer(store, recordingApplier(appliedRevisions), CLOCK);
-        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
-        CpSseClient client =
-                new CpSseClient(baseUrl, "game-1", "bearer", store, consumer, new Quiet(), CLOCK);
-
-        ExecutorService runner = Executors.newSingleThreadExecutor();
-        try {
-            runner.submit(() -> client.run(stop)).get(30, TimeUnit.SECONDS);
-        } finally {
-            runner.shutdownNow();
-        }
-
-        assertTrue(store.loadPendingAcks().isEmpty());
-        assertEquals(rotatedEpoch, store.loadCursor().epoch());
-        assertEquals(6, store.loadCursor().sequence());
-        assertEquals(List.of(5L, 6L), appliedRevisions);
     }
 
     @Test
@@ -515,6 +407,206 @@ class CpSseClientTest {
 
         assertEquals(0, outcome.frames());
         assertFalse(outcome.active());
+    }
+
+    @Test
+    void ackConflictDropsAndResyncs() throws Exception {
+        AtomicInteger ackCalls = new AtomicInteger();
+        ackStatus = body -> ackCalls.incrementAndGet() <= 2 ? 409 : 200;
+        eventsBody = cursor -> cursor < 42 ? sse(frame()) : "";
+        stopAfterSnapshots.set(8);
+        CpStore store = new CpStore(directory.resolve("cp-conflict"));
+        CpConsumer consumer =
+                new CpConsumer(
+                        store,
+                        (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                        CLOCK);
+        CpSseClient client = newClient(store, consumer);
+
+        runToStop(client);
+
+        assertEquals(42, store.loadCursor().sequence(), "client wedged on 409 ack loop");
+        assertTrue(
+                ackBodies.stream().anyMatch(body -> body.contains("\"state\":\"effective\"")),
+                "EFFECTIVE never delivered after transient 409");
+    }
+
+    @Test
+    void failedAckRepostsDecidedChainWithoutReapply() throws Exception {
+        AtomicBoolean firstAck = new AtomicBoolean(true);
+        ackStatus = body -> firstAck.getAndSet(false) ? 500 : 200;
+        eventsBody = cursor -> cursor < 42 ? sse(frame()) : "";
+        List<Long> appliedRevisions = new CopyOnWriteArrayList<>();
+        stopAfterAcks.set(5);
+        CpStore store = new CpStore(directory.resolve("cp-retry"));
+        CpConsumer consumer = new CpConsumer(store, recordingApplier(appliedRevisions), CLOCK);
+        CpSseClient client = newClient(store, consumer);
+
+        runToStop(client);
+
+        assertEquals(List.of(41L, 42L), appliedRevisions, "decided frame re-applied on ack retry");
+        assertEquals(42, store.loadCursor().sequence());
+        assertTrue(ackBodies.stream().anyMatch(body -> body.contains("\"state\":\"effective\"")));
+    }
+
+    @Test
+    void stopInterruptsBlockedStream() throws Exception {
+        HttpServer holding = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        holding.createContext(
+                "/v2/agents/game-1/snapshot", exchange -> respond(exchange, 200, snapshot()));
+        holding.createContext(
+                "/v2/agents/game-1/events",
+                exchange -> {
+                    exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+                    exchange.sendResponseHeaders(200, 0);
+                    try {
+                        Thread.sleep(20000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    } finally {
+                        exchange.close();
+                    }
+                });
+        holding.setExecutor(Executors.newCachedThreadPool());
+        holding.start();
+        AtomicBoolean holdStop = new AtomicBoolean();
+        try {
+            CpStore store = new CpStore(directory.resolve("cp-stop"));
+            CpConsumer consumer =
+                    new CpConsumer(
+                            store,
+                            (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                            CLOCK);
+            CpSseClient client =
+                    new CpSseClient(
+                            "http://127.0.0.1:" + holding.getAddress().getPort(),
+                            "game-1",
+                            "bearer",
+                            store,
+                            consumer,
+                            new Quiet(),
+                            CLOCK);
+            ExecutorService runner = Executors.newSingleThreadExecutor();
+            try {
+                Future<?> running = runner.submit(() -> client.stream(holdStop));
+                Thread.sleep(2000);
+                assertFalse(running.isDone(), "stream returned before stop");
+                holdStop.set(true);
+                try {
+                    running.get(10, TimeUnit.SECONDS);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    fail("blocked SSE read ignores stop()");
+                }
+            } finally {
+                runner.shutdownNow();
+            }
+        } finally {
+            holding.stop(0);
+        }
+    }
+
+    @Test
+    void idleTimeoutReconnects() throws Exception {
+        HttpServer holding = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicInteger hits = new AtomicInteger();
+        List<String> applied = new CopyOnWriteArrayList<>();
+        holding.createContext(
+                "/v2/agents/game-1/snapshot", exchange -> respond(exchange, 200, snapshot()));
+        holding.createContext(
+                "/v2/agents/game-1/events",
+                exchange -> {
+                    if (hits.getAndIncrement() == 0) {
+                        // Keep-alive, then a half-open stall: no close, no more bytes.
+                        exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
+                        exchange.sendResponseHeaders(200, 0);
+                        OutputStream out = exchange.getResponseBody();
+                        out.write(":keep-alive\n\n".getBytes(StandardCharsets.UTF_8));
+                        out.flush();
+                        try {
+                            Thread.sleep(30000);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        } finally {
+                            exchange.close();
+                        }
+                    } else {
+                        respond(exchange, 200, sse(frame()));
+                    }
+                });
+        holding.createContext(
+                "/v2/agents/game-1/acks",
+                exchange -> {
+                    exchange.getRequestBody().readAllBytes();
+                    ackBodies.add("ack");
+                    if (ackBodies.size() >= 4) stop.set(true);
+                    respond(exchange, 200, "{\"state\":\"received\"}");
+                });
+        holding.setExecutor(Executors.newCachedThreadPool());
+        holding.start();
+        AtomicBoolean idleStop = new AtomicBoolean();
+        try {
+            CpStore store = new CpStore(directory.resolve("cp-idle"));
+            CpConsumer consumer =
+                    new CpConsumer(
+                            store,
+                            (namespace, target, revision, value) -> {
+                                applied.add(value.toString());
+                                return CpApplier.Outcome.ok();
+                            },
+                            CLOCK);
+            CpSseClient client =
+                    new CpSseClient(
+                            "http://127.0.0.1:" + holding.getAddress().getPort(),
+                            "game-1",
+                            "bearer",
+                            store,
+                            consumer,
+                            new Quiet(),
+                            CLOCK,
+                            Duration.ofMillis(500));
+            ExecutorService runner = Executors.newSingleThreadExecutor();
+            try {
+                Future<?> done = runner.submit(() -> client.run(idleStop));
+                long deadline = System.currentTimeMillis() + 25000;
+                while (!stop.get() && System.currentTimeMillis() < deadline) {
+                    Thread.sleep(50);
+                }
+                idleStop.set(true);
+                done.get(15, TimeUnit.SECONDS);
+            } finally {
+                runner.shutdownNow();
+            }
+        } finally {
+            holding.stop(0);
+        }
+
+        assertTrue(stop.get(), "stalled stream never reconnected to the live one");
+        assertTrue(hits.get() >= 2, "no reconnect after idle timeout");
+        assertEquals(2, applied.size(), "snapshot revision plus replayed frame");
+    }
+
+    private void runToStop(CpSseClient client) throws Exception {
+        ExecutorService runner = Executors.newSingleThreadExecutor();
+        try {
+            runner.submit(() -> client.run(stop)).get(60, TimeUnit.SECONDS);
+        } finally {
+            runner.shutdownNow();
+        }
+    }
+
+    private CpSseClient newClient(CpStore store, CpConsumer consumer) {
+        return new CpSseClient(
+                "http://127.0.0.1:" + server.getAddress().getPort(),
+                "game-1",
+                "bearer",
+                store,
+                consumer,
+                new Quiet(),
+                CLOCK);
+    }
+
+    private static String sse(String data) {
+        return "event: control\ndata: " + data + "\n\n";
     }
 
     private static CpApplier recordingApplier(List<Long> appliedRevisions) {

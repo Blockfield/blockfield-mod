@@ -10,29 +10,54 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Control-plane settings consumer: snapshot baseline, ordered frame handling, durable receipts and
- * last-known-good. Transport-independent; {@link CpSseClient} drives it from the SSE stream.
+ * Control-plane settings consumer: snapshot baseline plus ordered frame handling over the single
+ * {@link CpStore} state file. Transport-independent; {@link CpSseClient} drives it from SSE.
  *
  * <p>Rules, straight from the frozen v2 contract: frames execute only on the snapshotted
- * epoch/generation, strictly after the cursor, once; the received receipt is persisted before the
- * applier runs; a failed validation keeps last-known-good; unknown effects are terminal and
- * surfaced for operator reconciliation, never blindly retried.
+ * epoch/generation, strictly after the cursor, once per (epoch, operationId). Terminal decisions
+ * are the only durable receipts: a settings replay without one re-applies (whole-namespace replace
+ * is idempotent), while a non-idempotent action marked started-but-unfinished is never re-run and
+ * instead reports unknown for operator reconciliation.
  */
 public final class CpConsumer {
-    /** Namespaces this build applies. Gate snapshots belong to the proxy; actions land in S4b. */
+    /** Namespaces this build applies. Gate snapshots belong to the proxy. */
     private static final Set<String> SETTINGS_NAMESPACES = Set.of("gameplay");
+
+    /** Typed actions this consumer routes; anything else (console, OP) is rejected, never run. */
+    static final Set<String> ACTION_KINDS = Set.of("moderation.kick", "moderation.ban");
 
     private final CpStore store;
     private final CpApplier applier;
+    private final CpActionHandler actions;
     private final Clock clock;
+    private final String expectedAudience;
 
     private String epoch;
     private String generation;
 
     public CpConsumer(CpStore store, CpApplier applier, Clock clock) {
+        this(store, applier, null, clock, null);
+    }
+
+    public CpConsumer(CpStore store, CpApplier applier, Clock clock, String expectedAudience) {
+        this(store, applier, null, clock, expectedAudience);
+    }
+
+    public CpConsumer(CpStore store, CpApplier applier, CpActionHandler actions, Clock clock) {
+        this(store, applier, actions, clock, null);
+    }
+
+    public CpConsumer(
+            CpStore store,
+            CpApplier applier,
+            CpActionHandler actions,
+            Clock clock,
+            String expectedAudience) {
         this.store = store;
         this.applier = applier;
+        this.actions = actions;
         this.clock = clock;
+        this.expectedAudience = expectedAudience;
     }
 
     /** Snapshotted epoch, or null before the first snapshot (client re-snapshots then). */
@@ -54,8 +79,13 @@ public final class CpConsumer {
         String snapshotEpoch = CpEnvelope.requiredString(root, "epoch");
         String snapshotGeneration = CpEnvelope.requiredString(root, "generation");
         long snapshotCursor = CpEnvelope.requiredLong(root, "cursor", 0);
+        if (expectedAudience != null
+                && root.has("audience")
+                && !expectedAudience.equals(stringField(root, "audience"))) {
+            throw new CpResyncException("snapshot audience mismatch, refusing to adopt it");
+        }
         List<String> errors = new ArrayList<>();
-        // A repeated snapshot with an unchanged cursor is a no-op: saveCursor would throw.
+        // A repeated snapshot with an unchanged cursor is a no-op: the cursor only moves forward.
         store.saveCursorIfForward(snapshotEpoch, snapshotCursor);
         epoch = snapshotEpoch;
         generation = snapshotGeneration;
@@ -66,10 +96,7 @@ public final class CpConsumer {
             if (!entry.isJsonObject()) throw new CpContractException("bad snapshot entry");
             JsonObject item = entry.getAsJsonObject();
             String namespace = CpEnvelope.requiredString(item, "namespace");
-            String target =
-                    item.has("target") && item.get("target").isJsonPrimitive()
-                            ? item.get("target").getAsString()
-                            : "";
+            String target = stringField(item, "target");
             long revision = CpEnvelope.requiredLong(item, "revision", 0);
             if (!SETTINGS_NAMESPACES.contains(namespace)) {
                 errors.add(namespace + "/" + target + ": unsupported namespace, skipped");
@@ -104,8 +131,8 @@ public final class CpConsumer {
                 continue;
             }
             if (outcome.applied()) {
-                store.saveLkg(namespace, target, revision, item.getAsJsonObject("value"));
-                store.clearOperatorNeeded(namespace, target);
+                store.saveAppliedSnapshot(
+                        namespace, target, revision, item.getAsJsonObject("value"));
             } else {
                 errors.addAll(outcome.errors());
             }
@@ -115,10 +142,10 @@ public final class CpConsumer {
 
     /**
      * Handle one SSE frame, returning the ack chain to POST in order. The cursor is advanced by the
-     * caller only after every ack is accepted, so an undelivered chain replays from the stored
-     * cursor and no frame is ever lost between applying and acknowledging. Duplicate deliveries
-     * re-post the cached terminal receipt without re-applying; gaps and epoch/generation changes
-     * request a re-snapshot.
+     * caller only after every ack is accepted, so an undelivered frame replays from the stored
+     * cursor: settings re-apply idempotently, decided operations re-post their terminal state, and
+     * started-but-unfinished actions report unknown instead of re-running. Gaps and
+     * epoch/generation changes request a re-snapshot.
      */
     public synchronized List<CpAck> onFrame(String json) {
         CpEnvelope frame = CpEnvelope.parse(json);
@@ -128,20 +155,24 @@ public final class CpConsumer {
         if (generation == null || !generation.equals(frame.generation)) {
             throw new CpResyncException("frame generation is not the snapshotted one");
         }
+        if (expectedAudience != null && !expectedAudience.equals(frame.audience)) {
+            return terminal(
+                    frame,
+                    CpAck.State.REJECTED,
+                    CpAck.Result.INVALID_SCHEMA,
+                    "audience mismatch, not applied");
+        }
         CpStore.Cursor cursor = store.loadCursor();
-        CpStore.Receipt prior = store.lastReceipt(frame.sequence);
+        String epochId = frame.epoch.toString();
+        CpStore.Terminal prior = store.lastTerminal(epochId, frame.operationId);
         if (frame.sequence <= cursor.sequence()) {
             if (prior == null) throw new CpResyncException("cursor moved past an undecided frame");
-            return List.of(repost(frame, prior));
+            return repost(frame, prior);
         }
         if (frame.sequence > cursor.sequence() + 1) {
             throw new CpResyncException("frame gap, server replays from the cursor");
         }
-        if (prior != null && prior.outcome().state().terminal()) {
-            // Crash between applying and cursor commit: the server got nothing, so rebuild the
-            // full chain without re-applying instead of posting a lone terminal receipt.
-            return chainForPrior(frame, prior);
-        }
+        if (prior != null) return repost(frame, prior);
         if (!frame.executable) {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, note(frame));
         }
@@ -149,10 +180,10 @@ public final class CpConsumer {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "expired, never applied");
         }
         if (frame.revision == null) {
-            // Typed moderation/drain actions are fenced until S4b wires them with the
+            // Typed moderation/drain actions are fenced until a CpActionHandler is wired with the
             // command-credential split; this consumer applies settings only.
             // (S4b dispatches action frames here, before settings apply.)
-            return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "actions fenced");
+            return onAction(frame);
         }
         if (frame.revision < 1
                 || frame.envelopePayload == null
@@ -165,12 +196,11 @@ public final class CpConsumer {
                     "not a settings frame");
         }
         CpStore.Lkg lkg = store.loadLkg(namespaceOf(frame), targetOf(frame));
-        if (lkg != null && frame.revision <= lkg.revision()) {
+        // Strictly older only: an equal revision without a terminal receipt is a crash window
+        // (applied, LKG saved, receipt lost), and whole-namespace replace re-applies it safely.
+        if (lkg != null && frame.revision < lkg.revision()) {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "stale revision");
         }
-        OffsetDateTime now = OffsetDateTime.now(clock);
-        store.recordReceipt(
-                frame.operationId, frame.sequence, CpAck.State.RECEIVED, CpAck.Result.OK);
         CpApplier.Outcome outcome;
         try {
             outcome =
@@ -180,6 +210,77 @@ public final class CpConsumer {
                             frame.revision,
                             frame.envelopePayload);
         } catch (RuntimeException e) {
+            store.saveUncertainFrame(
+                    namespaceOf(frame),
+                    targetOf(frame),
+                    frame.revision,
+                    epochId,
+                    frame.operationId,
+                    frame.sequence,
+                    CpAck.Result.EFFECT_UNCERTAIN);
+            return List.of(
+                    CpAck.forEnvelope(
+                            frame,
+                            CpAck.State.UNKNOWN,
+                            CpAck.Result.EFFECT_UNCERTAIN,
+                            OffsetDateTime.now(clock)));
+        }
+        if (!outcome.applied()) {
+            CpAck.Result result =
+                    outcome.result() == CpAck.Result.OK
+                            ? CpAck.Result.APPLY_FAILED
+                            : outcome.result();
+            return terminal(
+                    frame, CpAck.State.REJECTED, result, String.join("; ", outcome.errors()));
+        }
+        store.saveAppliedFrame(
+                namespaceOf(frame),
+                targetOf(frame),
+                frame.revision,
+                frame.envelopePayload,
+                epochId,
+                frame.operationId,
+                frame.sequence);
+        return effectiveChain(frame, OffsetDateTime.now(clock));
+    }
+
+    /**
+     * True after an effect-uncertain frame, action or snapshot entry: an operator must reconcile.
+     */
+    public synchronized boolean needsOperator() {
+        if (store.hasOperatorNeeded()) return true;
+        return store.hasTerminalState(CpAck.State.UNKNOWN);
+    }
+
+    private List<CpAck> onAction(CpEnvelope frame) {
+        if (actions == null) {
+            return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "actions fenced");
+        }
+        String kind = stringField(frame.envelopePayload, "kind");
+        String target = stringField(frame.envelopePayload, "target");
+        String playerId = stringField(frame.envelopePayload, "playerId");
+        String reason = stringField(frame.envelopePayload, "reason");
+        if (!ACTION_KINDS.contains(kind) || target.isEmpty() || playerId.isEmpty()) {
+            return terminal(
+                    frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
+        }
+        String epochId = frame.epoch.toString();
+        if (store.isActionStarted(epochId, frame.operationId)) {
+            // Crash after the started-marker, before any terminal state: a non-idempotent
+            // action is never re-run; it reports unknown for operator reconciliation.
+            store.markActionOperatorNeeded(frame.operationId);
+            return terminal(
+                    frame,
+                    CpAck.State.UNKNOWN,
+                    CpAck.Result.EFFECT_UNCERTAIN,
+                    "action started but never finished, needs operator");
+        }
+        store.markActionStarted(epochId, frame.operationId, kind);
+        CpApplier.Outcome outcome;
+        try {
+            outcome = actions.handleAction(kind, target, playerId, reason);
+        } catch (RuntimeException e) {
+            store.markActionOperatorNeeded(frame.operationId);
             return terminal(
                     frame,
                     CpAck.State.UNKNOWN,
@@ -194,36 +295,20 @@ public final class CpConsumer {
             return terminal(
                     frame, CpAck.State.REJECTED, result, String.join("; ", outcome.errors()));
         }
-        store.saveLkg(namespaceOf(frame), targetOf(frame), frame.revision, frame.envelopePayload);
-        List<CpAck> acks =
-                List.of(
-                        CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
-                        CpAck.forEnvelope(frame, CpAck.State.VALIDATED, now),
-                        CpAck.forEnvelope(frame, CpAck.State.APPLIED, now),
-                        CpAck.forEnvelope(frame, CpAck.State.EFFECTIVE, now));
-        store.recordReceipt(
-                frame.operationId, frame.sequence, CpAck.State.EFFECTIVE, CpAck.Result.OK);
-        return acks;
-    }
-
-    /** True after an effect-uncertain frame or snapshot entry: an operator must reconcile. */
-    public synchronized boolean needsOperator() {
-        if (store.hasOperatorNeeded()) return true;
-        return store.receipts().stream()
-                .anyMatch(receipt -> receipt.outcome().state() == CpAck.State.UNKNOWN);
+        return effectiveChain(frame);
     }
 
     private static String namespaceOf(CpEnvelope frame) {
-        JsonObject payload = frame.envelopePayload;
-        return payload.has("namespace") && payload.get("namespace").isJsonPrimitive()
-                ? payload.get("namespace").getAsString()
-                : "";
+        return stringField(frame.envelopePayload, "namespace");
     }
 
     private static String targetOf(CpEnvelope frame) {
-        JsonObject payload = frame.envelopePayload;
-        return payload.has("target") && payload.get("target").isJsonPrimitive()
-                ? payload.get("target").getAsString()
+        return stringField(frame.envelopePayload, "target");
+    }
+
+    private static String stringField(JsonObject payload, String k) {
+        return payload != null && payload.has(k) && payload.get(k).isJsonPrimitive()
+                ? payload.get(k).getAsString()
                 : "";
     }
 
@@ -234,41 +319,46 @@ public final class CpConsumer {
     private List<CpAck> terminal(
             CpEnvelope frame, CpAck.State state, CpAck.Result result, String why) {
         OffsetDateTime now = OffsetDateTime.now(clock);
-        store.recordReceipt(frame.operationId, frame.sequence, state, result);
-        if (state == CpAck.State.UNKNOWN)
+        store.recordTerminal(
+                frame.epoch.toString(), frame.operationId, frame.sequence, state, result);
+        if (state == CpAck.State.UNKNOWN) {
             return List.of(CpAck.forEnvelope(frame, state, result, now));
+        }
         return List.of(
                 CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
                 CpAck.forEnvelope(frame, state, result, now));
     }
 
-    private List<CpAck> chainForPrior(CpEnvelope frame, CpStore.Receipt prior) {
+    private List<CpAck> effectiveChain(CpEnvelope frame) {
         OffsetDateTime now = OffsetDateTime.now(clock);
-        return switch (prior.outcome().state()) {
-            case EFFECTIVE ->
-                    List.of(
-                            CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
-                            CpAck.forEnvelope(frame, CpAck.State.VALIDATED, now),
-                            CpAck.forEnvelope(frame, CpAck.State.APPLIED, now),
-                            CpAck.forEnvelope(frame, CpAck.State.EFFECTIVE, now));
+        store.recordTerminal(
+                frame.epoch.toString(),
+                frame.operationId,
+                frame.sequence,
+                CpAck.State.EFFECTIVE,
+                CpAck.Result.OK);
+        return effectiveChain(frame, now);
+    }
+
+    private static List<CpAck> effectiveChain(CpEnvelope frame, OffsetDateTime now) {
+        return List.of(
+                CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
+                CpAck.forEnvelope(frame, CpAck.State.VALIDATED, now),
+                CpAck.forEnvelope(frame, CpAck.State.APPLIED, now),
+                CpAck.forEnvelope(frame, CpAck.State.EFFECTIVE, now));
+    }
+
+    private List<CpAck> repost(CpEnvelope frame, CpStore.Terminal prior) {
+        OffsetDateTime now = OffsetDateTime.now(clock);
+        return switch (prior.state()) {
+            case EFFECTIVE -> effectiveChain(frame, now);
             case UNKNOWN ->
-                    List.of(
-                            CpAck.forEnvelope(
-                                    frame, CpAck.State.UNKNOWN, prior.outcome().result(), now));
+                    List.of(CpAck.forEnvelope(frame, CpAck.State.UNKNOWN, prior.result(), now));
             default ->
                     List.of(
                             CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
-                            CpAck.forEnvelope(
-                                    frame, prior.outcome().state(), prior.outcome().result(), now));
+                            CpAck.forEnvelope(frame, prior.state(), prior.result(), now));
         };
-    }
-
-    private CpAck repost(CpEnvelope frame, CpStore.Receipt prior) {
-        return CpAck.forEnvelope(
-                frame,
-                prior.outcome().state(),
-                prior.outcome().result(),
-                OffsetDateTime.now(clock));
     }
 
     private static JsonObject parseObject(String json, String what) {

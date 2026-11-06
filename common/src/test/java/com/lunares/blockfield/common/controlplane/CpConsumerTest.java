@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -15,7 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** Frame handling: ordering, validation, durable receipts and last-known-good. */
+/** Frame handling: ordering, validation, durable terminal receipts and last-known-good. */
 class CpConsumerTest {
     private static final Clock CLOCK =
             Clock.fixed(Instant.parse("2026-11-06T12:00:00Z"), ZoneOffset.UTC);
@@ -23,6 +25,7 @@ class CpConsumerTest {
     private static final String OTHER_EPOCH = "123e4567-e89b-12d3-a456-426614174099";
     private static final String GENERATION = "123e4567-e89b-12d3-a456-426614174001";
     private static final String GENERATION_2 = "123e4567-e89b-12d3-a456-426614174002";
+    private static final String AUDIENCE = "game-1";
 
     @TempDir Path directory;
 
@@ -34,7 +37,7 @@ class CpConsumerTest {
     void setUp() {
         store = new CpStore(directory.resolve("cp"));
         applier = new RecordingApplier();
-        consumer = new CpConsumer(store, applier, CLOCK);
+        consumer = new CpConsumer(store, applier, CLOCK, AUDIENCE);
         consumer.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
         applier.calls.clear();
     }
@@ -158,7 +161,13 @@ class CpConsumerTest {
         assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
         assertEquals(CpAck.Result.EFFECT_UNCERTAIN, acks.get(acks.size() - 1).result);
         assertTrue(consumer.needsOperator());
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 42));
         assertEquals(41, store.loadLkg("gameplay", "*").revision());
+
+        // A replay re-posts UNKNOWN instead of re-applying blindly.
+        List<CpAck> replay = consumer.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+        assertEquals(CpAck.State.UNKNOWN, replay.get(replay.size() - 1).state);
+        assertEquals(1, applier.calls.size());
     }
 
     @Test
@@ -181,7 +190,7 @@ class CpConsumerTest {
                                 settingsFrame(
                                         EPOCH, 43, 43, gameplayValue(false), false, GENERATION_2)));
         assertEquals(42, store.loadCursor().sequence());
-        assertNull(store.lastReceipt(43));
+        assertNull(store.lastTerminal(EPOCH, "op-43"));
 
         consumer.onSnapshot(snapshot(EPOCH, GENERATION_2, 42, gameplayValue(false)));
         List<CpAck> acks =
@@ -218,10 +227,6 @@ class CpConsumerTest {
         assertEquals(1, report.errors().size());
     }
 
-    private void commit(List<CpAck> acks) {
-        store.saveCursorIfForward(acks.get(0).epoch.toString(), acks.get(0).sequence);
-    }
-
     @Test
     void blankTargetFrameIsRejectedWithoutApply() {
         JsonObject payload = new JsonObject();
@@ -236,7 +241,8 @@ class CpConsumerTest {
                         OffsetDateTime.now(CLOCK).plusMinutes(5),
                         true,
                         null,
-                        GENERATION);
+                        GENERATION,
+                        AUDIENCE);
 
         List<CpAck> acks = consumer.onFrame(frame);
 
@@ -254,7 +260,7 @@ class CpConsumerTest {
         settings.add(snapshotEntry("*", 42, gameplayValue(false)));
 
         CpConsumer.SnapshotReport report =
-                consumer.onSnapshot(snapshotRoot(EPOCH, GENERATION, settings));
+                consumer.onSnapshot(snapshotRoot(EPOCH, GENERATION, settings, AUDIENCE));
 
         assertEquals(1, report.errors().size());
         assertEquals(1, applier.calls.size());
@@ -268,7 +274,7 @@ class CpConsumerTest {
 
         assertThrows(CpContractException.class, () -> consumer.onFrame(frame));
         assertEquals(41, store.loadCursor().sequence());
-        assertNull(store.lastReceipt(42));
+        assertNull(store.lastTerminal(EPOCH, "op-42"));
         assertTrue(applier.calls.isEmpty());
     }
 
@@ -280,8 +286,177 @@ class CpConsumerTest {
 
         assertThrows(CpContractException.class, () -> consumer.onFrame(frame));
         assertEquals(41, store.loadCursor().sequence());
-        assertNull(store.lastReceipt(42));
+        assertNull(store.lastTerminal(EPOCH, "op-42"));
         assertTrue(applier.calls.isEmpty());
+    }
+
+    @Test
+    void oldEpochReceiptDoesNotShadowNewEpochFrame() {
+        store.recordTerminal(EPOCH, "op-old", 1, CpAck.State.EFFECTIVE, CpAck.Result.OK);
+        consumer.onSnapshot(snapshotWithCursor(OTHER_EPOCH, GENERATION, 0, 41));
+        applier.calls.clear();
+
+        List<CpAck> acks =
+                consumer.onFrame(settingsFrame(OTHER_EPOCH, 1, 42, gameplayValue(false), false));
+
+        assertEquals(1, applier.calls.size(), "new-epoch frame silently skipped via old receipt");
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+    }
+
+    @Test
+    void frameExceptionMarksOperatorNeeded() {
+        applier.throwOnApply = true;
+
+        List<CpAck> acks = consumer.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+
+        assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 42));
+    }
+
+    @Test
+    void crashWindowReappliesInsteadOfStaleReject() {
+        // Crash after apply + LKG save, before the terminal receipt: only LKG survived.
+        store.saveAppliedSnapshot("gameplay", "*", 42, gameplayValue(false));
+        applier.calls.clear();
+
+        List<CpAck> acks = consumer.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(1, applier.calls.size());
+    }
+
+    @Test
+    void tornStateFailsClosedToResync() throws Exception {
+        Path dir = directory.resolve("cp-torn");
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("state.json"), "{\"epoch\":", StandardCharsets.UTF_8);
+        Files.writeString(
+                dir.resolve("receipts.jsonl"),
+                "{\"operationId\":\"op-2\",\"seq",
+                StandardCharsets.UTF_8);
+        CpStore torn = new CpStore(dir);
+        CpConsumer fresh = new CpConsumer(torn, applier, CLOCK, AUDIENCE);
+        fresh.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks = fresh.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+    }
+
+    @Test
+    void foreignAudienceRejectedWithoutApply() {
+        List<CpAck> acks =
+                consumer.onFrame(
+                        frame(
+                                EPOCH,
+                                42,
+                                settingsPayload(gameplayValue(false), false),
+                                42L,
+                                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                                true,
+                                null,
+                                GENERATION,
+                                "other-game"));
+
+        assertTrue(applier.calls.isEmpty(), "foreign-audience frame was applied");
+        assertEquals(CpAck.State.REJECTED, acks.get(acks.size() - 1).state);
+        assertEquals(CpAck.Result.INVALID_SCHEMA, acks.get(acks.size() - 1).result);
+    }
+
+    @Test
+    void foreignSnapshotAudienceRefusesAdoption() {
+        JsonArray settings = new JsonArray();
+        settings.add(snapshotEntry("*", 42, gameplayValue(false)));
+
+        assertThrows(
+                CpResyncException.class,
+                () -> consumer.onSnapshot(snapshotRoot(EPOCH, GENERATION, settings, "other-game")));
+        assertTrue(applier.calls.isEmpty(), "mismatched snapshot was applied");
+        assertEquals(41, store.loadLkg("gameplay", "*").revision());
+        assertEquals(41, store.loadCursor().sequence());
+    }
+
+    @Test
+    void actionAppliesThroughHandler() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks = withActions.onFrame(knownActionFrame(42, "moderation.kick"));
+
+        assertEquals(
+                List.of(
+                        CpAck.State.RECEIVED,
+                        CpAck.State.VALIDATED,
+                        CpAck.State.APPLIED,
+                        CpAck.State.EFFECTIVE),
+                acks.stream().map(ack -> ack.state).toList());
+        assertEquals(1, actions.calls.size());
+        assertTrue(applier.calls.isEmpty());
+    }
+
+    @Test
+    void unknownActionKindRejectedWithoutHandlerCall() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks = withActions.onFrame(knownActionFrame(42, "console.exec"));
+
+        assertTrue(actions.calls.isEmpty());
+        assertEquals(CpAck.State.REJECTED, acks.get(acks.size() - 1).state);
+        assertEquals(CpAck.Result.INVALID_SCHEMA, acks.get(acks.size() - 1).result);
+    }
+
+    @Test
+    void startedActionNeverRerunsAndReportsUnknown() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        // Crash after the started-marker, before any terminal state: the handler ran once.
+        store.markActionStarted(EPOCH, "op-42", "moderation.kick");
+
+        List<CpAck> acks = withActions.onFrame(knownActionFrame(42, "moderation.kick"));
+
+        assertTrue(actions.calls.isEmpty(), "started action re-ran after a crash");
+        assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
+        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, acks.get(acks.size() - 1).result);
+        assertTrue(store.isActionOperatorNeeded("op-42"));
+        assertTrue(withActions.needsOperator());
+    }
+
+    @Test
+    void actionExceptionMarksOperator() {
+        RecordingActions actions = new RecordingActions();
+        actions.throwOnHandle = true;
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks = withActions.onFrame(knownActionFrame(42, "moderation.ban"));
+
+        assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
+        assertTrue(store.isActionOperatorNeeded("op-42"));
+        assertTrue(withActions.needsOperator());
+    }
+
+    @Test
+    void decidedActionRepostsWithoutRerun() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        List<CpAck> first = withActions.onFrame(knownActionFrame(42, "moderation.kick"));
+
+        List<CpAck> second = withActions.onFrame(knownActionFrame(42, "moderation.kick"));
+
+        assertEquals(1, actions.calls.size());
+        assertEquals(
+                first.stream().map(ack -> ack.state).toList(),
+                second.stream().map(ack -> ack.state).toList());
+        assertEquals(CpAck.State.EFFECTIVE, second.get(second.size() - 1).state);
+    }
+
+    private void commit(List<CpAck> acks) {
+        store.saveCursorIfForward(acks.get(0).epoch.toString(), acks.get(0).sequence);
     }
 
     private String snapshot(String epoch, String generation, long revision, JsonObject value) {
@@ -293,7 +468,7 @@ class CpConsumerTest {
         entry.addProperty("value_hash", "snapshot");
         JsonObject root = new JsonObject();
         root.addProperty("schema", 2);
-        root.addProperty("audience", "game-1");
+        root.addProperty("audience", AUDIENCE);
         root.addProperty("epoch", epoch);
         root.addProperty("generation", generation);
         root.addProperty("cursor", 41);
@@ -301,6 +476,24 @@ class CpConsumerTest {
         settings.add(entry);
         root.add("settings", settings);
         root.addProperty("hash", "snapshot");
+        return root.toString();
+    }
+
+    private String snapshotWithCursor(String epoch, String generation, long cursor, long revision) {
+        JsonObject root = new JsonObject();
+        root.addProperty("schema", 2);
+        root.addProperty("audience", AUDIENCE);
+        root.addProperty("epoch", epoch);
+        root.addProperty("generation", generation);
+        root.addProperty("cursor", cursor);
+        JsonArray settings = new JsonArray();
+        JsonObject entry = new JsonObject();
+        entry.addProperty("namespace", "gameplay");
+        entry.addProperty("target", "*");
+        entry.addProperty("revision", revision);
+        entry.add("value", gameplayValue(true));
+        settings.add(entry);
+        root.add("settings", settings);
         return root.toString();
     }
 
@@ -360,7 +553,8 @@ class CpConsumerTest {
                 OffsetDateTime.now(CLOCK).plusMinutes(5),
                 true,
                 null,
-                generation);
+                generation,
+                AUDIENCE);
     }
 
     private String settingsFrame(
@@ -371,7 +565,15 @@ class CpConsumerTest {
             boolean invalid,
             OffsetDateTime expiresAt) {
         return frame(
-                epoch, sequence, settingsPayload(value, invalid), revision, expiresAt, true, null);
+                epoch,
+                sequence,
+                settingsPayload(value, invalid),
+                revision,
+                expiresAt,
+                true,
+                null,
+                GENERATION,
+                AUDIENCE);
     }
 
     private String actionFrame(long sequence) {
@@ -385,7 +587,27 @@ class CpConsumerTest {
                 null,
                 OffsetDateTime.now(CLOCK).plusMinutes(5),
                 true,
-                null);
+                null,
+                GENERATION,
+                AUDIENCE);
+    }
+
+    private String knownActionFrame(long sequence, String kind) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", kind);
+        payload.addProperty("target", "arena");
+        payload.addProperty("playerId", "player-1");
+        payload.addProperty("reason", "test");
+        return frame(
+                EPOCH,
+                sequence,
+                payload,
+                null,
+                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                true,
+                null,
+                GENERATION,
+                AUDIENCE);
     }
 
     private String nonExecutableFrame(long sequence, String reason) {
@@ -396,7 +618,9 @@ class CpConsumerTest {
                 42L,
                 OffsetDateTime.now(CLOCK).plusMinutes(5),
                 false,
-                reason);
+                reason,
+                GENERATION,
+                AUDIENCE);
     }
 
     private String frameAtSequence(long sequence) {
@@ -410,8 +634,27 @@ class CpConsumerTest {
             Long revision,
             OffsetDateTime expiresAt,
             boolean executable,
-            String reason) {
-        return frame(epoch, sequence, payload, revision, expiresAt, executable, reason, GENERATION);
+            String reason,
+            String generation,
+            String audience) {
+        JsonObject frame = new JsonObject();
+        frame.addProperty("schema", 2);
+        frame.addProperty("epoch", epoch);
+        frame.addProperty("sequence", sequence);
+        frame.addProperty("operationId", "op-" + sequence);
+        frame.addProperty("audience", audience);
+        frame.addProperty("generation", generation);
+        if (revision == null) frame.add("revision", null);
+        else frame.addProperty("revision", revision);
+        frame.addProperty("payloadHash", "a".repeat(64));
+        frame.addProperty("authorizationEpoch", 3);
+        frame.addProperty("expiresAt", expiresAt.toString());
+        frame.addProperty("executable", executable);
+        if (reason == null) frame.add("reason", null);
+        else frame.addProperty("reason", reason);
+        if (payload == null) frame.add("payload", null);
+        else frame.add("payload", payload);
+        return frame.toString();
     }
 
     private String twoTargetSnapshot(
@@ -423,13 +666,14 @@ class CpConsumerTest {
         JsonArray settings = new JsonArray();
         settings.add(snapshotEntry("*", starRevision, value));
         settings.add(snapshotEntry("arena", arenaRevision, value));
-        return snapshotRoot(epoch, generation, settings);
+        return snapshotRoot(epoch, generation, settings, AUDIENCE);
     }
 
-    private String snapshotRoot(String epoch, String generation, JsonArray settings) {
+    private String snapshotRoot(
+            String epoch, String generation, JsonArray settings, String audience) {
         JsonObject root = new JsonObject();
         root.addProperty("schema", 2);
-        root.addProperty("audience", "game-1");
+        root.addProperty("audience", audience);
         root.addProperty("epoch", epoch);
         root.addProperty("generation", generation);
         root.addProperty("cursor", 41);
@@ -448,37 +692,6 @@ class CpConsumerTest {
         return entry;
     }
 
-    private String frame(
-            String epoch,
-            long sequence,
-            JsonObject payload,
-            Long revision,
-            OffsetDateTime expiresAt,
-            boolean executable,
-            String reason,
-            String generation) {
-        JsonObject frame = new JsonObject();
-        frame.addProperty("schema", 2);
-        frame.addProperty("epoch", epoch);
-        frame.addProperty("sequence", sequence);
-        frame.addProperty(
-                "operationId",
-                "123e4567-e89b-12d3-a456-42661417" + String.format("%04d", sequence));
-        frame.addProperty("audience", "game-1");
-        frame.addProperty("generation", generation);
-        if (revision == null) frame.add("revision", null);
-        else frame.addProperty("revision", revision);
-        frame.addProperty("payloadHash", "a".repeat(64));
-        frame.addProperty("authorizationEpoch", 3);
-        frame.addProperty("expiresAt", expiresAt.toString());
-        frame.addProperty("executable", executable);
-        if (reason == null) frame.add("reason", null);
-        else frame.addProperty("reason", reason);
-        if (payload == null) frame.add("payload", null);
-        else frame.add("payload", payload);
-        return frame.toString();
-    }
-
     static final class RecordingApplier implements CpApplier {
         final List<JsonObject> calls = new ArrayList<>();
         boolean throwOnApply;
@@ -492,6 +705,19 @@ class CpConsumerTest {
                 return Outcome.rejected(CpAck.Result.INVALID_SCHEMA, "gameplay: unknown key");
             }
             return Outcome.ok();
+        }
+    }
+
+    static final class RecordingActions implements CpActionHandler {
+        final List<String> calls = new ArrayList<>();
+        boolean throwOnHandle;
+
+        @Override
+        public CpApplier.Outcome handleAction(
+                String kind, String target, String playerId, String reason) {
+            calls.add(kind + "/" + target + "/" + playerId);
+            if (throwOnHandle) throw new RuntimeException("boom");
+            return CpApplier.Outcome.ok();
         }
     }
 }
