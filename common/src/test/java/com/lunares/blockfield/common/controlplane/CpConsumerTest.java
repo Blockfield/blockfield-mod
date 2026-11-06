@@ -455,6 +455,31 @@ class CpConsumerTest {
         assertEquals(CpAck.State.EFFECTIVE, second.get(second.size() - 1).state);
     }
 
+    @Test
+    void frameDeliversSameValueShapeAsSnapshot() {
+        consumer.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+
+        assertEquals(1, applier.calls.size());
+        assertEquals(gameplayValue(false), applier.calls.get(0));
+        assertFalse(applier.calls.get(0).has("namespace"));
+    }
+
+    @Test
+    void frameOnOperatorNeededNamespaceIsHeld() {
+        applier.throwOnApply = true;
+        consumer.onSnapshot(snapshot(EPOCH, GENERATION, 42, gameplayValue(false)));
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 42));
+        applier.throwOnApply = false;
+        int calls = applier.calls.size();
+
+        List<CpAck> acks = consumer.onFrame(settingsFrame(42, 42, gameplayValue(false), false));
+
+        assertEquals(calls, applier.calls.size(), "frame applied over operator-needed marker");
+        assertEquals(CpAck.State.UNKNOWN, acks.get(acks.size() - 1).state);
+        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, acks.get(acks.size() - 1).result);
+        assertTrue(store.isOperatorNeeded("gameplay", "*", 42));
+    }
+
     private void commit(List<CpAck> acks) {
         store.saveCursorIfForward(acks.get(0).epoch.toString(), acks.get(0).sequence);
     }
@@ -509,8 +534,8 @@ class CpConsumerTest {
         JsonObject payload = new JsonObject();
         payload.addProperty("namespace", "gameplay");
         payload.addProperty("target", "*");
+        if (invalid) value.addProperty("unknownKey", true);
         payload.add("value", value);
-        if (invalid) payload.addProperty("unknownKey", true);
         return payload;
     }
 

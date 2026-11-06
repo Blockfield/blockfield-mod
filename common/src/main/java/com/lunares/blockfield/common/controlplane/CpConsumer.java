@@ -67,6 +67,12 @@ public final class CpConsumer {
 
     public record SnapshotReport(List<String> errors) {}
 
+    /** Frame identity for the durable terminal record; null on the snapshot path. */
+    private record FrameIdentity(String epoch, String operationId, long sequence) {}
+
+    /** Verdict of the single shared settings-apply path, as ack-equivalent states. */
+    private record NamespaceApply(CpAck.State state, CpAck.Result result, List<String> errors) {}
+
     /**
      * Adopt the snapshot baseline (desired state only, never receipt ACKs) and reconcile
      * last-known-good toward it. Unknown namespaces are reported, not applied.
@@ -110,32 +116,13 @@ public final class CpConsumer {
                 errors.add(namespace + "/" + target + ": snapshot entry misses value");
                 continue;
             }
-            if (store.isOperatorNeeded(namespace, target, revision)) {
-                errors.add(
-                        namespace
-                                + "/"
-                                + target
-                                + ": effect uncertain, needs operator (not retried)");
-                continue;
-            }
             CpStore.Lkg lkg = store.loadLkg(namespace, target);
             if (lkg != null && revision <= lkg.revision()) continue;
-            CpApplier.Outcome outcome;
-            try {
-                outcome =
-                        applier.applySettings(
-                                namespace, target, revision, item.getAsJsonObject("value"));
-            } catch (RuntimeException e) {
-                store.markOperatorNeeded(namespace, target, revision);
-                errors.add(namespace + "/" + target + ": effect uncertain, needs operator");
-                continue;
-            }
-            if (outcome.applied()) {
-                store.saveAppliedSnapshot(
-                        namespace, target, revision, item.getAsJsonObject("value"));
-            } else {
-                errors.addAll(outcome.errors());
-            }
+            // Operator gate, applier call and durable record all live in applyNamespace.
+            NamespaceApply apply =
+                    applyNamespace(
+                            namespace, target, revision, item.getAsJsonObject("value"), null);
+            if (apply.state() != CpAck.State.EFFECTIVE) errors.addAll(apply.errors());
         }
         return new SnapshotReport(List.copyOf(errors));
     }
@@ -185,63 +172,37 @@ public final class CpConsumer {
             // (S4b dispatches action frames here, before settings apply.)
             return onAction(frame);
         }
+        // The bare settings value is extracted once here; the applier never sees the wrapper.
+        String namespace = namespaceOf(frame);
+        String target = targetOf(frame);
+        JsonObject bareValue = bareValueOf(frame);
         if (frame.revision < 1
-                || frame.envelopePayload == null
-                || !SETTINGS_NAMESPACES.contains(namespaceOf(frame))
-                || targetOf(frame).isBlank()) {
+                || bareValue == null
+                || !SETTINGS_NAMESPACES.contains(namespace)
+                || target.isBlank()) {
             return terminal(
                     frame,
                     CpAck.State.REJECTED,
                     CpAck.Result.INVALID_SCHEMA,
                     "not a settings frame");
         }
-        CpStore.Lkg lkg = store.loadLkg(namespaceOf(frame), targetOf(frame));
+        CpStore.Lkg lkg = store.loadLkg(namespace, target);
         // Strictly older only: an equal revision without a terminal receipt is a crash window
         // (applied, LKG saved, receipt lost), and whole-namespace replace re-applies it safely.
         if (lkg != null && frame.revision < lkg.revision()) {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "stale revision");
         }
-        CpApplier.Outcome outcome;
-        try {
-            outcome =
-                    applier.applySettings(
-                            namespaceOf(frame),
-                            targetOf(frame),
-                            frame.revision,
-                            frame.envelopePayload);
-        } catch (RuntimeException e) {
-            store.saveUncertainFrame(
-                    namespaceOf(frame),
-                    targetOf(frame),
-                    frame.revision,
-                    epochId,
-                    frame.operationId,
-                    frame.sequence,
-                    CpAck.Result.EFFECT_UNCERTAIN);
-            return List.of(
-                    CpAck.forEnvelope(
-                            frame,
-                            CpAck.State.UNKNOWN,
-                            CpAck.Result.EFFECT_UNCERTAIN,
-                            OffsetDateTime.now(clock)));
+        NamespaceApply apply =
+                applyNamespace(
+                        namespace,
+                        target,
+                        frame.revision,
+                        bareValue,
+                        new FrameIdentity(epochId, frame.operationId, frame.sequence));
+        if (apply.state() == CpAck.State.EFFECTIVE) {
+            return effectiveChain(frame, OffsetDateTime.now(clock));
         }
-        if (!outcome.applied()) {
-            CpAck.Result result =
-                    outcome.result() == CpAck.Result.OK
-                            ? CpAck.Result.APPLY_FAILED
-                            : outcome.result();
-            return terminal(
-                    frame, CpAck.State.REJECTED, result, String.join("; ", outcome.errors()));
-        }
-        store.saveAppliedFrame(
-                namespaceOf(frame),
-                targetOf(frame),
-                frame.revision,
-                frame.envelopePayload,
-                epochId,
-                frame.operationId,
-                frame.sequence);
-        return effectiveChain(frame, OffsetDateTime.now(clock));
+        return terminal(frame, apply.state(), apply.result(), String.join("; ", apply.errors()));
     }
 
     /**
@@ -250,6 +211,69 @@ public final class CpConsumer {
     public synchronized boolean needsOperator() {
         if (store.hasOperatorNeeded()) return true;
         return store.hasTerminalState(CpAck.State.UNKNOWN);
+    }
+
+    /**
+     * The single settings-apply path for snapshots ({@code frame} null) and frames: operator gate,
+     * applier call over the bare value, durable record. The value is always the settings object
+     * itself, never the envelope wrapper, so both paths feed the applier one shape.
+     */
+    private NamespaceApply applyNamespace(
+            String namespace, String target, long revision, JsonObject value, FrameIdentity frame) {
+        if (store.isOperatorNeeded(namespace, target, revision)) {
+            String note =
+                    namespace + "/" + target + ": effect uncertain, needs operator (not retried)";
+            if (frame != null) {
+                store.saveUncertainFrame(
+                        namespace,
+                        target,
+                        revision,
+                        frame.epoch(),
+                        frame.operationId(),
+                        frame.sequence(),
+                        CpAck.Result.EFFECT_UNCERTAIN);
+            }
+            return new NamespaceApply(
+                    CpAck.State.UNKNOWN, CpAck.Result.EFFECT_UNCERTAIN, List.of(note));
+        }
+        CpApplier.Outcome outcome;
+        try {
+            outcome = applier.applySettings(namespace, target, revision, value);
+        } catch (RuntimeException e) {
+            String note = namespace + "/" + target + ": effect uncertain, needs operator";
+            if (frame != null) {
+                store.saveUncertainFrame(
+                        namespace,
+                        target,
+                        revision,
+                        frame.epoch(),
+                        frame.operationId(),
+                        frame.sequence(),
+                        CpAck.Result.EFFECT_UNCERTAIN);
+            } else {
+                store.markOperatorNeeded(namespace, target, revision);
+            }
+            return new NamespaceApply(
+                    CpAck.State.UNKNOWN, CpAck.Result.EFFECT_UNCERTAIN, List.of(note));
+        }
+        if (outcome.applied()) {
+            if (frame != null) {
+                store.saveAppliedFrame(
+                        namespace,
+                        target,
+                        revision,
+                        value,
+                        frame.epoch(),
+                        frame.operationId(),
+                        frame.sequence());
+            } else {
+                store.saveAppliedSnapshot(namespace, target, revision, value);
+            }
+            return new NamespaceApply(CpAck.State.EFFECTIVE, CpAck.Result.OK, List.of());
+        }
+        CpAck.Result result =
+                outcome.result() == CpAck.Result.OK ? CpAck.Result.APPLY_FAILED : outcome.result();
+        return new NamespaceApply(CpAck.State.REJECTED, result, outcome.errors());
     }
 
     private List<CpAck> onAction(CpEnvelope frame) {
@@ -304,6 +328,15 @@ public final class CpConsumer {
 
     private static String targetOf(CpEnvelope frame) {
         return stringField(frame.envelopePayload, "target");
+    }
+
+    /** The bare settings value inside the envelope wrapper; null when absent or not an object. */
+    private static JsonObject bareValueOf(CpEnvelope frame) {
+        JsonObject payload = frame.envelopePayload;
+        if (payload == null || !payload.has("value") || !payload.get("value").isJsonObject()) {
+            return null;
+        }
+        return payload.getAsJsonObject("value");
     }
 
     private static String stringField(JsonObject payload, String k) {
