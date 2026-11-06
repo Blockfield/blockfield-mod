@@ -5,10 +5,9 @@ Reads workshop/thin.txt (paths relative to common/src/main/java) and asserts:
   names the class, so the last segment is the member and is dropped; a package
   wildcard names no class, so its package must hold at least one listed source;
   game-packet leakage through wildcards is caught by the reference scan below),
-- no listed source references a game-only packet, except inside the body of
-  NetworkHandler.register(): that dead code never runs on the Workshop profile
-  (only registerWorkshop() does). registerWorkshop() and every other method are
-  checked like any thin source.
+- no listed source references a game-only packet (same-package names need no
+  import, so the import scan cannot catch them). Game-side registries live in
+  classes outside this list (e.g. GameNetworkHandler), never in thin sources.
 """
 
 import re
@@ -17,7 +16,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMMON = ROOT / "common/src/main/java"
 THIN = ROOT / "workshop/thin.txt"
-EXEMPT_REFERENCE = "com/lunares/blockfield/network/NetworkHandler.java"
 
 IMPORT = re.compile(r"^import\s+(static\s+)?([\w.]+?)(\.\*)?;", re.MULTILINE)
 
@@ -67,75 +65,9 @@ def check_imports(rel, text, thin):
             fail(f"{rel} imports game-side {match.group(0).strip()}")
 
 
-def mask_non_code(text):
-    """Blank comments and string/char literals (length-preserving)."""
-    out = []
-    i, end = 0, len(text)
-    while i < end:
-        if text.startswith("//", i):
-            j = text.find("\n", i)
-            j = end if j < 0 else j
-            out.append(" " * (j - i))
-            i = j
-        elif text.startswith("/*", i):
-            j = text.find("*/", i + 2)
-            j = end if j < 0 else j + 2
-            out.append(re.sub(r"[^\n]", " ", text[i:j]))
-            i = j
-        elif text.startswith('"""', i):
-            j = text.find('"""', i + 3)
-            j = end if j < 0 else j + 3
-            out.append(re.sub(r"[^\n]", " ", text[i:j]))
-            i = j
-        elif text[i] in "\"'":
-            quote, j = text[i], i + 1
-            while j < end:
-                if text[j] == "\\":
-                    j += 2
-                    continue
-                if text[j] == quote:
-                    j += 1
-                    break
-                if text[j] == "\n" and quote == "'":
-                    break
-                j += 1
-            out.append(re.sub(r"[^\n]", " ", text[i:j]))
-            i = j
-        else:
-            out.append(text[i])
-            i += 1
-    return "".join(out)
-
-
-def checked_text(rel, text):
-    """Scan body with only the dead register() body blanked (braces matched
-    on comment/string-masked code so braces in comments cannot miscount)."""
-    if rel != EXEMPT_REFERENCE:
-        return text
-    masked = mask_non_code(text)
-    match = re.search(r"\bvoid\s+register\s*\(\s*\)\s*\{", masked)
-    if match is None:
-        return text  # fail closed: register() gone, check everything
-    depth, start = 0, match.end() - 1
-    stop = None
-    for i in range(start, len(masked)):
-        if masked[i] == "{":
-            depth += 1
-        elif masked[i] == "}":
-            depth -= 1
-            if depth == 0:
-                stop = i + 1
-                break
-    if stop is None:
-        return text
-    return text[:start] + re.sub(r"[^\n]", " ", text[start:stop]) + text[stop:]
-
-
 def check_references(rel, text, game_names):
     body = "\n".join(
-        line
-        for line in checked_text(rel, text).splitlines()
-        if not line.strip().startswith("import ")
+        line for line in text.splitlines() if not line.strip().startswith("import ")
     )
     hits = [name for name in game_names if re.search(rf"\b{name}\b", body)]
     if hits:

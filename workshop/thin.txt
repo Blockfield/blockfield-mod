@@ -6,19 +6,14 @@
 # can never move here). Paths are relative to common/src/main/java/.
 # No combat netcode: nothing here may import common.combat, client code or
 # server-game code (dev/workshop-thin-check.py fails `just lint` on drift).
-# Exception: NetworkHandler.register() names game-only packets in dead code
-# that never runs on the Workshop profile (only registerWorkshop() does);
-# only that method body is exempt from the reference scan. Imports are resolved
-# against this list instead: api.voice stays because NetworkHandler imports
-# VoiceProxyHolder (used only by the dead register(); holder + interface are
-# thin — Minecraft/UUID/List types only, no combat netcode).
+# Game-side registries (game packet register(), wire codecs, configuration
+# pair, 2D sound) live in GameNetworkHandler next to NetworkHandler and are
+# deliberately not listed here, so they never ship in the workshop module.
 com/lunares/blockfield/network/NetworkHandler.java
 com/lunares/blockfield/network/PackContract.java
 com/lunares/blockfield/network/PackVersion.java
 com/lunares/blockfield/api/mode/GameState.java
 com/lunares/blockfield/api/mode/IGameMode.java
-com/lunares/blockfield/api/voice/IVoiceProxy.java
-com/lunares/blockfield/api/voice/VoiceProxyHolder.java
 com/lunares/blockfield/workshop/WorkshopActionCoverage.java
 com/lunares/blockfield/workshop/WorkshopAiProgress.java
 com/lunares/blockfield/workshop/WorkshopBlockStates.java

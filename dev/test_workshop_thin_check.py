@@ -1,8 +1,8 @@
 """Unit tests for dev/workshop-thin-check.py (S233-U1 round 2).
 
-Covers both review findings: the register() exemption is method-body-scoped
-(registerWorkshop stays checked), and every com.lunares.blockfield import must
-resolve to workshop/thin.txt.
+Every com.lunares.blockfield import must resolve to workshop/thin.txt, and no
+thin source may reference a game-only packet. Game-side registries live in
+classes outside thin.txt (e.g. GameNetworkHandler), never in thin sources.
 """
 
 import importlib.util
@@ -17,43 +17,43 @@ SPEC = importlib.util.spec_from_file_location(
 GATE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GATE)
 
-
 THIN = [
     "com/lunares/blockfield/api/mode/GameState.java",
-    "com/lunares/blockfield/api/voice/VoiceProxyHolder.java",
     "com/lunares/blockfield/network/packet/MapPingC2SPacket.java",
     "com/lunares/blockfield/workshop/WorkshopGeometry.java",
 ]
 
 
 class GateTest(unittest.TestCase):
+    def test_game_ref_in_thin_file_fails(self):
+        text = (
+            "package com.lunares.blockfield.workshop;\n"
+            "public class WorkshopGeometry {\n"
+            "    static final String ID = GunBalanceS2CPacket.ID;\n"
+            "}\n"
+        )
+        with self.assertRaises(SystemExit):
+            GATE.check_references(
+                "com/lunares/blockfield/workshop/WorkshopGeometry.java",
+                text,
+                ("GunBalanceS2CPacket",),
+            )
+
     def test_register_workshop_game_ref_fails(self):
         text = (
             "package com.lunares.blockfield.network;\n"
             "public class NetworkHandler {\n"
-            "    public static void register() {\n"
-            "        onceC2S(GunBalanceS2SPacketX.TYPE, GunBalanceS2SPacketX.CODEC);\n"
-            "    }\n"
             "    public static void registerWorkshop() {\n"
             "        onceC2S(GunBalanceS2CPacket.TYPE, GunBalanceS2CPacket.CODEC);\n"
             "    }\n"
             "}\n"
         )
         with self.assertRaises(SystemExit):
-            GATE.check_references(GATE.EXEMPT_REFERENCE, text, ("GunBalanceS2CPacket",))
-
-    def test_register_body_game_ref_exempt(self):
-        text = (
-            "package com.lunares.blockfield.network;\n"
-            "public class NetworkHandler {\n"
-            "    public static void register() {\n"
-            "        onceC2S(GunBalanceS2CPacket.TYPE, GunBalanceS2CPacket.CODEC);\n"
-            "    }\n"
-            "    public static void registerWorkshop() {\n"
-            "    }\n"
-            "}\n"
-        )
-        GATE.check_references(GATE.EXEMPT_REFERENCE, text, ("GunBalanceS2CPacket",))
+            GATE.check_references(
+                "com/lunares/blockfield/network/NetworkHandler.java",
+                text,
+                ("GunBalanceS2CPacket",),
+            )
 
     def test_nonlisted_import_fails(self):
         for imp in (
@@ -69,7 +69,6 @@ class GateTest(unittest.TestCase):
     def test_listed_imports_pass(self):
         text = (
             "import com.lunares.blockfield.api.mode.GameState;\n"
-            "import com.lunares.blockfield.api.voice.VoiceProxyHolder;\n"
             "import static com.lunares.blockfield.api.mode.GameState.VALUE;\n"
             "import com.lunares.blockfield.network.packet.*;\n"
             "import net.minecraft.server.level.ServerPlayer;\n"
@@ -82,28 +81,33 @@ class GateTest(unittest.TestCase):
             GATE.check_imports(rel, (GATE.COMMON / rel).read_text(), files)
 
     def test_current_register_workshop_clean(self):
-        text = (GATE.COMMON / GATE.EXEMPT_REFERENCE).read_text()
-        masked = GATE.mask_non_code(text)
+        text = (
+            GATE.COMMON / "com/lunares/blockfield/network/NetworkHandler.java"
+        ).read_text()
         match = re.search(
-            r"public\s+static\s+void\s+registerWorkshop\s*\(\s*\)\s*\{", masked
+            r"public\s+static\s+void\s+registerWorkshop\s*\(\s*\)\s*\{", text
         )
         self.assertIsNotNone(match)
         depth, start, stop = 0, match.end() - 1, None
-        for i in range(start, len(masked)):
-            if masked[i] == "{":
+        for i in range(start, len(text)):
+            if text[i] == "{":
                 depth += 1
-            elif masked[i] == "}":
+            elif text[i] == "}":
                 depth -= 1
                 if depth == 0:
                     stop = i + 1
                     break
         self.assertIsNotNone(stop)
-        body = text[start:stop]
         files = GATE.thin_files()
         thin_names = {Path(name).name for name in files}
         game_names = GATE.game_packets(thin_names)
-        hits = [name for name in game_names if re.search(rf"\b{name}\b", body)]
+        hits = [
+            name for name in game_names if re.search(rf"\b{name}\b", text[start:stop])
+        ]
         self.assertEqual(hits, [])
+
+    def test_current_tree_passes(self):
+        GATE.main()
 
 
 if __name__ == "__main__":
