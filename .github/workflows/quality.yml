@@ -54,7 +54,7 @@ jobs:
           java=true
           if [ -n "$BASE_SHA" ] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
             java=false
-            for f in $(git diff --name-only "$BASE_SHA" HEAD); do
+            for f in $(git diff --name-only --no-renames "$BASE_SHA" HEAD); do
               case "$f" in
                 .github/workflows/quality.yml | dev/quality.py | scripts/toolchain.py) java=true ;;
                 *.md | docs/* | release-notes/* | .github/* | *.py | *.sh) ;;
@@ -67,7 +67,7 @@ jobs:
           # need jars rebuilt, not tests: run assemble only. Fail closed — anything
           # else, including an unknown base, leaves assemble_only=false.
           assemble_only=false
-          if [ "$(git diff --name-only "$BASE_SHA" HEAD)" = "gradle.properties" ]; then
+          if [ "$(git diff --name-only --no-renames "$BASE_SHA" HEAD)" = "gradle.properties" ]; then
             changed=$(git diff "$BASE_SHA" HEAD -- gradle.properties | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' || true)
             if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -qvE '^[+-]mod_version='; then
               assemble_only=true
