@@ -392,6 +392,29 @@ class JavaFormatScope(unittest.TestCase):
             with patch.object(quality, "ROOT", root):
                 self.assertFalse(quality.wire_hooks(root))
 
+    def test_wire_hooks_leaves_outer_repo_alone_on_invalid_gitdir(self):
+        with TemporaryDirectory(prefix="bf hooks ") as tmp:
+            outer = Path(tmp)
+            subprocess.run(["git", "init", "--quiet", tmp], check=True)
+            subprocess.run(
+                ["git", "config", "core.hooksPath", "/outer/hooks"],
+                cwd=outer,
+                check=True,
+            )
+            sub = outer / "sub"
+            sub.mkdir()
+            (sub / ".git").mkdir()  # invalid git dir: git would resolve upward
+            (sub / ".githooks").mkdir()
+            self.assertFalse(quality.wire_hooks(sub))
+            probe = subprocess.run(
+                ["git", "config", "--local", "--get", "core.hooksPath"],
+                cwd=outer,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(probe.stdout.strip(), "/outer/hooks")
+
 
 class JavaImportOrderCheck(unittest.TestCase):
     def test_check_java_mirrors_spotless_import_order(self):
