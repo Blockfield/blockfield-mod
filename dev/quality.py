@@ -403,6 +403,24 @@ def _git(root, *args):
     return ["git", f"--git-dir={root / '.git'}", *args]
 
 
+def _outer_hooks_path(root):
+    """Non-local core.hooksPath (global, else system), or "" when unset."""
+    for scope in ("--global", "--system"):
+        try:
+            value = subprocess.run(
+                _git(root, "config", scope, "--get", "core.hooksPath"),
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        if value:
+            return value
+    return ""
+
+
 def _local_hooks_path(root):
     """Repo-local core.hooksPath, or "" when unset/unreadable."""
     try:
@@ -429,6 +447,12 @@ def wire_hooks(root):
         return False
     local = _local_hooks_path(root)
     if local == ".githooks":
+        outer = _outer_hooks_path(root)
+        if outer:
+            print(
+                f"warning: superseding outer core.hooksPath {outer!r} with "
+                "versioned .githooks for this checkout"
+            )
         return True
     if local:
         print(
@@ -436,16 +460,7 @@ def wire_hooks(root):
             "versioned .githooks not wired"
         )
         return False
-    try:
-        outer = subprocess.run(
-            _git(root, "config", "--get", "core.hooksPath"),
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        outer = ""
+    outer = _outer_hooks_path(root)
     if outer:
         print(
             f"warning: superseding outer core.hooksPath {outer!r} with "
