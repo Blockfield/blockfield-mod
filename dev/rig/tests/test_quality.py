@@ -356,7 +356,7 @@ class JavaFormatScope(unittest.TestCase):
             self.make_repo(root)
             (root / ".githooks").mkdir()
             with patch.object(quality, "ROOT", root):
-                quality.wire_hooks(root)
+                self.assertTrue(quality.wire_hooks(root))
             probe = subprocess.run(
                 ["git", "config", "core.hooksPath"],
                 cwd=root,
@@ -365,6 +365,32 @@ class JavaFormatScope(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(probe.stdout.strip(), ".githooks")
+
+    def test_wire_hooks_reports_already_wired_as_success(self):
+        with TemporaryDirectory(prefix="bf hooks ") as tmp:
+            root = Path(tmp) / "mod"
+            self.make_repo(root)
+            (root / ".githooks").mkdir()
+            subprocess.run(
+                ["git", "config", "core.hooksPath", ".githooks"],
+                cwd=root,
+                check=True,
+            )
+            with patch.object(quality, "ROOT", root):
+                self.assertTrue(quality.wire_hooks(root))
+
+    def test_wire_hooks_leaves_explicit_choice_alone(self):
+        with TemporaryDirectory(prefix="bf hooks ") as tmp:
+            root = Path(tmp) / "mod"
+            self.make_repo(root)
+            (root / ".githooks").mkdir()
+            subprocess.run(
+                ["git", "config", "core.hooksPath", ".custom"],
+                cwd=root,
+                check=True,
+            )
+            with patch.object(quality, "ROOT", root):
+                self.assertFalse(quality.wire_hooks(root))
 
 
 class JavaImportOrderCheck(unittest.TestCase):
