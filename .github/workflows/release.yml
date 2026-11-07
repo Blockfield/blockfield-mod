@@ -1,6 +1,8 @@
 # Релизный workflow: тег vX.Y.Z (= mod_version в gradle.properties) -> тесты + сборка ->
-# GitHub Release с client jar и SHA256SUMS. Клиент закрепляет jar этого тега
-# (Blockfield/blockfield-client: mods/blockfield-client.pw.toml); server jar
+# GitHub Release с client jar, версионированным common-артефактом
+# (blockfield-common-<version>.jar + SHA256SUMS, immutable на версию: существующий
+# релиз decide пропускает, gh release create не перезаписывает). Клиент закрепляет
+# jar этого тега (Blockfield/blockfield-client: mods/blockfield-client.pw.toml); server jar
 # собирается и публикуется из blockfield-server (mod-server/).
 # Теги читают кэш main, который сохраняет quality.yml после проверки каждого изменения.
 # Push в main с новым mod_version публикует релиз сам: если quality.yml уже успешно проверил
@@ -158,7 +160,7 @@ jobs:
         if: needs.decide.outputs.full == 'true'
       - name: Build jars (tree already tested, no test re-run)
         if: needs.decide.outputs.jars == 'true'
-        run: just gradle --no-daemon --max-workers=2 assemble :client:remapJar
+        run: just gradle --no-daemon --max-workers=2 assemble :client:remapJar :common:remapJar
       - name: Release text
         if: needs.decide.outputs.publish == 'true'
         uses: Blockfield/blockfield-workspace/.github/actions/release-text@2f20c9e9f66ddf63fbb59196c1ab69cfe30356d2
@@ -177,7 +179,17 @@ jobs:
         run: |
           version="${{ needs.decide.outputs.version }}"
           mkdir -p dist
+          # Full path already ran java-check (build); the jars-only path built
+          # :common:remapJar above. Rebuild here only when the jar is missing.
+          common_built=false
+          for jar in common/build/libs/blockfield-common-*.jar; do
+            if [ -e "$jar" ]; then common_built=true; fi
+          done
+          if [ "$common_built" != true ]; then
+            just gradle --no-daemon --max-workers=2 :common:remapJar
+          fi
           cp client/build/libs/blockfield-client-*.jar dist/
-          rm -f dist/*-sources.jar
+          cp common/build/libs/blockfield-common-*.jar dist/
+          rm -f dist/*-sources.jar dist/blockfield-common-*-dev.jar
           (cd dist && sha256sum -- *.jar > SHA256SUMS)
           gh release create "$version" --target "$GITHUB_SHA" --title "blockfield $version" --notes-file dist/release-notes.md dist/*
