@@ -304,18 +304,187 @@ def check_java(files):
     )
 
 
-def wire_hooks(root):
-    """Point this checkout at the versioned hooks so pushes run format-check."""
-    if not (root / ".githooks").is_dir():
-        print(f"no {root / '.githooks'}: leaving git hooks alone")
-        return
-    subprocess.run(
-        ["git", "config", "core.hooksPath", ".githooks"],
-        cwd=root,
-        check=True,
-        env=child_env(),
+def staged_files():
+    """Staged, still-present worktree files, repo-relative (empty outside commits)."""
+    try:
+        staged = subprocess.check_output(
+            [
+                "git",
+                "diff",
+                "--cached",
+                "--name-only",
+                "-z",
+                "--diff-filter=ACMR",
+                "--",
+            ],
+            cwd=ROOT,
+            env=child_env(),
+        )
+    except subprocess.CalledProcessError:
+        return []
+    return sorted(
+        os.fsdecode(name)
+        for name in staged.split(b"\0")
+        if name and (ROOT / os.fsdecode(name)).is_file()
     )
-    print("git pushes now run .githooks/pre-push (bypass: --no-verify)")
+
+
+def format_staged():
+    """Format the staged files with the same pinned formatters `format-check`
+    uses, and re-stage them. Files with unstaged edits are skipped with a
+    warning (formatting the worktree copy would stage unreviewed hunks), so
+    only fully staged files are re-added. No Gradle (unlike `format`, which
+    runs spotlessApply for Java).
+    """
+    files = staged_files()
+    if not files:
+        return
+    # Fail closed: if the worktree diff cannot be read, the hook must stop
+    # the commit rather than risk staging unreviewed hunks.
+    dirty = git_names("diff", "--name-only") & set(files)
+    if dirty:
+        print(
+            "pre-commit: skipping partially staged files "
+            "(format them after staging, or unstage first):\n"
+            + "\n".join(f"  {n}" for n in sorted(dirty))
+        )
+        files = [f for f in files if f not in dirty]
+        if not files:
+            return
+    eol()
+    python = [name for name in files if name.endswith(".py")]
+    shell = [name for name in files if name.endswith(".sh")]
+    yaml = [name for name in files if name.endswith((".yml", ".yaml"))]
+    java = [name for name in files if name.endswith(".java") and in_java_roots(name)]
+    if python:
+        each(["ruff", "format"], python)
+    if shell:
+        each(["shfmt", "-i", "4", "-ci", "-w"], shell)
+    if yaml:
+        each(["prettier", "--write"], yaml)
+    if java:
+        java_version()
+        jar = download(GJF_JAR, GJF_URL, GJF_SHA256)
+        each(
+            [
+                "java",
+                *GJF_EXPORTS,
+                "-jar",
+                str(jar),
+                "--aosp",
+                # Same Spotless parity as check_java: skip import sorting and
+                # long-string reflows here, order imports with the fixer below.
+                "--skip-sorting-imports",
+                "--skip-reflowing-long-strings",
+                "--replace",
+            ],
+            java,
+        )
+        each(
+            [
+                "java",
+                *GJF_EXPORTS,
+                "-jar",
+                str(jar),
+                "--fix-imports-only",
+                "--replace",
+            ],
+            java,
+        )
+    run("git", "add", "--", *files)
+
+
+def _git(root, *args):
+    """git bound to this checkout's git dir.
+
+    An invalid `.git` entry makes git fail instead of silently resolving to
+    an outer repository (whose config we must never touch).
+    """
+    return ["git", f"--git-dir={root / '.git'}", *args]
+
+
+def _outer_hooks_path(root):
+    """Non-local core.hooksPath (global, else system), or "" when unset."""
+    for scope in ("--global", "--system"):
+        try:
+            value = subprocess.run(
+                _git(root, "config", scope, "--get", "core.hooksPath"),
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            continue
+        if value:
+            return value
+    return ""
+
+
+def _local_hooks_path(root):
+    """Repo-local core.hooksPath, or "" when unset/unreadable."""
+    try:
+        return subprocess.run(
+            _git(root, "config", "--local", "--get", "core.hooksPath"),
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def wire_hooks(root):
+    """Point this checkout at its versioned hooks so pushes run format-check.
+
+    Returns True when the repo-local core.hooksPath ends up as `.githooks`
+    (set just now or already). Returns False on an explicit foreign choice
+    (warned, left alone), when there is no git checkout or no `.githooks`,
+    and on write failure (reported to stderr). Never touches an outer repo.
+    """
+    if not (root / ".git").exists() or not (root / ".githooks").is_dir():
+        return False
+    local = _local_hooks_path(root)
+    if local == ".githooks":
+        outer = _outer_hooks_path(root)
+        if outer:
+            print(
+                f"warning: superseding outer core.hooksPath {outer!r} with "
+                "versioned .githooks for this checkout",
+                file=sys.stderr,
+            )
+        return True
+    if local:
+        print(
+            f"warning: keeping explicit core.hooksPath {local!r}; "
+            "versioned .githooks not wired",
+            file=sys.stderr,
+        )
+        return False
+    outer = _outer_hooks_path(root)
+    if outer:
+        print(
+            f"warning: superseding outer core.hooksPath {outer!r} with "
+            "versioned .githooks for this checkout",
+            file=sys.stderr,
+        )
+    try:
+        subprocess.run(
+            _git(root, "config", "--local", "core.hooksPath", ".githooks"),
+            cwd=root,
+            check=True,
+            env=child_env(),
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        print(
+            f"warning: cannot wire versioned hooks in {root}: {error}", file=sys.stderr
+        )
+        return False
+    print(
+        "git pushes now run .githooks/pre-push (bypass: --no-verify)", file=sys.stderr
+    )
+    return True
 
 
 def main(argv=None):
@@ -339,6 +508,7 @@ def main(argv=None):
             "check",
             "gradle",
             "build",
+            "format-staged",
             "java-check",
             "java-format",
             "uniform-bake",
@@ -350,10 +520,31 @@ def main(argv=None):
     )
     parser.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    # Every fast entry point wires the versioned hooks first, so a fresh
+    # clone gets them on first use even when `just setup` never ran.
+    # Only sets core.hooksPath when it is unset; never fails the command.
+    if args.command in (
+        "lint",
+        "format",
+        "format-check",
+        "format-staged",
+        "test",
+        "check",
+    ):
+        wire_hooks(ROOT)
+    if args.command == "format-staged":
+        format_staged()
+        return
     if args.command == "setup":
         for name in ("ruff", "actionlint", "shellcheck", "shfmt", "prettier"):
             tool(name)
-        wire_hooks(ROOT)
+        if (
+            (ROOT / ".git").exists()
+            and (ROOT / ".githooks").is_dir()
+            and not wire_hooks(ROOT)
+            and not _local_hooks_path(ROOT)
+        ):
+            parser.error("just setup: cannot wire versioned hooks in this checkout")
         return
     if args.command == "check":
         main(["lint"])
