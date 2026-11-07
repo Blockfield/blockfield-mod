@@ -12,8 +12,8 @@ import java.util.Map;
  * server wires its live combat counters into one instance per match and formats a single log line.
  *
  * <p>Histograms use fixed buckets and preallocated counts: recording never allocates. Quantiles
- * report the first bucket upper bound holding the rank; when the rank lands in the overflow
- * bucket the value clamps to the last finite bound and an overflow flag says it understates.
+ * report the first bucket upper bound holding the rank; when the rank lands in the overflow bucket
+ * the value clamps to the last finite bound and an overflow flag says it understates.
  */
 public final class HitregTelemetry {
     /** Tick-duration bucket upper bounds in milliseconds; the last count is the overflow bucket. */
@@ -92,9 +92,9 @@ public final class HitregTelemetry {
 
     /**
      * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code disputesDropped}.
-     * Null samples, null entries and non-JSON values (NaN/Infinity, enums, UUIDs, ...) are
-     * dropped, never thrown: telemetry must not fail match finalization, and the payload must
-     * stay valid JSON.
+     * Null samples, null entries and non-JSON values (NaN/Infinity, enums, UUIDs, ...) are dropped,
+     * never thrown: telemetry must not fail match finalization, and the payload must stay valid
+     * JSON.
      */
     public boolean noteDispute(Map<String, Object> sample) {
         if (disputes.size() >= MAX_DISPUTES) {
