@@ -52,9 +52,14 @@
 ## Проверки и выпуск
 
 - Из этого repo локально: `just check` и точечные тесты; команды — `dev/quality.py` и CI.
-  `just setup` включает версионированный pre-push хук (`.githooks/pre-push` через `core.hooksPath`):
-  каждый push запускает `just lint` и `just format-check` без Gradle; Java проверяет GJF 1.36.1
+  Версионированные хуки (`.githooks` через `core.hooksPath`): pre-commit форматирует
+  staged-файлы теми же закреплёнными форматтерами и пере-stage'ит их, поэтому коммит
+  всегда отформатирован (`just format-staged`, без Gradle — в отличие от `just format`,
+  который правит Java через spotlessApply); pre-push запускает `just lint` и
+  `just format-check` без Gradle; Java проверяет GJF 1.36.1
   (тот же форматтер, что Spotless) только в изменённых против `origin/main` файлах, `--all` — во всех.
+  Хуки включаются автоматически при любом быстром `just`-вызове
+  (lint/format/format-check/test/check): свежий клон получает хуки на первом `just`.
   Обход хука только через `--no-verify`.
   Полные `just java-check`, `just test` выполняет PR CI (зелёный до merge).
   Не ослабляйте lint/format/tests. Из workspace: build/setup/watch/scenario — справочник §4–5.

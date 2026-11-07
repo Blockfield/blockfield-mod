@@ -304,18 +304,113 @@ def check_java(files):
     )
 
 
-def wire_hooks(root):
-    """Point this checkout at the versioned hooks so pushes run format-check."""
-    if not (root / ".githooks").is_dir():
-        print(f"no {root / '.githooks'}: leaving git hooks alone")
-        return
-    subprocess.run(
-        ["git", "config", "core.hooksPath", ".githooks"],
-        cwd=root,
-        check=True,
-        env=child_env(),
+def staged_files():
+    """Staged, still-present worktree files, repo-relative (empty outside commits)."""
+    try:
+        staged = subprocess.check_output(
+            [
+                "git",
+                "diff",
+                "--cached",
+                "--name-only",
+                "-z",
+                "--diff-filter=ACMR",
+                "--",
+            ],
+            cwd=ROOT,
+            env=child_env(),
+        )
+    except subprocess.CalledProcessError:
+        return []
+    return sorted(
+        os.fsdecode(name)
+        for name in staged.split(b"\0")
+        if name and (ROOT / os.fsdecode(name)).is_file()
     )
+
+
+def format_staged():
+    """Format the staged files with the same pinned formatters `format-check`
+    uses, and re-stage them. Staged files only; no Gradle (unlike `format`,
+    which runs spotlessApply for Java).
+    """
+    files = staged_files()
+    if not files:
+        return
+    eol()
+    python = [name for name in files if name.endswith(".py")]
+    shell = [name for name in files if name.endswith(".sh")]
+    yaml = [name for name in files if name.endswith((".yml", ".yaml"))]
+    java = [name for name in files if name.endswith(".java") and in_java_roots(name)]
+    if python:
+        each(["ruff", "format"], python)
+    if shell:
+        each(["shfmt", "-i", "4", "-ci", "-w"], shell)
+    if yaml:
+        each(["prettier", "--write"], yaml)
+    if java:
+        java_version()
+        jar = download(GJF_JAR, GJF_URL, GJF_SHA256)
+        each(
+            [
+                "java",
+                *GJF_EXPORTS,
+                "-jar",
+                str(jar),
+                "--aosp",
+                # Same Spotless parity as check_java: skip import sorting and
+                # long-string reflows here, order imports with the fixer below.
+                "--skip-sorting-imports",
+                "--skip-reflowing-long-strings",
+                "--replace",
+            ],
+            java,
+        )
+        each(
+            [
+                "java",
+                *GJF_EXPORTS,
+                "-jar",
+                str(jar),
+                "--fix-imports-only",
+                "--replace",
+            ],
+            java,
+        )
+    run("git", "add", "--", *files)
+
+
+def wire_hooks(root):
+    """Point this checkout at the versioned hooks so pushes run format-check.
+
+    Only sets core.hooksPath when it is unset; an explicit choice is left
+    alone. Best-effort: a checkout without git or hooks must not break lint.
+    """
+    if not (root / ".githooks").is_dir():
+        return False
+    try:
+        current = subprocess.run(
+            ["git", "config", "--get", "core.hooksPath"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+    except OSError:
+        return False
+    if current:
+        return False
+    try:
+        subprocess.run(
+            ["git", "config", "core.hooksPath", ".githooks"],
+            cwd=root,
+            check=True,
+            env=child_env(),
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
     print("git pushes now run .githooks/pre-push (bypass: --no-verify)")
+    return True
 
 
 def main(argv=None):
@@ -339,6 +434,7 @@ def main(argv=None):
             "check",
             "gradle",
             "build",
+            "format-staged",
             "java-check",
             "java-format",
             "uniform-bake",
@@ -350,6 +446,21 @@ def main(argv=None):
     )
     parser.add_argument("args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
+    # Every fast entry point wires the versioned hooks first, so a fresh
+    # clone gets them on first use even when `just setup` never ran.
+    # Only sets core.hooksPath when it is unset; never fails the command.
+    if args.command in (
+        "lint",
+        "format",
+        "format-check",
+        "format-staged",
+        "test",
+        "check",
+    ):
+        wire_hooks(ROOT)
+    if args.command == "format-staged":
+        format_staged()
+        return
     if args.command == "setup":
         for name in ("ruff", "actionlint", "shellcheck", "shfmt", "prettier"):
             tool(name)

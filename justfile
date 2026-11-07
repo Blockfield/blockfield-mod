@@ -23,6 +23,11 @@ format *args:
     sys.argv = ["dev/quality.py", "format", *sys.argv[1:]]
     runpy.run_path("dev/quality.py", run_name="__main__")
 
+format-staged *args:
+    import runpy, sys
+    sys.argv = ["dev/quality.py", "format-staged", *sys.argv[1:]]
+    runpy.run_path("dev/quality.py", run_name="__main__")
+
 format-check *args:
     import runpy, sys
     sys.argv = ["dev/quality.py", "format-check", *sys.argv[1:]]
