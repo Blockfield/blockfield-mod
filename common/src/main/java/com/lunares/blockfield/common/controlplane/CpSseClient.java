@@ -33,6 +33,14 @@ public final class CpSseClient {
         void warn(String message, Throwable error);
     }
 
+    /**
+     * Interruptible backoff sleep; tests substitute a fake to assert the schedule
+     * deterministically.
+     */
+    interface Sleeper {
+        boolean sleep(long millis, AtomicBoolean stop);
+    }
+
     private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration READ_TIMEOUT = Duration.ofSeconds(60);
 
@@ -52,6 +60,7 @@ public final class CpSseClient {
     private final Clock clock;
     private final HttpClient http;
     private final Duration idleTimeout;
+    private final Sleeper sleeper;
 
     public CpSseClient(
             String baseUrl,
@@ -73,6 +82,19 @@ public final class CpSseClient {
             Reporter reporter,
             Clock clock,
             Duration idleTimeout) {
+        this(baseUrl, agentId, bearer, store, consumer, reporter, clock, idleTimeout, null);
+    }
+
+    CpSseClient(
+            String baseUrl,
+            String agentId,
+            String bearer,
+            CpStore store,
+            CpConsumer consumer,
+            Reporter reporter,
+            Clock clock,
+            Duration idleTimeout,
+            Sleeper sleeper) {
         this.baseUrl = baseUrl;
         this.agentId = agentId;
         this.bearer = bearer;
@@ -81,6 +103,7 @@ public final class CpSseClient {
         this.reporter = reporter;
         this.clock = clock;
         this.idleTimeout = idleTimeout;
+        this.sleeper = sleeper != null ? sleeper : this::sleep;
         this.http =
                 HttpClient.newBuilder()
                         .connectTimeout(CONNECT_TIMEOUT)
@@ -128,19 +151,19 @@ public final class CpSseClient {
                     backoff = BACKOFF_MIN_MILLIS;
                 } else if (outcome.active()) {
                     backoff = BACKOFF_MIN_MILLIS;
-                    if (!sleep(backoff, stop)) return;
+                    if (!sleeper.sleep(backoff, stop)) return;
                 } else {
-                    if (!sleep(backoff, stop)) return;
+                    if (!sleeper.sleep(backoff, stop)) return;
                     backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
                 }
             } catch (CpResyncException e) {
                 reporter.warn("control-plane resync: " + e.getMessage(), e);
                 needsSnapshot = true;
-                if (!sleep(backoff, stop)) return;
+                if (!sleeper.sleep(backoff, stop)) return;
                 backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
             } catch (RuntimeException e) {
                 reporter.warn("control-plane consumer failed, retrying", e);
-                if (!sleep(backoff, stop)) return;
+                if (!sleeper.sleep(backoff, stop)) return;
                 backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
             } catch (IOException | InterruptedException e) {
                 if (stop.get() || e instanceof InterruptedException) {
@@ -148,7 +171,7 @@ public final class CpSseClient {
                     return;
                 }
                 reporter.warn("control-plane stream failed, retrying", e);
-                if (!sleep(backoff, stop)) return;
+                if (!sleeper.sleep(backoff, stop)) return;
                 backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
             }
         }
