@@ -71,6 +71,16 @@ class PoseDebugOverlayTest {
     }
 
     @Test
+    void aMalformedPacketIsDroppedAndKeepsTheLastFrame() {
+        tick(11.1);
+        assertDoesNotThrow(() -> PoseDebugOverlay.onPacket(new PoseDebugPacket("not json{")));
+        assertDoesNotThrow(
+                () -> PoseDebugOverlay.onPacket(new PoseDebugPacket("{\"kind\":\"tick\"}")));
+        var row = PoseDebugOverlay.targetRow(7, new double[] {10.5, 0, 0});
+        assertEquals(11.1, row.getAsJsonArray("live").get(0).getAsDouble(), 1e-9);
+    }
+
+    @Test
     void theFirstQueryIsDueAtOnceThenOncePerInterval() {
         assertTrue(PoseDebugOverlay.queryDue(5_000_000_000L));
         assertFalse(PoseDebugOverlay.queryDue(5_049_000_000L));

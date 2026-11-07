@@ -8,6 +8,7 @@ import com.lunares.blockfield.client.render.BodyPartHitboxRenderer;
 import com.lunares.blockfield.network.packet.PoseDebugPacket;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.logging.LogUtils;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -70,6 +71,7 @@ public final class PoseDebugOverlay {
     private static long lastFrameNs;
     private static long sequence;
     private static long dropped;
+    private static int malformed;
     private static String hud = "";
 
     private PoseDebugOverlay() {}
@@ -96,19 +98,32 @@ public final class PoseDebugOverlay {
         SENT.clear();
         lastPacketNs = Long.MIN_VALUE;
         lastQueryNs = 0;
+        malformed = 0;
         hud = "";
     }
 
     static void onPacket(PoseDebugPacket packet) {
+        try {
+            apply(packet);
+        } catch (RuntimeException e) {
+            // A mismatched server build must not throw on the client: drop the packet
+            // and keep rendering the last good frame (warn once, then stay quiet).
+            if (malformed++ == 0)
+                LogUtils.getLogger()
+                        .warn("Dropped malformed pose debug packet; keeping last frame", e);
+        }
+    }
+
+    private static void apply(PoseDebugPacket packet) {
         var in = JsonParser.parseString(packet.json()).getAsJsonObject();
         lastPacketNs = System.nanoTime();
         BodyPartHitboxRenderer.evidence(true);
         if (in.get("kind").getAsString().equals("tick")) {
             long tick = in.get("tick").getAsLong();
-            SERVER.clear();
+            var next = new HashMap<Integer, Server>();
             for (JsonElement element : in.getAsJsonArray("rows")) {
                 var row = element.getAsJsonObject();
-                SERVER.put(
+                next.put(
                         row.get("id").getAsInt(),
                         new Server(
                                 tick,
@@ -118,17 +133,20 @@ public final class PoseDebugOverlay {
                                 row.get("teleports").getAsLong(),
                                 parts(row.getAsJsonArray("parts"))));
             }
+            SERVER.clear();
+            SERVER.putAll(next);
             return;
         }
         long seq = in.get("seq").getAsLong();
         var drawn = SENT.remove(seq);
         if (drawn == null) return;
+        var next = new HashMap<Integer, Rewind>();
         for (JsonElement element : in.getAsJsonArray("rows")) {
             var row = element.getAsJsonObject();
             int id = row.get("id").getAsInt();
             var at = drawn.get(id);
             if (at == null) continue;
-            REWIND.put(
+            next.put(
                     id,
                     new Rewind(
                             seq,
@@ -144,6 +162,7 @@ public final class PoseDebugOverlay {
                             parts(row.getAsJsonArray("parts")),
                             at));
         }
+        REWIND.putAll(next);
     }
 
     private static void frame(WorldRenderContext context) {
