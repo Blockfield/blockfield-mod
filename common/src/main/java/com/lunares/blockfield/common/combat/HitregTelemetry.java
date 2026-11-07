@@ -90,9 +90,9 @@ public final class HitregTelemetry {
     }
 
     /**
-     * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code
-     * disputesDropped}. Null samples or null entries are dropped, never thrown: telemetry must
-     * not fail match finalization.
+     * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code disputesDropped}.
+     * Null samples or null entries are dropped, never thrown: telemetry must not fail match
+     * finalization.
      */
     public boolean noteDispute(Map<String, Object> sample) {
         if (disputes.size() >= MAX_DISPUTES) {
