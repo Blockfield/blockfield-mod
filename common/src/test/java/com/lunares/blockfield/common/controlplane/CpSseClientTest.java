@@ -345,7 +345,7 @@ class CpSseClientTest {
     }
 
     @Test
-    void resyncLoopBacksOff() throws Exception {
+    void resyncLoopBacksOff() {
         eventsStatus = 409;
         CpStore store = new CpStore(directory.resolve("cp-backoff"));
         CpConsumer consumer =
@@ -354,21 +354,31 @@ class CpSseClientTest {
                         (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
                         CLOCK);
         String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        List<Long> requestedBackoffs = new CopyOnWriteArrayList<>();
+        AtomicBoolean stop = new AtomicBoolean();
         CpSseClient client =
-                new CpSseClient(baseUrl, "game-1", "bearer", store, consumer, new Quiet(), CLOCK);
+                new CpSseClient(
+                        baseUrl,
+                        "game-1",
+                        "bearer",
+                        store,
+                        consumer,
+                        new Quiet(),
+                        CLOCK,
+                        CpSseClient.IDLE_TIMEOUT,
+                        (millis, stopFlag) -> {
+                            requestedBackoffs.add(millis);
+                            if (requestedBackoffs.size() >= 3) {
+                                stopFlag.set(true);
+                                return false;
+                            }
+                            return true;
+                        });
 
-        ExecutorService runner = Executors.newSingleThreadExecutor();
-        try {
-            Future<?> done = runner.submit(() -> client.run(stop));
-            Thread.sleep(3500);
-            stop.set(true);
-            done.get(15, TimeUnit.SECONDS);
-        } finally {
-            runner.shutdownNow();
-        }
+        client.run(stop);
 
-        assertTrue(snapshotHits.get() >= 2);
-        assertTrue(snapshotHits.get() <= 4, "resync hot-loops: " + snapshotHits.get());
+        assertEquals(3, snapshotHits.get());
+        assertEquals(List.of(1000L, 2000L, 4000L), requestedBackoffs);
     }
 
     @Test
