@@ -125,7 +125,7 @@ def build(output):
         REPO / "client/build/libs", "blockfield-client-", "blockfield", "client"
     )
     testbot = select_jar(
-        HERE.parent / "testbot/build/libs", "bftestbot-", "bftestbot", "client"
+        HERE.parent / "testbot/upstream/build/libs", "bftestbot-", "bftestbot", "client"
     )
     if (
         mod_jar(server, "blockfield", "server")

@@ -131,9 +131,13 @@ case "${1:-}" in
             exit 1
         }
         process_owner=$(python3 "$RIG/process_guard.py" owner)
-        bot_jar=$(/bin/ls "$RIG"/testbot/build/libs/bftestbot-*.jar 2>/dev/null | grep -v sources | head -1)
+        bot_jar=$(/bin/ls "$RIG"/testbot/upstream/build/libs/bftestbot-*.jar 2>/dev/null | grep -v sources | head -1)
         [ -n "$bot_jar" ] || {
-            echo "нет testbot: cd testbot && ./gradlew build"
+            "$RIG/testbot/fetch-testbot.sh" || exit 1
+            bot_jar=$(/bin/ls "$RIG"/testbot/upstream/build/libs/bftestbot-*.jar 2>/dev/null | grep -v sources | head -1)
+        }
+        [ -n "$bot_jar" ] || {
+            echo "нет testbot jar: (cd \"$RIG/testbot/upstream\" && ./gradlew build)"
             exit 1
         }
         cp -f "$bot_jar" "$CLIENT/mods/bftestbot.jar"

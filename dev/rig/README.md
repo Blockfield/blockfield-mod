@@ -16,7 +16,8 @@
 ```sh
 cd BlockField-Private-Project/dev/rig  # исторический blockfield-rig тоже поддерживается
 ./rig.sh install                  # один раз (и после потери кэшей); образ bf-xvfb собирается из Containerfile
-just --justfile ../../justfile gradle --no-daemon --max-workers=2 -p dev/rig/testbot build # мод-бот, native JDK 21
+./dev/rig/testbot/fetch-testbot.sh # canonical TestBot sources from blockfield-workspace (pinned SHA+sha256)
+just --justfile ../../justfile gradle --no-daemon --max-workers=2 -p dev/rig/testbot/upstream build # мод-бот, native JDK 21
 export BF_RIG_OWNER=<имя-сессии>  # только если среда не передала ID сессии автоматически
 ./rig.sh start                    # клиент → прод по LAN 192.168.0.100:25565
 ./rig.sh start 127.0.0.1:25599    # или локальный сервер (см. ниже)

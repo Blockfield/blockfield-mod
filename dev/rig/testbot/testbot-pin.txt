@@ -1,0 +1,5 @@
+# Canonical TestBot source (blockfield-workspace, server#319 U5).
+# Line 1: workspace commit SHA. Line 2: sha256 of the source tarball at
+# https://github.com/Blockfield/blockfield-workspace/archive/<SHA>.tar.gz
+b55a8c3da01fbc60fbf759df8be189c2bb368593
+27603f0c70a7a623ad9151b2b361cffe38beb249b8d8df2503917047ada0df82

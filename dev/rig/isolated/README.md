@@ -21,7 +21,8 @@ Run from a clean checkout; output parents must exist and output directories must
 
 ```sh
 just build
-just gradle --no-daemon --max-workers=2 -p dev/rig/testbot build
+dev/rig/testbot/fetch-testbot.sh # canonical sources from blockfield-workspace, pinned SHA+sha256
+just gradle --no-daemon --max-workers=2 -p dev/rig/testbot/upstream build
 just isolated build --output /tmp/bf-rig-build
 just isolated run \
   --image "$(cat /tmp/bf-rig-build/image-id.txt)" \
