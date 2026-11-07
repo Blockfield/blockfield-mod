@@ -90,15 +90,25 @@ public final class HitregTelemetry {
     }
 
     /**
-     * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code disputesDropped}.
-     * Values must be String, Number, Boolean, List or Map.
+     * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code
+     * disputesDropped}. Null samples or null entries are dropped, never thrown: telemetry must
+     * not fail match finalization.
      */
     public boolean noteDispute(Map<String, Object> sample) {
         if (disputes.size() >= MAX_DISPUTES) {
             count("disputesDropped");
             return false;
         }
-        disputes.add(Map.copyOf(sample));
+        if (sample == null) {
+            count("disputesDropped");
+            return false;
+        }
+        Map<String, Object> kept = new LinkedHashMap<>();
+        for (var entry : sample.entrySet()) {
+            if (entry.getKey() != null && entry.getValue() != null)
+                kept.put(entry.getKey(), entry.getValue());
+        }
+        disputes.add(kept);
         count("disputes");
         return true;
     }
@@ -151,9 +161,11 @@ public final class HitregTelemetry {
             long seen = 0;
             for (int i = 0; i < counts.length; i++) {
                 seen += counts[i];
-                if (seen >= rank) return i < bounds.length ? bounds[i] : Double.POSITIVE_INFINITY;
+                // Overflow clamps to the last bound: a quantile is always a finite bucket edge,
+                // keeping the payload valid JSON.
+                if (seen >= rank) return bounds[Math.min(i, bounds.length - 1)];
             }
-            return Double.POSITIVE_INFINITY;
+            return bounds[bounds.length - 1];
         }
 
         private static double quantile(long[] bounds, long[] counts, double q) {
@@ -209,15 +221,13 @@ public final class HitregTelemetry {
             countersText.append('}');
             return String.format(
                     Locale.ROOT,
-                    "hitreg match=%s shots=%d fallbackShare=%.3f tickMsP50=%.1f tickMsP99=%s"
+                    "hitreg match=%s shots=%d fallbackShare=%.3f tickMsP50=%.1f tickMsP99=%.1f"
                             + " ageP50=%d rewindP50=%d counters=%s disputes=%d",
                     matchId,
                     shots,
                     fallbackShare(),
                     tickMsP50(),
-                    tickMsP99() == Double.POSITIVE_INFINITY
-                            ? "inf"
-                            : String.format("%.1f", tickMsP99()),
+                    tickMsP99(),
                     ageP50(),
                     rewindP50(),
                     countersText,

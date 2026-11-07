@@ -67,6 +67,46 @@ class HitregTelemetryTest {
     }
 
     @Test
+    void overflowQuantilesClampToLastBucket() {
+        var telemetry = new HitregTelemetry();
+        for (int i = 0; i < 98; i++) telemetry.recordTick(12_000_000L);
+        for (int i = 0; i < 2; i++) telemetry.recordTick(300_000_000L);
+        var report = telemetry.finish();
+        assertEquals(250.0, report.tickMsP99());
+        assertTrue(Double.isFinite((Double) report.toMap().get("tickMsP99")));
+    }
+
+    @Test
+    void overflowAgeQuantileClampsToLastBucket() {
+        var telemetry = new HitregTelemetry();
+        telemetry.noteShot("exact", 100, 100, "hit");
+        telemetry.noteShot("exact", 0, 0, "hit");
+        telemetry.noteShot("exact", 0, 0, "hit");
+        telemetry.noteShot("exact", 0, 0, "hit");
+        var report = telemetry.finish();
+        assertEquals(0, report.ageP50());
+        var overflow = new HitregTelemetry();
+        for (int i = 0; i < 3; i++) overflow.noteShot("exact", 100, 100, "hit");
+        overflow.noteShot("exact", 0, 0, "hit");
+        assertEquals(16, overflow.finish().ageP50());
+        assertEquals(16, overflow.finish().rewindP50());
+    }
+
+    @Test
+    void nullDisputesAreDroppedNotThrown() {
+        var telemetry = new HitregTelemetry();
+        assertFalse(telemetry.noteDispute(null));
+        Map<String, Object> partial = new LinkedHashMap<>();
+        partial.put("victim", "v");
+        partial.put("subcause", null);
+        assertTrue(telemetry.noteDispute(partial));
+        var report = telemetry.finish();
+        assertEquals(1, report.disputes().size());
+        assertEquals(1L, report.counters().get("disputesDropped"));
+        assertJsonClosed(report.toMap());
+    }
+
+    @Test
     void reportMapHoldsOnlyJsonClosedValues() {
         var telemetry = new HitregTelemetry();
         telemetry.noteShot("exact", 1, 2, "hit");
