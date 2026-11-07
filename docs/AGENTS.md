@@ -60,6 +60,8 @@
   (тот же форматтер, что Spotless) только в изменённых против `origin/main` файлах, `--all` — во всех.
   Хуки включаются автоматически при любом быстром `just`-вызове
   (lint/format/format-check/test/check): свежий клон получает хуки на первом `just`.
+  Если git уже берёт хуки из другого места (`core.hooksPath` в любом конфиге или
+  активные хуки в `.git/hooks`), `just` их не трогает и только предупреждает.
   Обход хука только через `--no-verify`.
   Полные `just java-check`, `just test` выполняет PR CI (зелёный до merge).
   Не ослабляйте lint/format/tests. Из workspace: build/setup/watch/scenario — справочник §4–5.
