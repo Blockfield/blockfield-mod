@@ -172,6 +172,11 @@ jobs:
           version: ${{ needs.decide.outputs.version }}
           kind: mod
           out-dir: dist
+      - name: Build common artifact
+        if: needs.decide.outputs.publish == 'true'
+        # No write token here: build scripts and plugins must never see it;
+        # Publish below only uploads built files.
+        run: just gradle --no-daemon --max-workers=2 :common:remapJar
       - name: Publish release
         if: needs.decide.outputs.publish == 'true'
         env:
@@ -179,17 +184,10 @@ jobs:
         run: |
           version="${{ needs.decide.outputs.version }}"
           mkdir -p dist
-          # Full path already ran java-check (build); the jars-only path built
-          # :common:remapJar above. Rebuild here only when the jar is missing.
-          common_built=false
-          for jar in common/build/libs/blockfield-common-*.jar; do
-            if [ -e "$jar" ]; then common_built=true; fi
-          done
-          if [ "$common_built" != true ]; then
-            just gradle --no-daemon --max-workers=2 :common:remapJar
-          fi
           cp client/build/libs/blockfield-client-*.jar dist/
           cp common/build/libs/blockfield-common-*.jar dist/
           rm -f dist/*-sources.jar dist/blockfield-common-*-dev.jar
+          # Only the remapped jar may publish: a lone -dev.jar was just deleted.
+          ls dist/blockfield-common-*.jar >/dev/null || { echo "common remapped jar missing in dist"; exit 1; }
           (cd dist && sha256sum -- *.jar > SHA256SUMS)
           gh release create "$version" --target "$GITHUB_SHA" --title "blockfield $version" --notes-file dist/release-notes.md dist/*

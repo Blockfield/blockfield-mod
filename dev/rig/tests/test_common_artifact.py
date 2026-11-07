@@ -7,6 +7,7 @@ contract (offline) and the live release (skipped until the artifact exists).
 """
 
 import hashlib
+import re
 import threading
 import unittest
 import urllib.error
@@ -119,6 +120,33 @@ class WorkflowPublishesCommonArtifact(unittest.TestCase):
         self.assertIn(":common:remapJar", workflow)
         self.assertIn("blockfield-common-", workflow)
         self.assertIn("SHA256SUMS", workflow)
+
+    def _steps(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        return re.split(r"(?m)^      - ", workflow)[1:]
+
+    def _publish_step(self):
+        publish = [s for s in self._steps() if s.startswith("name: Publish release")]
+        self.assertEqual(len(publish), 1)
+        return publish[0]
+
+    def test_publish_check_matches_only_remapped_jar(self):
+        body = self._publish_step()
+        # The loose "any jar exists" check also accepted -dev.jar, which the
+        # next rm deletes (release with only the client jar, immutable tag).
+        self.assertNotIn("common_built", body)
+        # A lone -dev.jar must fail the step instead of publishing.
+        self.assertIn("blockfield-common-", body)
+        self.assertIn("exit 1", body)
+
+    def test_build_runs_without_write_token(self):
+        builders = [s for s in self._steps() if ":common:remapJar" in s]
+        self.assertTrue(builders)
+        for step in builders:
+            self.assertNotIn("GH_TOKEN", step)
+            self.assertNotIn("github.token", step)
+        # Publish keeps the contents:write token, so it must only upload.
+        self.assertNotIn("gradle", self._publish_step().lower())
 
 
 if __name__ == "__main__":
