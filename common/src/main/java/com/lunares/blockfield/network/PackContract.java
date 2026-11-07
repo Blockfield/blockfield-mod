@@ -25,7 +25,8 @@ public final class PackContract {
     // 7: phase 3 animation sync wire (snapshot S2C + CombatView C2S).
     // 8: the CombatView ticket's optional TaCZ fire-frame eye and aim.
     // 9: a ticket without a complete victim report (presence byte), rewound by retained pose at R.
-    public static final int PROTOCOL = 9;
+    // 10: synced data component blockfield:rig_slots; 1.59.x clients fail registry sync at login.
+    public static final int PROTOCOL = 10;
     // Frozen at startup like PackVersion.CURRENT; build-client.py writes it, same digest as the
     // server image's build.json "compatibility".
     public static final String CURRENT = PackVersion.read("blockfield-pack-contract.txt");
