@@ -2123,8 +2123,10 @@ Pure checks сохраняют полный `-Xlint:all -Werror`.
 `just java-check` и `just test`.
 
 **Релиз мода** (`Blockfield/blockfield-mod`, workflow `.github/workflows/release.yml` в этом репо):
-тег `vX.Y.Z` → тесты и сборка → GitHub Release `vX.Y.Z` с client/server jar и SHA256SUMS.
-Клиент и сервер закрепляют jar'ы этого тега (`mods/blockfield-*.pw.toml`).
+тег `vX.Y.Z` → тесты и сборка → GitHub Release `vX.Y.Z` с client jar, версионированным
+common-артефактом (`blockfield-common-<version>.jar`, immutable на версию) и SHA256SUMS.
+Клиент и сервер закрепляют jar'ы этого тега (`mods/blockfield-*.pw.toml`); координаты и
+checksum common-артефакта проверяет consumer test (`dev/rig/tests/test_common_artifact.py`).
 
 **Релизы клиента и сервера** — в их репозиториях, независимо:
 `blockfield-client/.github/workflows/client.yml` (тег → архивы в `Blockfield/blockfield-releases` →
