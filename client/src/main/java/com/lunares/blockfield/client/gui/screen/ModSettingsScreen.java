@@ -715,10 +715,21 @@ public final class ModSettingsScreen extends OptionsSubScreen {
 
     private static Object readLive(ModSettingsBridge.Entry entry, Object fallback) {
         try {
-            return entry.get();
+            return sameType(entry.get(), fallback);
         } catch (Exception | LinkageError e) {
             return fallback;
         }
+    }
+
+    // A locked option shows a numeric entry through a boolean controller; a live
+    // Double would crash YACL's BooleanController while rendering.
+    static Object sameType(Object live, Object fallback) {
+        if (fallback == null) return live;
+        Class<?> type =
+                fallback instanceof Enum<?> constant
+                        ? constant.getDeclaringClass()
+                        : fallback.getClass();
+        return type.isInstance(live) ? live : fallback;
     }
 
     private static Component[] optionDescription(ModSettingsBridge.Entry entry, Object current) {
