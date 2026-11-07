@@ -73,6 +73,9 @@ class HitregTelemetryTest {
         for (int i = 0; i < 2; i++) telemetry.recordTick(300_000_000L);
         var report = telemetry.finish();
         assertEquals(250.0, report.tickMsP99());
+        assertTrue(report.tickMsP99Overflow());
+        assertTrue((Boolean) report.toMap().get("tickMsP99Overflow"));
+        assertTrue(report.formatLine("m").contains("tickMsP99=>250"));
         assertTrue(Double.isFinite((Double) report.toMap().get("tickMsP99")));
     }
 
@@ -90,6 +93,9 @@ class HitregTelemetryTest {
         overflow.noteShot("exact", 0, 0, "hit");
         assertEquals(16, overflow.finish().ageP50());
         assertEquals(16, overflow.finish().rewindP50());
+        assertTrue(overflow.finish().ageP50Overflow());
+        assertTrue(overflow.finish().rewindP50Overflow());
+        assertTrue(overflow.finish().formatLine("m").contains("ageP50=>16"));
     }
 
     @Test
@@ -107,6 +113,29 @@ class HitregTelemetryTest {
     }
 
     @Test
+    void nonJsonDisputeValuesAreDropped() {
+        var telemetry = new HitregTelemetry();
+        Map<String, Object> nan = new LinkedHashMap<>();
+        nan.put("ratio", Double.NaN);
+        assertFalse(telemetry.noteDispute(nan));
+        Map<String, Object> exotic = new LinkedHashMap<>();
+        exotic.put("victim", java.util.UUID.randomUUID());
+        exotic.put("kind", java.math.RoundingMode.UP);
+        exotic.put("inf", Double.POSITIVE_INFINITY);
+        assertFalse(telemetry.noteDispute(exotic));
+        Map<String, Object> mixed = new LinkedHashMap<>();
+        mixed.put("victim", "v");
+        mixed.put("age", 3L);
+        mixed.put("bad", Float.NaN);
+        assertTrue(telemetry.noteDispute(mixed));
+        var report = telemetry.finish();
+        assertEquals(1, report.disputes().size());
+        assertEquals(Map.of("victim", "v", "age", 3L), report.disputes().get(0));
+        assertEquals(2L, report.counters().get("disputesDropped"));
+        assertJsonClosed(report.toMap());
+    }
+
+    @Test
     void reportMapHoldsOnlyJsonClosedValues() {
         var telemetry = new HitregTelemetry();
         telemetry.noteShot("exact", 1, 2, "hit");
@@ -120,7 +149,16 @@ class HitregTelemetryTest {
 
     private static void assertJsonClosed(Object value) {
         if (value == null) return;
-        if (value instanceof String || value instanceof Number || value instanceof Boolean) return;
+        if (value instanceof String || value instanceof Boolean) return;
+        if (value instanceof Double d) {
+            assertTrue(Double.isFinite(d));
+            return;
+        }
+        if (value instanceof Float f) {
+            assertTrue(Float.isFinite(f));
+            return;
+        }
+        if (value instanceof Number) return;
         if (value instanceof Map<?, ?> map) {
             for (var entry : map.entrySet()) {
                 assertInstanceOf(String.class, entry.getKey());

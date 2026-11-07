@@ -12,7 +12,8 @@ import java.util.Map;
  * server wires its live combat counters into one instance per match and formats a single log line.
  *
  * <p>Histograms use fixed buckets and preallocated counts: recording never allocates. Quantiles
- * report the first bucket upper bound holding the rank, an honest over-estimate within one bucket.
+ * report the first bucket upper bound holding the rank; when the rank lands in the overflow
+ * bucket the value clamps to the last finite bound and an overflow flag says it understates.
  */
 public final class HitregTelemetry {
     /** Tick-duration bucket upper bounds in milliseconds; the last count is the overflow bucket. */
@@ -91,8 +92,9 @@ public final class HitregTelemetry {
 
     /**
      * Keeps the first {@link #MAX_DISPUTES} samples; later ones only bump {@code disputesDropped}.
-     * Null samples or null entries are dropped, never thrown: telemetry must not fail match
-     * finalization.
+     * Null samples, null entries and non-JSON values (NaN/Infinity, enums, UUIDs, ...) are
+     * dropped, never thrown: telemetry must not fail match finalization, and the payload must
+     * stay valid JSON.
      */
     public boolean noteDispute(Map<String, Object> sample) {
         if (disputes.size() >= MAX_DISPUTES) {
@@ -105,12 +107,47 @@ public final class HitregTelemetry {
         }
         Map<String, Object> kept = new LinkedHashMap<>();
         for (var entry : sample.entrySet()) {
-            if (entry.getKey() != null && entry.getValue() != null)
-                kept.put(entry.getKey(), entry.getValue());
+            Object value = jsonClosed(entry.getValue());
+            if (entry.getKey() != null && value != null) kept.put(entry.getKey(), value);
+        }
+        if (kept.isEmpty()) {
+            count("disputesDropped");
+            return false;
         }
         disputes.add(kept);
         count("disputes");
         return true;
+    }
+
+    /**
+     * JSON-closed copy of a dispute value: finite numbers, strings, booleans and nested lists and
+     * maps of those; null for anything else (NaN, Infinity, enums, UUIDs, arbitrary objects).
+     */
+    private static Object jsonClosed(Object value) {
+        if (value instanceof String || value instanceof Boolean) return value;
+        if (value instanceof Double d) return Double.isFinite(d) ? d : null;
+        if (value instanceof Float f) return Float.isFinite(f) ? f : null;
+        if (value instanceof Number) return value;
+        if (value instanceof List<?> list) {
+            List<Object> kept = new ArrayList<>();
+            for (Object item : list) {
+                Object clean = jsonClosed(item);
+                if (clean == null) return null;
+                kept.add(clean);
+            }
+            return kept;
+        }
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> kept = new LinkedHashMap<>();
+            for (var entry : map.entrySet()) {
+                if (!(entry.getKey() instanceof String)) return null;
+                Object clean = jsonClosed(entry.getValue());
+                if (clean == null) return null;
+                kept.put((String) entry.getKey(), clean);
+            }
+            return kept;
+        }
+        return null;
     }
 
     public Report finish() {
@@ -134,56 +171,84 @@ public final class HitregTelemetry {
             long fallbackShots,
             List<Map<String, Object>> disputes) {
         public double tickMsP50() {
-            return quantile(TICK_MS_BUCKETS, tickMs, 0.50);
+            return tickMsQuantile(0.50);
         }
 
         public double tickMsP99() {
-            return quantile(TICK_MS_BUCKETS, tickMs, 0.99);
+            return tickMsQuantile(0.99);
+        }
+
+        /** True when the rank lands past the last finite bucket: the value understates the tail. */
+        public boolean tickMsP99Overflow() {
+            return quantileOverflow(tickMs, 0.99);
         }
 
         public long ageP50() {
-            return (long) quantile(TICK_COUNT_BUCKETS, ageTicks, 0.50);
+            return (long) tickCountQuantile(TICK_COUNT_BUCKETS, ageTicks, 0.50);
+        }
+
+        public boolean ageP50Overflow() {
+            return quantileOverflow(ageTicks, 0.50);
         }
 
         public long rewindP50() {
-            return (long) quantile(TICK_COUNT_BUCKETS, rewindTicks, 0.50);
+            return (long) tickCountQuantile(TICK_COUNT_BUCKETS, rewindTicks, 0.50);
+        }
+
+        public boolean rewindP50Overflow() {
+            return quantileOverflow(rewindTicks, 0.50);
         }
 
         public double fallbackShare() {
             return shots == 0 ? 0 : (double) fallbackShots / shots;
         }
 
-        private static double quantile(double[] bounds, long[] counts, double q) {
+        private double tickMsQuantile(double q) {
+            int bucket = quantileBucket(tickMs, q);
+            if (bucket < 0) return 0;
+            return TICK_MS_BUCKETS[Math.min(bucket, TICK_MS_BUCKETS.length - 1)];
+        }
+
+        private static double tickCountQuantile(long[] bounds, long[] counts, double q) {
+            int bucket = quantileBucket(counts, q);
+            if (bucket < 0) return 0;
+            return bounds[Math.min(bucket, bounds.length - 1)];
+        }
+
+        /**
+         * Index of the bucket holding the rank; the last index is the overflow bucket. A quantile
+         * value clamps there to stay finite JSON, and the overflow flag says it understates.
+         */
+        private static int quantileBucket(long[] counts, double q) {
             long total = 0;
             for (long c : counts) total += c;
-            if (total == 0) return 0;
+            if (total == 0) return -1;
             long rank = Math.max(1, (long) Math.ceil(total * q));
             long seen = 0;
             for (int i = 0; i < counts.length; i++) {
                 seen += counts[i];
-                // Overflow clamps to the last bound: a quantile is always a finite bucket edge,
-                // keeping the payload valid JSON.
-                if (seen >= rank) return bounds[Math.min(i, bounds.length - 1)];
+                if (seen >= rank) return i;
             }
-            return bounds[bounds.length - 1];
+            return counts.length - 1;
         }
 
-        private static double quantile(long[] bounds, long[] counts, double q) {
-            double[] asDouble = new double[bounds.length];
-            for (int i = 0; i < bounds.length; i++) asDouble[i] = bounds[i];
-            return quantile(asDouble, counts, q);
+        private static boolean quantileOverflow(long[] counts, double q) {
+            int bucket = quantileBucket(counts, q);
+            return bucket >= 0 && bucket == counts.length - 1 && counts[bucket] > 0;
         }
 
-        /** Map of String/Number/Boolean/List/Map only, for the existing stats JSON writer. */
+        /** Map of String/finite-Number/Boolean/List/Map only, for the stats JSON writer. */
         public Map<String, Object> toMap() {
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("shots", shots);
             out.put("fallbackShare", fallbackShare());
             out.put("tickMsP50", tickMsP50());
-            Object p99 = tickMsP99();
-            out.put("tickMsP99", p99);
+            out.put("tickMsP99", tickMsP99());
+            out.put("tickMsP99Overflow", tickMsP99Overflow());
             out.put("ageTicksP50", ageP50());
+            out.put("ageTicksP50Overflow", ageP50Overflow());
             out.put("rewindTicksP50", rewindP50());
+            out.put("rewindTicksP50Overflow", rewindP50Overflow());
             out.put("counters", new LinkedHashMap<>(counters));
             out.put("tickMsBuckets", buckets(TICK_MS_BUCKETS, tickMs));
             out.put("ageTickBuckets", buckets(TICK_COUNT_BUCKETS, ageTicks));
@@ -221,15 +286,21 @@ public final class HitregTelemetry {
             countersText.append('}');
             return String.format(
                     Locale.ROOT,
-                    "hitreg match=%s shots=%d fallbackShare=%.3f tickMsP50=%.1f tickMsP99=%.1f"
-                            + " ageP50=%d rewindP50=%d counters=%s disputes=%d",
+                    "hitreg match=%s shots=%d fallbackShare=%.3f tickMsP50=%.1f tickMsP99=%s"
+                            + " ageP50=%s rewindP50=%s counters=%s disputes=%d",
                     matchId,
                     shots,
                     fallbackShare(),
                     tickMsP50(),
-                    tickMsP99(),
-                    ageP50(),
-                    rewindP50(),
+                    tickMsP99Overflow()
+                            ? ">" + TICK_MS_BUCKETS[TICK_MS_BUCKETS.length - 1]
+                            : String.format("%.1f", tickMsP99()),
+                    ageP50Overflow()
+                            ? ">" + TICK_COUNT_BUCKETS[TICK_COUNT_BUCKETS.length - 1]
+                            : Long.toString(ageP50()),
+                    rewindP50Overflow()
+                            ? ">" + TICK_COUNT_BUCKETS[TICK_COUNT_BUCKETS.length - 1]
+                            : Long.toString(rewindP50()),
                     countersText,
                     disputes.size());
         }
