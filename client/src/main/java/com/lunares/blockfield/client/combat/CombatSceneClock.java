@@ -28,6 +28,16 @@ public final class CombatSceneClock {
     static final long LAG_SNAP_TICKS = 40;
 
     /**
+     * Sustained-burst regime (PING366-c4): back-to-back gap episodes mean arrivals flow but
+     * bunched, so playback must never rush: the rate caps at a smooth 1.25x slew and the episode
+     * budget carries the same drain capacity as CATCH_UP_BUDGET_MS at CATCH_UP_MAX. A single burst
+     * is indistinguishable from a genuine stall and still drains at full rate.
+     */
+    static final double CATCH_UP_BURST_MAX = 1.25;
+
+    static final long CATCH_UP_BURST_WINDOW_MS = 1500;
+
+    /**
      * Speed-capped traversal of non-teleport steps (remote-snap U2): while R crosses a tick whose
      * eligible horizontal displacement exceeds this cap, R advances at most cap metres per tick, so
      * the drawn speed stays ≤ cap. 1.0 m/tick clears the fastest legit single-tick ParCool move
@@ -78,6 +88,13 @@ public final class CombatSceneClock {
     private boolean backlogSnap;
     private boolean catchUp;
     private double catchUpSinceMs;
+    private boolean catchUpBurst;
+    private double catchUpBudgetMs = CATCH_UP_BUDGET_MS;
+    private double lastCatchUpEndMs = Double.NEGATIVE_INFINITY;
+    // Windowed burstiness signals for the servo: a tick gap with arrivals still flowing, and
+    // the peak occupancy seen since the last slew. Reset on every slew evaluation.
+    private boolean burstSeen;
+    private double occPeak;
     private boolean backlog;
     private double backlogSinceMs;
     private long recoveryStart;
@@ -144,6 +161,11 @@ public final class CombatSceneClock {
         lastArrival = nowMs;
         ticks.add(high);
         ticks.headSet(Math.max(0, high - 39), false).clear();
+        // Bursty arrivals bunch ticks without moving the jitter mean (constant high latency
+        // does the same), so the servo also watches occupancy: a tick gap with arrivals still
+        // flowing, and the peak occupancy since the last slew.
+        if (!Double.isNaN(time)) occPeak = Math.max(occPeak, high - time);
+        if (gap && !backlog) burstSeen = true;
         // Ordered backlog remains valid decode history, but is not a network timing sample.
         if (backlog) return;
         if (batches++ == 0) {
@@ -160,14 +182,19 @@ public final class CombatSceneClock {
         // Unsampled, the last rate holds and R walks away from H without bound.
         servoMissed = batches > 1 && nextServoMs != Double.POSITIVE_INFINITY;
         nextServoMs = smooth + (high + .5) * 50;
-        if (nowMs - lastSlew >= 500 && Math.abs(rate - 1) <= .05000001) {
-            int desired =
-                    Math.clamp(batches < 20 ? 3 : 2 + (int) Math.ceil(jitter / 50 * 1.5), min, max);
+        if (nowMs - lastSlew >= 500
+                && (Math.abs(rate - 1) <= .05000001 || (catchUp && catchUpBurst))) {
+            int desired = batches < 20 ? 3 : 2 + (int) Math.ceil(jitter / 50 * 1.5);
+            if (burstSeen)
+                desired = Math.max(desired, Math.clamp((int) Math.ceil(occPeak) - 1, min, max));
+            desired = Math.clamp(desired, min, max);
             if (delay != desired) {
                 delay += Integer.signum(desired - delay);
                 delayChanges++;
             }
             lastSlew = nowMs;
+            burstSeen = false;
+            occPeak = 0;
         }
     }
 
@@ -212,7 +239,7 @@ public final class CombatSceneClock {
                 && (Double.isNaN(time)
                         || lag > LAG_SNAP_TICKS
                         || (catchUp
-                                && nowMs - catchUpSinceMs >= CATCH_UP_BUDGET_MS
+                                && nowMs - catchUpSinceMs >= catchUpBudgetMs
                                 && lag > ageBound()))) {
             // Beyond the lag bound: hard snap, and A may snap with R (ADR4 §3.1 shares it).
             silenceSnap = silenceRecovery;
@@ -227,6 +254,8 @@ public final class CombatSceneClock {
                             : recoveryStart;
             recovery = false;
             catchUp = false;
+            catchUpBurst = false;
+            lastCatchUpEndMs = nowMs;
             silenceRecovery = gapRecovery = false;
             recoverySnaps++;
             rate = 1;
@@ -237,9 +266,21 @@ public final class CombatSceneClock {
                 catchUp = true;
                 catchUpSinceMs = nowMs;
                 catchUpFrozenMs = 0;
+                // An episode hot on the previous one's heels means arrivals flow but bunched:
+                // slew smoothly instead of rushing. Isolated stalls keep the full rate.
+                catchUpBurst = nowMs - lastCatchUpEndMs < CATCH_UP_BURST_WINDOW_MS;
+                catchUpBudgetMs =
+                        catchUpBurst
+                                ? CATCH_UP_BUDGET_MS * (CATCH_UP_MAX - 1) / (CATCH_UP_BURST_MAX - 1)
+                                : CATCH_UP_BUDGET_MS;
             }
             recovery = false;
-            rate = catchUpRate(high - time, delay, dilation);
+            rate =
+                    catchUpRate(
+                            high - time,
+                            delay,
+                            dilation,
+                            catchUpBurst ? CATCH_UP_BURST_MAX : CATCH_UP_MAX);
             double next = Math.min(high, time + rate * dt / 50);
             double capped = clampStep(time, next, dt);
             // The step cap trades ticket staleness for smoothness (remote-snap U2): frames it
@@ -261,6 +302,8 @@ public final class CombatSceneClock {
             Long b = ticks.ceiling((long) Math.ceil(time));
             if (high - time <= delay + 1 && (a == null || b == null || b - a <= 2)) {
                 catchUp = false;
+                catchUpBurst = false;
+                lastCatchUpEndMs = nowMs;
                 silenceRecovery = gapRecovery = false;
                 rate = 1;
             }
@@ -305,7 +348,12 @@ public final class CombatSceneClock {
 
     /** Bounded catch-up rate: 1 + gain·(occupancy − delay), clamped to CATCH_UP_MAX. */
     public static double catchUpRate(double occupancy, int delay, double dilation) {
-        return Math.clamp(1 + CATCH_UP_GAIN * (occupancy - delay), 1 - dilation, CATCH_UP_MAX);
+        return catchUpRate(occupancy, delay, dilation, CATCH_UP_MAX);
+    }
+
+    /** Burst-regime overload with a lower slew cap; same law otherwise. */
+    static double catchUpRate(double occupancy, int delay, double dilation, double cap) {
+        return Math.clamp(1 + CATCH_UP_GAIN * (occupancy - delay), 1 - dilation, cap);
     }
 
     /**
@@ -385,6 +433,10 @@ public final class CombatSceneClock {
         recovery = false;
         gapRecovery = false;
         catchUp = false;
+        catchUpBurst = false;
+        lastCatchUpEndMs = Double.NEGATIVE_INFINITY;
+        burstSeen = false;
+        occPeak = 0;
         animation = rewarm(animation);
     }
 

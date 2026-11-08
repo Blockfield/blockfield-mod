@@ -973,8 +973,8 @@ class CombatSceneClockTest {
      * PING366-c4: snapshots arrive in bursts of 9-11 ticks every ~0.5 s (high ping). A single burst
      * is indistinguishable from a genuine stall, so the first episode still drains fast; every
      * later burst must slew smoothly: per-frame R advance stays within the burst catch-up cap
-     * (1.25x), with no freeze and no recovery snap, while the servo absorbs the burstiness into a
-     * higher delay.
+     * (1.25x), with no freeze while ticks wait behind R and no recovery snap, while the servo
+     * absorbs the burstiness into a higher delay.
      */
     @Test
     void sustainedBurstsSlewSmoothWithoutRush() {
@@ -1002,7 +1002,9 @@ class CombatSceneClockTest {
             assertTrue(c.time() >= previous, "R never decreases at " + t);
             double advance = c.time() - previous;
             if (t >= 950 + 4000) maxAdaptedAdvance = Math.max(maxAdaptedAdvance, advance);
-            if (advance == 0) {
+            // Sitting at the live edge between bursts (occupancy 0) is correct: nothing new
+            // arrived. A freeze only counts while ticks wait unrendered behind R.
+            if (advance == 0 && c.occupancy() > 0.5) {
                 frozenRun++;
                 maxFrozenRun = Math.max(maxFrozenRun, frozenRun);
             } else {
