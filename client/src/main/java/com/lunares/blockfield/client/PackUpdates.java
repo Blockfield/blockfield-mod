@@ -102,7 +102,8 @@ public final class PackUpdates {
                     if (PackContract.CURRENT.isEmpty())
                         return CompletableFuture.completedFuture(null);
                     var response = PacketByteBufs.create();
-                    response.writeUtf(PackContract.reply(PackContract.CURRENT), 80);
+                    response.writeUtf(
+                            PackContract.reply(PackContract.CURRENT), PackContract.REPLY_MAX_LEN);
                     return CompletableFuture.completedFuture(response);
                 });
         ClientLoginNetworking.registerGlobalReceiver(
