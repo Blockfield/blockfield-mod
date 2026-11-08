@@ -166,19 +166,36 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
-    void queuedTapDiesAtHardCapNeverFires() {
-        // Explicit rule for a draw that never comes: past bound + 1 s the tap is dropped,
-        // never fired — even if a draw shows up afterwards.
+    void lateServerDrawStillFiresOnceWithoutCap() {
+        // Bot round 4: bound 1.7 s, tap at 0.5 s, server draw starts at 3.3 s —
+        // past the old bound + 1 s cap. The tap must survive and fire once when
+        // the late draw ends, never twice.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(500_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt(500_000_000L);
+        // Past the old hard cap, server draw never observed: still holding.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(3_200_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(3_250_000_000L, 0, false));
+        // Late server draw starts: keep holding while it runs...
+        assertFalse(FirstShotDrawGuard.pollPendingShot(3_300_000_000L, 400, false));
+        // ...fire once when it ends...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(4_100_000_000L, 0, false));
+        // ...and never again for the same tap.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(4_150_000_000L, 0, false));
+    }
+
+    @Test
+    void supersededTapNeverFires() {
+        // A new fire press after the hold, or a real TaCZ shot, supersedes the
+        // queued tap: the mixin drops it via dropQueuedTap, so it never fires —
+        // even when a late draw is observed and finished afterwards.
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
         FirstShotDrawGuard.noteFireAttempt(100_000_000L);
-        long hardCapNs = 100_000_000L + BOUND_NS + FirstShotDrawGuard.TAP_TTL_EXTRA_NS;
-        // Still inside the lifetime: held, never fired (fail-before: the old code fires here).
-        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, false));
-        assertFalse(FirstShotDrawGuard.pollPendingShot(hardCapNs + 1, 0, false));
-        // A draw observed after the drop must not resurrect the tap.
-        assertFalse(FirstShotDrawGuard.pollPendingShot(hardCapNs + 100_000_000L, 400, false));
-        assertFalse(FirstShotDrawGuard.pollPendingShot(hardCapNs + 900_000_000L, 0, false));
+        // New press after the hold ended (player shooting normally).
+        FirstShotDrawGuard.dropQueuedTap();
+        assertFalse(FirstShotDrawGuard.pollPendingShot(3_300_000_000L, 400, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(4_100_000_000L, 0, false));
     }
 
     @Test
