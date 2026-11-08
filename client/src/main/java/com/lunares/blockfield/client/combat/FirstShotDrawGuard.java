@@ -15,6 +15,12 @@ import org.slf4j.LoggerFactory;
  * the server draw is running and plain TaCZ gating takes over; the hold never outlives the gun's
  * own draw plus slack.
  *
+ * <p>A deploy draw can stall so long that the server draw only starts after the armed hold already
+ * expired (kit menus outlast the bound): the guard is then disarmed exactly while the server draw
+ * is running, TaCZ refuses the tap as {@code IS_DRAWING}, and nothing is queued. A synced cooldown
+ * above 0 therefore always holds the shot — plain TaCZ gating would refuse it anyway, so holding
+ * never delays a live shot — and the press is remembered.
+ *
  * <p>A press that arrives during the hold is remembered and fired exactly once: when the server
  * draw was observed and plain TaCZ gating allows the shot again, or when the bound expires with no
  * server draw ever observed (a draw that never arrives cannot refuse the shot, so the tap fires
@@ -57,12 +63,15 @@ public final class FirstShotDrawGuard {
     }
 
     /**
-     * True when a shot attempt must be held locally: drawn to a gun, server draw not observed yet,
-     * still within the bound. Callers report {@code IS_DRAWING} without sending anything. Pure
-     * predicate: it never remembers anything (see {@link #noteFireAttempt}).
+     * True when a shot attempt must be held locally: drawn to a gun with the server draw not
+     * observed yet and still within the bound, or with a server draw running right now (plain TaCZ
+     * gating would refuse it anyway, so holding never delays a live shot). Callers report {@code
+     * IS_DRAWING} without sending anything. Pure predicate: it never remembers anything (see {@link
+     * #noteFireAttempt}).
      */
     public static synchronized boolean shouldBlockShoot(long nowNs, long synDrawCoolDownMs) {
         sampleSyncedDraw(nowNs, synDrawCoolDownMs);
+        if (synDrawCoolDownMs > 0) return true;
         return armedAtNs >= 0 && !serverDrawSeen;
     }
 
@@ -81,8 +90,9 @@ public final class FirstShotDrawGuard {
      * True when a tap queued during the hold must be fired now — exactly once. Returns false while
      * still holding, while the server draw is still running (plain TaCZ gating would refuse), and
      * while the trigger is still held (TaCZ's own tick fires). When the bound expires with no
-     * server draw ever observed, the queued tap fires through plain TaCZ gating instead of being
-     * dropped: a draw that never arrives cannot refuse the shot.
+     * server draw ever observed, or a running server draw observed without any armed hold ends, the
+     * queued tap fires through plain TaCZ gating instead of being dropped: a draw that never
+     * arrives cannot refuse the shot.
      */
     public static synchronized boolean pollPendingShot(
             long nowNs, long synDrawCoolDownMs, boolean triggerDown) {

@@ -27,8 +27,8 @@ class FirstShotDrawGuardTest {
         FirstShotDrawGuard.onDrawToGun(10_000_000_000L, DRAW_MS);
         // Server draw not seen yet: hold, do not predict into a refusal.
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(10_100_000_000L, 0));
-        // Server draw running: plain TaCZ gating takes over.
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(10_200_000_000L, 350));
+        // Server draw running: keep holding (plain TaCZ gating would refuse anyway).
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(10_200_000_000L, 350));
         // Draw finished: shootable again.
         assertFalse(FirstShotDrawGuard.shouldBlockShoot(11_000_000_000L, 0));
         // stays released afterwards
@@ -40,8 +40,8 @@ class FirstShotDrawGuardTest {
         // 250 ms TaCZ lock timeout passed with synced still 0: fail-before would allow the shot.
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(300_000_000L, 0));
-        // Server draw finally arrives late: still correct to wait for it, then release.
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(400_000_000L, 600));
+        // Server draw finally arrives late: keep holding instead of predicting into a refusal.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(400_000_000L, 600));
         assertFalse(FirstShotDrawGuard.shouldBlockShoot(1_500_000_000L, 0));
     }
 
@@ -56,23 +56,40 @@ class FirstShotDrawGuardTest {
     @Test
     void redrawRearms() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 300));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 300));
         assertFalse(FirstShotDrawGuard.shouldBlockShoot(900_000_000L, 0));
         // Second draw (deploy double draw): hold again until its server draw is seen.
         FirstShotDrawGuard.onDrawToGun(950_000_000L, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(1_000_000_000L, 0));
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(1_100_000_000L, 200));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(1_100_000_000L, 200));
         assertFalse(FirstShotDrawGuard.shouldBlockShoot(2_000_000_000L, 0));
     }
 
     @Test
-    void staleCooldownAfterRearmReleasesEarlyButTaczStillGates() {
+    void staleCooldownAfterRearmHoldsUntilDrawEnds() {
         // Rapid A->B->A switch: the previous draw's server cooldown is still running when the new
-        // draw arms, so the new hold releases immediately. Safe direction: plain TaCZ preCheck
-        // refuses while that cooldown is above 0, exactly like the unmodded game.
+        // draw arms, so the hold stays up. Plain TaCZ gating would refuse anyway; when the draw
+        // ends the guard releases exactly like the unmodded game, firing nothing by itself.
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         FirstShotDrawGuard.onDrawToGun(100_000_000L, DRAW_MS);
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(150_000_000L, 400));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(150_000_000L, 400));
+        assertFalse(FirstShotDrawGuard.shouldBlockShoot(1_500_000_000L, 0));
+    }
+
+    @Test
+    void slowServerDrawWithoutArmingHoldsAndReplays() {
+        // Deploy stall: the server draw starts after the armed hold already expired, so the
+        // guard is disarmed exactly while the server draw is running. The tap must still be
+        // held and replayed when the draw ends — never silently dropped.
+        assertFalse(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(200_000_000L, 500));
+        FirstShotDrawGuard.noteFireAttempt();
+        // Draw still running: keep waiting.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(300_000_000L, 500, false));
+        // Draw ended: fire once...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(900_000_000L, 0, false));
+        // ...and never again for the same tap.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(950_000_000L, 0, false));
     }
 
     @Test
