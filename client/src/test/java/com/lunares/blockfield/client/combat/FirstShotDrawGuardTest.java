@@ -319,4 +319,40 @@ class FirstShotDrawGuardTest {
         assertTrue(FirstShotDrawGuard.pollPendingShot(1_500_000_000L, 0, false));
         assertFalse(FirstShotDrawGuard.pollPendingShot(1_550_000_000L, 0, false));
     }
+
+    @Test
+    void overlappingDrawInsidePreviousCooldownReachesDrawSeen() {
+        // Fail-before for bot major 4507946755: B's server draw starts inside A's
+        // cooldown, so the synced value never drops to 0 and there is no 0 -> >0
+        // edge. The jump up (A remainder -> B full) must still mark B seen, or
+        // the tap never fires and the hold blocks until the bound.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.onDrawToGun(300_000_000L, DRAW_MS, "gunB");
+        // B's server draw starts while A's cooldown still runs: synced value
+        // jumps up, never touching 0.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(400_000_000L, 650));
+        FirstShotDrawGuard.noteFireAttempt(500_000_000L);
+        // B's draw still running: hold, no fire yet.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(600_000_000L, 600, false));
+        // B's draw finished: fire once...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(1_100_000_000L, 0, false));
+        // ...and never again; the hold is released.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_150_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.shouldBlockShoot(1_200_000_000L, 0));
+    }
+
+    @Test
+    void sameGunRedrawInsideCooldownReachesDrawSeen() {
+        // Same-gun re-draw inside the first draw's cooldown: same shape as the
+        // overlap above, but the tap is rebound instead of dropped.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.onDrawToGun(300_000_000L, DRAW_MS, "gun");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(400_000_000L, 650));
+        FirstShotDrawGuard.noteFireAttempt(500_000_000L);
+        assertFalse(FirstShotDrawGuard.pollPendingShot(600_000_000L, 600, false));
+        assertTrue(FirstShotDrawGuard.pollPendingShot(1_100_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_150_000_000L, 0, false));
+    }
 }

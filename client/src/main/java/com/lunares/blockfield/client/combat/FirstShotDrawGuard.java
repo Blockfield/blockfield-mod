@@ -27,15 +27,17 @@ import org.slf4j.LoggerFactory;
  * (TaCZ's own tick fires once the guard releases).
  *
  * <p>The queued tap is an explicit state machine (see {@code .dev/stw4-r5/state.md}): {@code NONE
- * -> QUEUED(drawId, weaponKey) -> DRAW_SEEN(drawId) -> FIRE once | DROPPED}. A draw counts only as
- * a cooldown 0 -&gt; &gt;0 edge observed after its {@link #onDrawToGun} (draw id): a cooldown
- * already running at arm time holds but never marks seen. The tap has no time limit, but any tick
- * with attacks disallowed (tablet, pre-match no-attacks) drops it via {@link #noteAttacksBlocked},
- * so it can never fire when such a window ends. Otherwise it is dropped — never fired — on death or
- * respawn, when a different gun is drawn (a re-draw of the same gun rebinds it to the new draw id),
- * when the gun is gone, when the screen changes, when a new fire press is no longer held (the
- * player is shooting normally, so the old tap is superseded), and when TaCZ performs a real shot
- * (which would double with the replay).
+ * -> QUEUED(drawId, weaponKey) -> DRAW_SEEN(drawId) -> FIRE once | DROPPED}. A draw counts when its
+ * server draw is observed after its {@link #onDrawToGun} (draw id): a fresh 0 -&gt; &gt;0 cooldown
+ * edge, or a jump up inside the previous draw's still-running cooldown (TaCZ syncs no draw id, and
+ * the countdown decays monotonically per draw, so only a new draw can raise it). A cooldown already
+ * running at arm time merely decays, so it holds but never marks seen. The tap has no time limit,
+ * but any tick with attacks disallowed (tablet, pre-match no-attacks) drops it via {@link
+ * #noteAttacksBlocked}, so it can never fire when such a window ends. Otherwise it is dropped —
+ * never fired — on death or respawn, when a different gun is drawn (a re-draw of the same gun
+ * rebinds it to the new draw id), when the gun is gone, when the screen changes, when a new fire
+ * press is no longer held (the player is shooting normally, so the old tap is superseded), and when
+ * TaCZ performs a real shot (which would double with the replay).
  */
 public final class FirstShotDrawGuard {
     private static final Logger LOGGER = LoggerFactory.getLogger(FirstShotDrawGuard.class);
@@ -58,7 +60,9 @@ public final class FirstShotDrawGuard {
     private static long armedSeq = -1;
     private static String armedWeapon = null;
 
-    /** Last sampled server draw cooldown: only a 0 -&gt; &gt;0 edge marks a draw seen (R1). */
+    /**
+     * Last sampled server draw cooldown: a 0 -&gt; &gt;0 edge or a jump up marks a draw seen (R1).
+     */
     private static long lastSynMs = 0;
 
     /** Draw id whose server draw was observed. */
@@ -95,10 +99,12 @@ public final class FirstShotDrawGuard {
 
     /** Sample of the server-synced draw cooldown (0 = none running or none seen yet). */
     public static synchronized void sampleSyncedDraw(long nowNs, long synDrawCoolDownMs) {
-        if (lastSynMs == 0 && synDrawCoolDownMs > 0) {
-            // Fresh 0 -> >0 edge: the server draw for the latest draw started. A cooldown
-            // already running across onDrawToGun never produces this edge (lastSynMs > 0),
-            // so it holds but never marks seen.
+        if (synDrawCoolDownMs > 0 && (lastSynMs == 0 || synDrawCoolDownMs > lastSynMs)) {
+            // New server draw started: a fresh 0 -> >0 edge, or a jump up inside the
+            // previous draw's cooldown (fast A->B switch, same-gun re-draw). TaCZ syncs
+            // no draw id — only this countdown, which decays monotonically per draw —
+            // so an increase can only be a new draw resetting it to full. A stale
+            // cooldown merely decays and never marks seen (R1).
             if (seenSeq != drawSeq) LOGGER.debug("First-shot hold released: server draw observed");
             seenSeq = drawSeq;
             if (tapState == TapState.QUEUED && tapDrawId == drawSeq) tapState = TapState.DRAW_SEEN;
