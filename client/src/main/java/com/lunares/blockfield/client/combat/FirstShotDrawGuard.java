@@ -35,13 +35,14 @@ import org.slf4j.LoggerFactory;
  * already running at arm time merely decays with a constant end, so it holds but never marks seen.
  * A missed detection must still cost at most {@link #SETTLE_NS} past the cooldown reaching 0 (see
  * {@link #sampleSyncedDraw}): then the draw counts as seen, live shots unblock, and a queued tap
- * replays once. A stale cooldown still can not fire before its own end + settle. The tap has no
- * time limit, but any tick with attacks disallowed (tablet, pre-match no-attacks) drops it via
- * {@link #noteAttacksBlocked}, so it can never fire when such a window ends. Otherwise it is
- * dropped — never fired — on death or respawn, when a different gun is drawn (a re-draw of the same
- * gun rebinds it to the new draw id), when the gun is gone, when the screen changes, when a new
- * fire press is no longer held (the player is shooting normally, so the old tap is superseded), and
- * when TaCZ performs a real shot (which would double with the replay).
+ * replays once. A replay TaCZ refuses (anything but a shot that went out) keeps the tap queued for
+ * a retry instead of losing the press. A stale cooldown still can not fire before its own end +
+ * settle. The tap has no time limit, but any tick with attacks disallowed (tablet, pre-match
+ * no-attacks) drops it via {@link #noteAttacksBlocked}, so it can never fire when such a window
+ * ends. Otherwise it is dropped — never fired — on death or respawn, when a different gun is drawn
+ * (a re-draw of the same gun rebinds it to the new draw id), when the gun is gone, when the screen
+ * changes, when a new fire press is no longer held (the player is shooting normally, so the old tap
+ * is superseded), and when TaCZ performs a real shot (which would double with the replay).
  */
 public final class FirstShotDrawGuard {
     private static final Logger LOGGER = LoggerFactory.getLogger(FirstShotDrawGuard.class);
@@ -104,6 +105,13 @@ public final class FirstShotDrawGuard {
     private static TapState tapState = TapState.NONE;
     private static long tapDrawId = -1;
 
+    /**
+     * Draw id of the tap the last successful {@link #pollPendingShot} handed out, or -1. A refused
+     * replay ({@link #noteReplayMissed}) re-queues exactly this tap — never a newer rebind or a tap
+     * dropped since.
+     */
+    private static long lastPolledDrawId = -1;
+
     private FirstShotDrawGuard() {}
 
     /**
@@ -121,6 +129,7 @@ public final class FirstShotDrawGuard {
         boundNs = Math.max(0, drawTimeMs) * 1_000_000L + SLACK_NS;
         armedSeq = drawSeq;
         cooldownZeroSinceNs = -1;
+        lastPolledDrawId = -1;
         if (!Objects.equals(armedWeapon, weaponKey)) {
             dropQueuedTap();
         } else if (tapState != TapState.NONE) {
@@ -212,6 +221,10 @@ public final class FirstShotDrawGuard {
      * its own draw is still unseen and unsettled (it may start late — firing now would be refused
      * as {@code IS_DRAWING}), while the server draw is still running (plain TaCZ gating would
      * refuse), and while the trigger is still held (TaCZ's own tick fires).
+     *
+     * <p>A {@code true} answer hands the tap out and consumes it, so the caller must fire the shot
+     * and report back: {@link #noteReplayMissed} when TaCZ refused it (anything but a shot that
+     * went out), so the press is retried on later ticks instead of lost.
      */
     public static synchronized boolean pollPendingShot(
             long nowNs, long synDrawCoolDownMs, boolean triggerDown) {
@@ -220,12 +233,33 @@ public final class FirstShotDrawGuard {
         // Server draw still running: keep waiting (plain TaCZ gating would refuse).
         if (synDrawCoolDownMs > 0) return false;
         tapState = TapState.NONE;
+        lastPolledDrawId = tapDrawId;
         tapDrawId = -1;
         // Held trigger: TaCZ's own tick fires once the guard releases; a synthetic shot would
         // double it.
-        if (triggerDown) return false;
+        if (triggerDown) {
+            lastPolledDrawId = -1;
+            return false;
+        }
         LOGGER.debug("First-shot replay: firing queued tap");
         return true;
+    }
+
+    /**
+     * The replayed tap was refused by TaCZ (a settle fired on a stale cooldown end while the real
+     * draw is still unsynced, a charge refused): the press is still owed, so the tap the last
+     * {@link #pollPendingShot} handed out is queued again and retried on later ticks — still within
+     * the existing drops (death, screen, switch, attacks-blocked). A newer rebind or drop since the
+     * poll wins: only a still-consumed tap is restored. Exactly-once holds: one shot that goes out
+     * consumes it.
+     */
+    public static synchronized void noteReplayMissed() {
+        if (tapState == TapState.NONE && lastPolledDrawId >= 0) {
+            tapDrawId = lastPolledDrawId;
+            tapState = TapState.DRAW_SEEN;
+            LOGGER.debug("First-shot replay refused: queued tap kept for retry");
+        }
+        lastPolledDrawId = -1;
     }
 
     /** Every client tick: record a running server draw, so a later click still sees it. */
@@ -259,6 +293,7 @@ public final class FirstShotDrawGuard {
         lastEndMs = -1;
         cooldownZeroSinceNs = -1;
         seenSeq = -1;
+        lastPolledDrawId = -1;
         dropQueuedTap();
     }
 }

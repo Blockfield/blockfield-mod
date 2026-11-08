@@ -10,6 +10,7 @@ import com.lunares.blockfield.network.packet.RigOpenC2SPacket;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.tacz.guns.api.client.gameplay.IClientPlayerGunOperator;
 import com.tacz.guns.api.entity.IGunOperator;
+import com.tacz.guns.api.entity.ShootResult;
 import com.tacz.guns.api.item.IGun;
 import com.tacz.guns.client.input.ShootKey;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -153,8 +154,12 @@ public class ClientEventHandler {
         if (!FirstShotDrawGuard.pollPendingShot(System.nanoTime(), synDrawCoolDown, triggerDown))
             return;
         // One synthetic tick with the trigger down, exactly like TaCZ ShootKey.autoShoot.
+        // Only a shot that actually goes out consumes the tap: TaCZ refuses a replay fired
+        // on a stale settle as IS_DRAWING while the real draw is still unsynced, so anything
+        // else keeps it queued for a retry instead of losing the press.
         var operator = IClientPlayerGunOperator.fromLocalPlayer(mc.player);
-        if (operator.chargeShoot(true)) operator.shoot();
+        boolean shotOut = operator.chargeShoot(true) && operator.shoot() == ShootResult.SUCCESS;
+        if (!shotOut) FirstShotDrawGuard.noteReplayMissed();
     }
 
     /** Клавиша рации зажата прямо сейчас — читает PTTKeyHandlerMixin из потока голосового чата. */

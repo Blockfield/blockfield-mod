@@ -406,6 +406,34 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
+    void staleSettleKeepsTapUntilRealDrawEnds() {
+        // Fail-before for bot major 4508173804: A stale-settles B (A's remainder ends
+        // after onDrawToGun(B), before B's own draw starts). The settle fires the replay
+        // while B's draw is still unsynced and TaCZ refuses it as IS_DRAWING: the tap is
+        // kept queued and retried, firing exactly once after B's real draw instead of lost.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.onDrawToGun(200_000_000L, DRAW_MS, "gunB");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(250_000_000L, 250));
+        FirstShotDrawGuard.noteFireAttempt(300_000_000L);
+        // Stale A ends at ~500 ms: still settling, hold, no fire (R1).
+        assertFalse(FirstShotDrawGuard.pollPendingShot(500_000_000L, 0, false));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(500_000_000L, 0));
+        // Settle elapses on the STALE end: replay fires...
+        long settled = 500_000_000L + FirstShotDrawGuard.SETTLE_NS;
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(settled - 50_000_000L, 0));
+        assertTrue(FirstShotDrawGuard.pollPendingShot(settled, 0, false));
+        // ...TaCZ refuses it (B's own draw unsynced): the tap must survive...
+        FirstShotDrawGuard.noteReplayMissed();
+        // ...B's real draw runs: hold, no fire...
+        assertFalse(FirstShotDrawGuard.pollPendingShot(settled + 100_000_000L, 300, false));
+        // ...ends: the press fires exactly once...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(settled + 500_000_000L, 0, false));
+        // ...and never again.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(settled + 550_000_000L, 0, false));
+    }
+
+    @Test
     void cooldownJitterWithinToleranceNeverMarksNewDraw() {
         // Same-draw samples wobble a few ms (tick quantization, ms rounding) around
         // one implied end: wobble inside the tolerance must not mark a new draw (R1).
