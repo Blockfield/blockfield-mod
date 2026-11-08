@@ -5,6 +5,10 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.lunares.blockfield.client.PackUpdates.UpdateKind;
+import com.lunares.blockfield.network.PackContract;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.EncoderException;
+import net.minecraft.network.FriendlyByteBuf;
 import org.junit.jupiter.api.Test;
 
 class PackUpdatesTest {
@@ -130,5 +134,26 @@ class PackUpdatesTest {
         JsonObject same =
                 JsonParser.parseString("{\"client\":\"" + LOCAL + "\"}").getAsJsonObject();
         assertEquals(UpdateKind.NONE, PackUpdates.resolveBuild(same, LOCAL, CONTRACT));
+    }
+
+    @Test
+    void contractReplyFitsTheWireLimit() {
+        // Fail-before: the v2 reply is 108 chars, so the old writeUtf limit of
+        // 80 threw on the client during the pack handshake. The shared limit
+        // must fit it with headroom for more capability tokens.
+        String reply = PackContract.reply(CONTRACT);
+        assertTrue(reply.length() > 80, "v2 reply must exceed the old 80-char limit");
+        assertTrue(
+                reply.length() <= PackContract.REPLY_MAX_LEN,
+                "v2 reply must fit the shared reply limit");
+        var buf = new FriendlyByteBuf(Unpooled.buffer());
+        try {
+            assertThrows(EncoderException.class, () -> buf.writeUtf(reply, 80));
+            buf.clear();
+            buf.writeUtf(reply, PackContract.REPLY_MAX_LEN);
+            assertEquals(reply, buf.readUtf(PackContract.REPLY_MAX_LEN));
+        } finally {
+            buf.release();
+        }
     }
 }
