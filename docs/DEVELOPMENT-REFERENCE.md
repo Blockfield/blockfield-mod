@@ -2056,10 +2056,11 @@ Workshop Apply/Undo → native GameTest; остальное, что требуе
 `config/blockfield-pack-version.txt` и поле `client` в публикации `build.json` сверяют клиентский пак
 (`PackVersion.FORMAT`; `PackVersionGate` кикает при несовпадении, `PackUpdates` показывает баннер).
 **Контракт совместимости.** `PackVersionGate` сначала шлёт login-запрос `blockfield:pack_contract`; клиент с
-`PackUpdates` отвечает `<contract>:<PROTOCOL>`, где contract — `config/blockfield-pack-contract.txt` (его пишет
-`blockfield-client/scripts/build-client.py`, замораживается при старте), а сервер сравнивает с `compatibility` из
+`PackUpdates` отвечает `<contract>:<PROTOCOL>:<caps>`, где contract — `config/blockfield-pack-contract.txt` (его пишет
+`blockfield-client/scripts/build-client.py`, замораживается при старте), а caps — отсортированные через запятую
+токены `PackContract.CAPABILITIES` (v1-ответ без caps тоже принимается, caps пустые). Сервер сравнивает с `compatibility` из
 `/opt/blockfield-build.json` и со своим `PackContract.PROTOCOL` (`PackContract.check`: другой contract — «пак
-устарел», другой PROTOCOL — «версия мода несовместима»). Клиентские правки (HUD, текстуры, конфиги, client-only
+устарел», PROTOCOL вне `{N, N-1}` — «версия мода несовместима»). Клиентские правки (HUD, текстуры, конфиги, client-only
 моды) контракт не меняют и парного выпуска сервера не требуют. Клиент без файла или без этого канала (старый мод,
 прокси без `LoginForwarding.CONTRACT`) не понят — сервер шлёт `blockfield:pack_version` и работает точный хеш
 (ниже). **`PROTOCOL` в `PackContract` увеличивайте при любом изменении пакетов/payload между клиентом и
