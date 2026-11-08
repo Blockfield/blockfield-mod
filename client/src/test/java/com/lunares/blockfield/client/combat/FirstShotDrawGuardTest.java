@@ -115,7 +115,9 @@ class FirstShotDrawGuardTest {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(200_000_000L, 0));
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(300_000_000L, 600));
+        // A running server draw holds too (plain TaCZ gating would refuse anyway); the mixin
+        // still lets idle polls with a released trigger through without queueing.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(300_000_000L, 600));
         assertFalse(FirstShotDrawGuard.shouldBlockShoot(1_500_000_000L, 0));
         assertFalse(FirstShotDrawGuard.pollPendingShot(1_550_000_000L, 0, false));
     }
@@ -125,7 +127,8 @@ class FirstShotDrawGuardTest {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
         FirstShotDrawGuard.noteFireAttempt();
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(200_000_000L, 600));
+        // Server draw running: keep holding (plain TaCZ gating would refuse anyway).
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(200_000_000L, 600));
         // Trigger still held when the draw is done: TaCZ's own tick fires, no synthetic shot.
         assertFalse(FirstShotDrawGuard.pollPendingShot(1_500_000_000L, 0, true));
         // The queued tap is consumed: releasing the trigger afterwards fires nothing extra.
