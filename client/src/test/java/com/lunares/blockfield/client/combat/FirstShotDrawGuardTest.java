@@ -116,11 +116,25 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
-    void expiredBoundDropsQueuedTap() {
+    void expiredBoundFiresQueuedTap() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
         FirstShotDrawGuard.noteFireAttempt();
-        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, false));
+        // Bound expired, server draw never observed: fire once through plain TaCZ gating
+        // instead of silently dropping the tap...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, false));
+        // ...and never again for the same tap.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS + 50_000_000L, 0, false));
+    }
+
+    @Test
+    void expiredBoundWithHeldTriggerDefersToTacz() {
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt();
+        // Trigger still held at expiry: TaCZ's own tick fires, no synthetic shot...
+        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, true));
+        // ...and releasing afterwards fires nothing extra.
         assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS + 50_000_000L, 0, false));
     }
 }

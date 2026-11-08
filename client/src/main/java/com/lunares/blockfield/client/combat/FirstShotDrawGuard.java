@@ -15,10 +15,11 @@ import org.slf4j.LoggerFactory;
  * the server draw is running and plain TaCZ gating takes over; the hold never outlives the gun's
  * own draw plus slack.
  *
- * <p>A press that arrives during the hold is remembered and fired exactly once, when the server
- * draw was observed and plain TaCZ gating allows the shot again. A held trigger needs no replay
- * (TaCZ's own tick fires once the guard releases); a press never observed within the bound is
- * dropped.
+ * <p>A press that arrives during the hold is remembered and fired exactly once: when the server
+ * draw was observed and plain TaCZ gating allows the shot again, or when the bound expires with no
+ * server draw ever observed (a draw that never arrives cannot refuse the shot, so the tap fires
+ * through plain TaCZ gating instead of being silently dropped). A held trigger needs no replay
+ * (TaCZ's own tick fires once the guard releases).
  */
 public final class FirstShotDrawGuard {
     private static final Logger LOGGER = LoggerFactory.getLogger(FirstShotDrawGuard.class);
@@ -78,9 +79,10 @@ public final class FirstShotDrawGuard {
 
     /**
      * True when a tap queued during the hold must be fired now — exactly once. Returns false while
-     * still holding, while the server draw is still running (plain TaCZ gating would refuse), while
-     * the trigger is still held (TaCZ's own tick fires), and after the bound expires unseen (the
-     * queued tap is dropped).
+     * still holding, while the server draw is still running (plain TaCZ gating would refuse), and
+     * while the trigger is still held (TaCZ's own tick fires). When the bound expires with no
+     * server draw ever observed, the queued tap fires through plain TaCZ gating instead of being
+     * dropped: a draw that never arrives cannot refuse the shot.
      */
     public static synchronized boolean pollPendingShot(
             long nowNs, long synDrawCoolDownMs, boolean triggerDown) {
@@ -88,9 +90,18 @@ public final class FirstShotDrawGuard {
         if (!pendingShot) return false;
         if (armedAtNs >= 0 && !serverDrawSeen) return false;
         if (!serverDrawSeen) {
+            // Bound expired with no server draw ever observed: the queued tap can never replay
+            // against a draw that will never arrive, so fire it through plain TaCZ gating instead
+            // of silently dropping it. A running draw still waits; a held trigger still defers
+            // to TaCZ's own tick (consumed without firing, no double shot).
+            if (triggerDown) {
+                pendingShot = false;
+                return false;
+            }
+            if (synDrawCoolDownMs > 0) return false;
             pendingShot = false;
-            LOGGER.debug("First-shot replay dropped: server draw never seen within the bound");
-            return false;
+            LOGGER.debug("First-shot replay: firing queued tap, server draw never observed");
+            return true;
         }
         // Held trigger: TaCZ's own tick fires once the guard releases; a synthetic shot would
         // double it.
