@@ -21,7 +21,8 @@ public final class PackVersion {
                     Files.readString(FabricLoader.getInstance().getConfigDir().resolve(file))
                             .trim();
             return value.matches(FORMAT) ? value : "";
-        } catch (java.io.IOException e) {
+        } catch (java.io.IOException | RuntimeException e) {
+            // No loader in unit tests (or no file in dev): not understood, callers fall back.
             return "";
         }
     }
