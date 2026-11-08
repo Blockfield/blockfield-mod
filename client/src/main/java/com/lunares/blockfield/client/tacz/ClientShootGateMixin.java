@@ -26,7 +26,7 @@ public abstract class ClientShootGateMixin {
         // First shot after a draw: hold until the server draw is observed, never predict into a
         // certain IS_DRAWING refusal (see FirstShotDrawGuard).
         else if (FirstShotDrawGuard.shouldBlockShoot(System.nanoTime(), synDrawCoolDown())) {
-            FirstShotDrawGuard.noteFireAttempt();
+            FirstShotDrawGuard.noteFireAttempt(System.nanoTime());
             cir.setReturnValue(ShootResult.IS_DRAWING);
         }
     }
@@ -39,7 +39,7 @@ public abstract class ClientShootGateMixin {
         // trigger must not queue a shot the user never asked for; they fall through to TaCZ.
         else if (start
                 && FirstShotDrawGuard.shouldBlockShoot(System.nanoTime(), synDrawCoolDown())) {
-            FirstShotDrawGuard.noteFireAttempt();
+            FirstShotDrawGuard.noteFireAttempt(System.nanoTime());
             cir.setReturnValue(false);
         }
     }

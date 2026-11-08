@@ -10,6 +10,7 @@ import com.lunares.blockfield.network.packet.RigOpenC2SPacket;
 import com.mojang.blaze3d.platform.InputConstants;
 import com.tacz.guns.api.client.gameplay.IClientPlayerGunOperator;
 import com.tacz.guns.api.entity.IGunOperator;
+import com.tacz.guns.api.item.IGun;
 import com.tacz.guns.client.input.ShootKey;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
@@ -65,6 +66,24 @@ public class ClientEventHandler {
 
     private static String latestUiJson;
 
+    private static net.minecraft.client.player.LocalPlayer lastGuardPlayer;
+    private static Screen lastGuardScreen;
+
+    /**
+     * Queued taps never cross a death, a respawn, or a screen change: a dead player means a new gun
+     * context after respawn, and any screen (death, tablet, menus) ends the press the tap was
+     * queued for. Runs before the replay below, so a death tick can never replay.
+     */
+    private static void pollGuardLifetime(Minecraft mc) {
+        if (mc.player == null || mc.player.isDeadOrDying() || mc.player != lastGuardPlayer) {
+            lastGuardPlayer = mc.player;
+            FirstShotDrawGuard.reset();
+        } else if (mc.screen != lastGuardScreen) {
+            FirstShotDrawGuard.dropQueuedTap();
+        }
+        lastGuardScreen = mc.screen;
+    }
+
     private static void openOrDefer(Runnable open) {
         Screen current = Minecraft.getInstance().screen;
         if (current instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen
@@ -78,6 +97,7 @@ public class ClientEventHandler {
     }
 
     private static void onClientTick(Minecraft mc) {
+        pollGuardLifetime(mc);
         if (pendingScreen != null
                 && mc.player != null
                 && !(mc.screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen)
@@ -117,6 +137,11 @@ public class ClientEventHandler {
     /** Fires one tap queued during the draw hold, exactly once (see FirstShotDrawGuard). */
     private static void replayQueuedTap(Minecraft mc) {
         if (mc.player == null || Tablet.isOpen() || PreMatchCombat.noAttacks()) return;
+        // The gun is gone (switched away, dropped): its queued tap dies with it, never replays.
+        if (IGun.getIGunOrNull(mc.player.getMainHandItem()) == null) {
+            FirstShotDrawGuard.dropQueuedTap();
+            return;
+        }
         // Same trigger TaCZ reads; a held trigger needs no replay (TaCZ's own tick fires).
         boolean triggerDown = ShootKey.SHOOT_KEY.isDown();
         long synDrawCoolDown = IGunOperator.fromLivingEntity(mc.player).getSynDrawCoolDown();

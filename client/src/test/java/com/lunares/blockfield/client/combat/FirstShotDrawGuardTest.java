@@ -83,7 +83,7 @@ class FirstShotDrawGuardTest {
         // held and replayed when the draw ends — never silently dropped.
         assertFalse(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(200_000_000L, 500));
-        FirstShotDrawGuard.noteFireAttempt();
+        FirstShotDrawGuard.noteFireAttempt(200_000_000L);
         // Draw still running: keep waiting.
         assertFalse(FirstShotDrawGuard.pollPendingShot(300_000_000L, 500, false));
         // Draw ended: fire once...
@@ -97,7 +97,7 @@ class FirstShotDrawGuardTest {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         // Tap lands inside the hold: blocked, remembered.
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
-        FirstShotDrawGuard.noteFireAttempt();
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
         // Trigger released before the server draw is observed: still waiting.
         assertFalse(FirstShotDrawGuard.pollPendingShot(200_000_000L, 0, false));
         // Server draw observed but still running: TaCZ would refuse, keep waiting.
@@ -126,7 +126,7 @@ class FirstShotDrawGuardTest {
     void heldTriggerNeedsNoReplay() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
-        FirstShotDrawGuard.noteFireAttempt();
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
         // Server draw running: keep holding (plain TaCZ gating would refuse anyway).
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(200_000_000L, 600));
         // Trigger still held when the draw is done: TaCZ's own tick fires, no synthetic shot.
@@ -139,7 +139,7 @@ class FirstShotDrawGuardTest {
     void triggerHeldDuringDrawThenReleasedStillReplays() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
-        FirstShotDrawGuard.noteFireAttempt();
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
         // Trigger still held while the server draw runs: the queued tap must survive.
         assertFalse(FirstShotDrawGuard.pollPendingShot(300_000_000L, 600, true));
         // Released before the draw ends: TaCZ's tick fires nothing, so the replay must.
@@ -148,22 +148,74 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
-    void expiredBoundFiresQueuedTap() {
+    void expiredBoundHoldsQueuedTapUntilDrawObserved() {
+        // Firing at bound expiry shoots into a server draw that starts later (loadout menu)
+        // and is refused as IS_DRAWING — exactly what the hold must prevent. Hold the queue
+        // until the draw is observed instead.
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
-        FirstShotDrawGuard.noteFireAttempt();
-        // Bound expired, server draw never observed: fire once through plain TaCZ gating
-        // instead of silently dropping the tap...
-        assertTrue(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, false));
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
+        // Bound expired, server draw never observed: hold, never fire (fail-before: true).
+        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, false));
+        // Late server draw starts: keep holding while it runs...
+        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS + 100_000_000L, 400, false));
+        // ...fire once when it ends (inside the hard cap)...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(BOUND_NS + 900_000_000L, 0, false));
         // ...and never again for the same tap.
-        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS + 50_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS + 950_000_000L, 0, false));
+    }
+
+    @Test
+    void queuedTapDiesAtHardCapNeverFires() {
+        // Explicit rule for a draw that never comes: past bound + 1 s the tap is dropped,
+        // never fired — even if a draw shows up afterwards.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
+        long hardCapNs = 100_000_000L + BOUND_NS + FirstShotDrawGuard.TAP_TTL_EXTRA_NS;
+        // Still inside the lifetime: held, never fired (fail-before: the old code fires here).
+        assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(hardCapNs + 1, 0, false));
+        // A draw observed after the drop must not resurrect the tap.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(hardCapNs + 100_000_000L, 400, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(hardCapNs + 900_000_000L, 0, false));
+    }
+
+    @Test
+    void deathDropsQueuedTapRespawnNeverReplays() {
+        // Holding fire at death must not fire by itself after respawn: the client tick
+        // resets the guard while dead, so the respawn draw starts with no queued tap.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
+        // Death (see ClientEventHandler.pollGuardLifetime).
+        FirstShotDrawGuard.reset();
+        // Respawn re-draws the kit gun with the trigger released: nothing replays, neither
+        // inside the new hold...
+        FirstShotDrawGuard.onDrawToGun(500_000_000L, DRAW_MS);
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(600_000_000L, 0));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(2_500_000_000L, 0, false));
+        // ...nor after it.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(3_500_000_000L, 0, false));
+    }
+
+    @Test
+    void redrawDropsQueuedTapFromPreviousGun() {
+        // Gun switched: the new draw kills the old tap, it never replays for the new gun —
+        // not even once the new draw is observed and finished.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
+        FirstShotDrawGuard.onDrawToGun(200_000_000L, DRAW_MS);
+        assertFalse(FirstShotDrawGuard.pollPendingShot(2_000_000_000L, 400, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(2_900_000_000L, 0, false));
     }
 
     @Test
     void expiredBoundWithHeldTriggerDefersToTacz() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
-        FirstShotDrawGuard.noteFireAttempt();
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
         // Trigger still held at expiry: TaCZ's own tick fires, no synthetic shot...
         assertFalse(FirstShotDrawGuard.pollPendingShot(BOUND_NS, 0, true));
         // ...and releasing afterwards fires nothing extra.
