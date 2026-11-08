@@ -26,6 +26,10 @@ public abstract class LocalPlayerDrawGuardMixin {
                         .map(ClientGunIndex::getGunData)
                         .map(data -> (long) (data.getDrawTime() * 1000))
                         .orElse(700L);
-        FirstShotDrawGuard.onDrawToGun(System.nanoTime(), drawMs);
+        // Gun id + slot: only a different gun drops a tap queued for the previous one.
+        FirstShotDrawGuard.onDrawToGun(
+                System.nanoTime(),
+                drawMs,
+                gun.getGunId(mainHand) + "@" + player.getInventory().selected);
     }
 }

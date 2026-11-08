@@ -1,6 +1,7 @@
 package com.lunares.blockfield.client.combat;
 
 import com.tacz.guns.api.entity.IGunOperator;
+import java.util.Objects;
 import net.minecraft.client.Minecraft;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,10 +27,12 @@ import org.slf4j.LoggerFactory;
  * (TaCZ's own tick fires once the guard releases).
  *
  * <p>The queued tap has an explicit lifetime: it is kept until the server draw is observed and
- * finished. It is dropped — never fired — on death or respawn, when the gun is switched (a new
- * draw) or gone, when the screen changes, and past a hard cap of the bound plus {@link
- * #TAP_TTL_EXTRA_NS} (the explicit rule for a draw that never comes: a stale tap must not fire into
- * a draw that starts later, where the server would refuse it as {@code IS_DRAWING}).
+ * finished. It is dropped — never fired — on death or respawn, when a different gun is drawn (a
+ * re-draw of the same gun keeps it), when the gun is gone, when the screen changes, and past a hard
+ * cap of the bound plus {@link #TAP_TTL_EXTRA_NS} while the server draw was never observed (the
+ * explicit rule for a draw that never comes: a stale tap must not fire into a draw that starts
+ * later, where the server would refuse it as {@code IS_DRAWING}). Once the server draw is observed
+ * the cap no longer applies: the tap is held until that draw ends.
  */
 public final class FirstShotDrawGuard {
     private static final Logger LOGGER = LoggerFactory.getLogger(FirstShotDrawGuard.class);
@@ -43,6 +46,7 @@ public final class FirstShotDrawGuard {
     private static long armedAtNs = -1;
     private static long boundNs = 0;
     private static boolean serverDrawSeen = false;
+    private static String armedWeapon = null;
     private static boolean pendingShot = false;
     private static long pendingShotAtNs = 0;
     private static long pendingCapNs = 0;
@@ -50,15 +54,19 @@ public final class FirstShotDrawGuard {
     private FirstShotDrawGuard() {}
 
     /**
-     * A local draw to a gun started now; the server draw for it is not observed yet. A new draw
-     * means a new gun context: a tap queued for the previous one is dropped, never replayed for the
-     * new gun.
+     * A local draw to a gun started now; the server draw for it is not observed yet. A draw of a
+     * different gun means a new gun context: a tap queued for the previous one is dropped, never
+     * replayed for the new gun. A re-draw of the same gun (deploy double draw) keeps the queued tap
+     * and its lifetime, which stays counted from the draw that queued it.
+     *
+     * @param weaponKey gun id + slot of the drawn gun, from the caller; only a change drops the tap
      */
-    public static synchronized void onDrawToGun(long nowNs, long drawTimeMs) {
+    public static synchronized void onDrawToGun(long nowNs, long drawTimeMs, String weaponKey) {
         armedAtNs = nowNs;
         boundNs = Math.max(0, drawTimeMs) * 1_000_000L + SLACK_NS;
         serverDrawSeen = false;
-        dropQueuedTap();
+        if (!Objects.equals(armedWeapon, weaponKey)) dropQueuedTap();
+        armedWeapon = weaponKey;
         if (LOGGER.isDebugEnabled()) LOGGER.debug("First-shot hold armed, drawMs={}", drawTimeMs);
     }
 
@@ -115,7 +123,9 @@ public final class FirstShotDrawGuard {
             long nowNs, long synDrawCoolDownMs, boolean triggerDown) {
         sampleSyncedDraw(nowNs, synDrawCoolDownMs);
         if (!pendingShot) return false;
-        if (nowNs - pendingShotAtNs > pendingCapNs) {
+        // The cap is only for a draw that never comes: once the server draw is observed the
+        // tap is held until that draw ends, however long it runs.
+        if (!serverDrawSeen && nowNs - pendingShotAtNs > pendingCapNs) {
             pendingShot = false;
             LOGGER.debug("First-shot replay dropped: queued tap outlived its lifetime");
             return false;
@@ -159,6 +169,7 @@ public final class FirstShotDrawGuard {
         armedAtNs = -1;
         boundNs = 0;
         serverDrawSeen = false;
+        armedWeapon = null;
         dropQueuedTap();
     }
 }
