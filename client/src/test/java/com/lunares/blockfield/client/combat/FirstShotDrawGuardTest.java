@@ -69,11 +69,12 @@ class FirstShotDrawGuardTest {
     void staleCooldownAfterRearmHoldsUntilBound() {
         // Rapid A->B switch: B arms while A's server cooldown still runs (sampled every
         // tick, so no fresh edge appears). The stale cooldown holds B but never marks it
-        // seen: the hold lasts until B's own bound, firing nothing by itself.
+        // seen: it decays toward the same implied end (50 + 400 = 150 + 300), so the hold
+        // lasts until B's own bound, firing nothing by itself.
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(50_000_000L, 400));
         FirstShotDrawGuard.onDrawToGun(100_000_000L, DRAW_MS, "otherGun");
-        assertTrue(FirstShotDrawGuard.shouldBlockShoot(150_000_000L, 400));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(150_000_000L, 300));
         // Stale draw ended, B's own draw never synced: still holding.
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(500_000_000L, 0));
         // Bound expired with no draw of its own observed: release like the unmodded game.
@@ -86,12 +87,13 @@ class FirstShotDrawGuardTest {
     void staleCooldownNeverCountsAsNewDraw() {
         // Fail-before for bot major 4507884730: gun A is mid-draw (server cooldown running,
         // sampled every tick), the player switches to gun B mid-draw. The stale cooldown
-        // holds the new draw but must never mark it seen: the tap queued during the stale
+        // holds the new draw but must never mark it seen: it decays toward the same
+        // implied end (100 + 400 = 250 + 250), so the tap queued during the stale
         // hold must never fire once the stale cooldown ends while B's own draw never synced.
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
         FirstShotDrawGuard.onDrawToGun(200_000_000L, DRAW_MS, "gunB");
-        assertTrue(FirstShotDrawGuard.shouldBlockShoot(250_000_000L, 400));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(250_000_000L, 250));
         FirstShotDrawGuard.noteFireAttempt(300_000_000L);
         // Stale draw ends, B's draw never observed: hold, never fire.
         assertFalse(FirstShotDrawGuard.pollPendingShot(420_000_000L, 0, false));
@@ -354,5 +356,44 @@ class FirstShotDrawGuardTest {
         assertFalse(FirstShotDrawGuard.pollPendingShot(600_000_000L, 600, false));
         assertTrue(FirstShotDrawGuard.pollPendingShot(1_100_000_000L, 0, false));
         assertFalse(FirstShotDrawGuard.pollPendingShot(1_150_000_000L, 0, false));
+    }
+
+    @Test
+    void shorterDrawInsidePreviousCooldownReachesDrawSeen() {
+        // Fail-before for bot thread 4507997477: B's draw is shorter than A's
+        // remainder (A 600 ms left at the switch, B full 300 ms), so the synced
+        // value only falls (600 -> 300 -> 0) and no increase ever marks B seen.
+        // The implied end (sample time + cooldown) still jumps, which marks B.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 700));
+        FirstShotDrawGuard.onDrawToGun(300_000_000L, DRAW_MS, "gunB");
+        // Stale A remainder decaying toward the same end (400 + 400 = 800): hold.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(400_000_000L, 400));
+        FirstShotDrawGuard.noteFireAttempt(500_000_000L);
+        // B's server draw runs, shorter than A's remainder: value drops, no rise.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(600_000_000L, 300, false));
+        // B's draw finished: fire once...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(1_100_000_000L, 0, false));
+        // ...and never again; the hold is released.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_150_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.shouldBlockShoot(1_200_000_000L, 0));
+    }
+
+    @Test
+    void cooldownJitterWithinToleranceNeverMarksNewDraw() {
+        // Same-draw samples wobble a few ms (tick quantization, ms rounding) around
+        // one implied end: wobble inside the tolerance must not mark a new draw (R1).
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.onDrawToGun(200_000_000L, DRAW_MS, "gunB");
+        // Stale A remainder decaying toward the same end (500), +/-30 ms wobble.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(250_000_000L, 250));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(300_000_000L, 230));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(350_000_000L, 150));
+        FirstShotDrawGuard.noteFireAttempt(400_000_000L);
+        // Stale ended, B's own draw never synced: hold, never fire.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(500_000_000L, 0));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(500_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(600_000_000L, 0, false));
     }
 }
