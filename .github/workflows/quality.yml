@@ -56,7 +56,7 @@ jobs:
             java=false
             for f in $(git diff --name-only --no-renames "$BASE_SHA" HEAD); do
               case "$f" in
-                .github/workflows/quality.yml | dev/quality.py | scripts/toolchain.py) java=true ;;
+                .github/workflows/quality.yml | dev/quality.py | scripts/toolchain.py | scripts/toolchain_local.py) java=true ;;
                 *.md | docs/* | release-notes/* | .github/* | *.py | *.sh) ;;
                 *) java=true ;;
               esac
