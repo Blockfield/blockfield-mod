@@ -31,9 +31,10 @@ public final class PackContract {
     // 9: a ticket without a complete victim report (presence byte), rewound by retained pose at R.
     // 10: synced data component blockfield:rig_slots; 1.59.x clients fail registry sync at login.
     public static final int PROTOCOL = 10;
-    // One release window of N/N-1 overlap: a client one version behind still joins and
-    // plays; the floor moves on the next paired release. Newer-than-server stays rejected.
-    public static final int PREV_PROTOCOL = PROTOCOL - 1;
+    // Oldest client protocol this build still accepts. Bump PROTOCOL on any wire change;
+    // raise MIN_COMPATIBLE only when the change is not additive (registry/codec break,
+    // like 9->10): 9 stays rejected until an additive change moves the floor again.
+    public static final int MIN_COMPATIBLE_PROTOCOL = 10;
     // Additive capabilities this build understands, sorted: reply() sends them in this
     // order. The server sends a new packet shape only when the negotiated set has its
     // token, else the old shape. Old servers read a v2 reply as OUTDATED (safe kick).
@@ -56,6 +57,10 @@ public final class PackContract {
     }
 
     public static Verdict check(String expected, String reply) {
+        return check(expected, reply, MIN_COMPATIBLE_PROTOCOL, PROTOCOL);
+    }
+
+    static Verdict check(String expected, String reply, int minCompatible, int current) {
         String[] parts = reply.split(":", -1);
         if ((parts.length != 2 && parts.length != 3) || !PackVersion.accepts(expected, parts[0]))
             return Verdict.OUTDATED;
@@ -65,7 +70,7 @@ public final class PackContract {
         } catch (NumberFormatException e) {
             return Verdict.INCOMPATIBLE;
         }
-        return (protocol == PROTOCOL || protocol == PREV_PROTOCOL)
+        return (protocol >= minCompatible && protocol <= current)
                 ? Verdict.OK
                 : Verdict.INCOMPATIBLE;
     }

@@ -33,27 +33,39 @@ class PackContractTest {
     }
 
     @Test
-    void currentAndPreviousProtocolAreOkInBothShapes() {
+    void currentProtocolIsOkInBothShapesPreviousIsIncompatible() {
+        assertEquals(PackContract.PROTOCOL, PackContract.MIN_COMPATIBLE_PROTOCOL);
         assertEquals(
                 PackContract.Verdict.OK, PackContract.check(CONTRACT, v1(PackContract.PROTOCOL)));
         assertEquals(
                 PackContract.Verdict.OK, PackContract.check(CONTRACT, v2(PackContract.PROTOCOL)));
         assertEquals(
-                PackContract.Verdict.OK,
-                PackContract.check(CONTRACT, v1(PackContract.PREV_PROTOCOL)));
+                PackContract.Verdict.INCOMPATIBLE,
+                PackContract.check(CONTRACT, v1(PackContract.PROTOCOL - 1)));
+        assertEquals(
+                PackContract.Verdict.INCOMPATIBLE,
+                PackContract.check(CONTRACT, v2(PackContract.PROTOCOL - 1)));
+    }
+
+    @Test
+    void hypotheticalRangeStillAcceptsPreviousWhenCompatible() {
+        int prev = PackContract.PROTOCOL - 1;
         assertEquals(
                 PackContract.Verdict.OK,
-                PackContract.check(CONTRACT, v2(PackContract.PREV_PROTOCOL)));
+                PackContract.check(CONTRACT, v1(prev), prev, PackContract.PROTOCOL));
+        assertEquals(
+                PackContract.Verdict.OK,
+                PackContract.check(CONTRACT, v2(prev), prev, PackContract.PROTOCOL));
     }
 
     @Test
     void olderAndNewerProtocolsAreIncompatible() {
         assertEquals(
                 PackContract.Verdict.INCOMPATIBLE,
-                PackContract.check(CONTRACT, v1(PackContract.PREV_PROTOCOL - 1)));
+                PackContract.check(CONTRACT, v1(PackContract.MIN_COMPATIBLE_PROTOCOL - 1)));
         assertEquals(
                 PackContract.Verdict.INCOMPATIBLE,
-                PackContract.check(CONTRACT, v2(PackContract.PREV_PROTOCOL - 1)));
+                PackContract.check(CONTRACT, v2(PackContract.MIN_COMPATIBLE_PROTOCOL - 1)));
         assertEquals(
                 PackContract.Verdict.INCOMPATIBLE,
                 PackContract.check(CONTRACT, v1(PackContract.PROTOCOL + 1)));

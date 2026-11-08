@@ -2060,11 +2060,12 @@ Workshop Apply/Undo → native GameTest; остальное, что требуе
 `blockfield-client/scripts/build-client.py`, замораживается при старте), а caps — отсортированные через запятую
 токены `PackContract.CAPABILITIES` (v1-ответ без caps тоже принимается, caps пустые). Сервер сравнивает с `compatibility` из
 `/opt/blockfield-build.json` и со своим `PackContract.PROTOCOL` (`PackContract.check`: другой contract — «пак
-устарел», PROTOCOL вне `{N, N-1}` — «версия мода несовместима»). Клиентские правки (HUD, текстуры, конфиги, client-only
+устарел», PROTOCOL вне `MIN_COMPATIBLE..PROTOCOL` — «версия мода несовместима»). Клиентские правки (HUD, текстуры, конфиги, client-only
 моды) контракт не меняют и парного выпуска сервера не требуют. Клиент без файла или без этого канала (старый мод,
 прокси без `LoginForwarding.CONTRACT`) не понят — сервер шлёт `blockfield:pack_version` и работает точный хеш
 (ниже). **`PROTOCOL` в `PackContract` увеличивайте при любом изменении пакетов/payload между клиентом и
 сервером**: мод поставляется раздельными JAR (`side = "client"`/`"server"`) и в контракт не входит.
+`MIN_COMPATIBLE_PROTOCOL` поднимайте только при несовместимом изменении (registry/codec, как 9->10).
 `BLOCKFIELD_DEV=1` отключает обе проверки; на стенде `just server start --gate` оставляет боевой гейт.
 Поле `client_version` в `build.json` пишет `blockfield-client/scripts/build-client.py`; баннер
 `PackUpdates` и `/bf version` (`BlockFieldServer.packInfo`) показывают его как версию клиентских
