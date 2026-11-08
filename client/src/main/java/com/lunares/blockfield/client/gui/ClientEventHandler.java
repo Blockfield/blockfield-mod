@@ -136,7 +136,12 @@ public class ClientEventHandler {
 
     /** Fires one tap queued during the draw hold, exactly once (see FirstShotDrawGuard). */
     private static void replayQueuedTap(Minecraft mc) {
-        if (mc.player == null || Tablet.isOpen() || PreMatchCombat.noAttacks()) return;
+        if (mc.player == null) return;
+        if (Tablet.isOpen() || PreMatchCombat.noAttacks()) {
+            // Attacks disallowed: the queued tap dies instead of firing when the window ends.
+            FirstShotDrawGuard.noteAttacksBlocked();
+            return;
+        }
         // The gun is gone (switched away, dropped): its queued tap dies with it, never replays.
         if (IGun.getIGunOrNull(mc.player.getMainHandItem()) == null) {
             FirstShotDrawGuard.dropQueuedTap();

@@ -66,14 +66,69 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
-    void staleCooldownAfterRearmHoldsUntilDrawEnds() {
-        // Rapid A->B->A switch: the previous draw's server cooldown is still running when the new
-        // draw arms, so the hold stays up. Plain TaCZ gating would refuse anyway; when the draw
-        // ends the guard releases exactly like the unmodded game, firing nothing by itself.
+    void staleCooldownAfterRearmHoldsUntilBound() {
+        // Rapid A->B switch: B arms while A's server cooldown still runs (sampled every
+        // tick, so no fresh edge appears). The stale cooldown holds B but never marks it
+        // seen: the hold lasts until B's own bound, firing nothing by itself.
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(50_000_000L, 400));
         FirstShotDrawGuard.onDrawToGun(100_000_000L, DRAW_MS, "otherGun");
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(150_000_000L, 400));
-        assertFalse(FirstShotDrawGuard.shouldBlockShoot(1_500_000_000L, 0));
+        // Stale draw ended, B's own draw never synced: still holding.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(500_000_000L, 0));
+        // Bound expired with no draw of its own observed: release like the unmodded game.
+        assertFalse(FirstShotDrawGuard.shouldBlockShoot(100_000_000L + BOUND_NS, 0));
+        assertFalse(
+                FirstShotDrawGuard.shouldBlockShoot(100_000_000L + BOUND_NS + 1_000_000_000L, 0));
+    }
+
+    @Test
+    void staleCooldownNeverCountsAsNewDraw() {
+        // Fail-before for bot major 4507884730: gun A is mid-draw (server cooldown running,
+        // sampled every tick), the player switches to gun B mid-draw. The stale cooldown
+        // holds the new draw but must never mark it seen: the tap queued during the stale
+        // hold must never fire once the stale cooldown ends while B's own draw never synced.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.onDrawToGun(200_000_000L, DRAW_MS, "gunB");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(250_000_000L, 400));
+        FirstShotDrawGuard.noteFireAttempt(300_000_000L);
+        // Stale draw ends, B's draw never observed: hold, never fire.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(420_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(500_000_000L, 0, false));
+    }
+
+    @Test
+    void tapDiesWhenAttacksBlocked() {
+        // Fail-before for bot major 4507884733: a tap queued during the draw must die when
+        // attacks become disallowed (pre-match no-attacks window, tablet) instead of firing
+        // when the window ends. The caller reports every disallowed tick (see
+        // ClientEventHandler.replayQueuedTap).
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
+        // Attacks blocked before the draw is seen: the tap dies, never fires later.
+        FirstShotDrawGuard.noteAttacksBlocked();
+        assertFalse(FirstShotDrawGuard.pollPendingShot(300_000_000L, 600, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_500_000_000L, 0, false));
+    }
+
+    @Test
+    void redrawAfterDrawSeenWaitsForNewDraw() {
+        // The tap's draw finished syncing, then the same gun re-draws before the replay:
+        // the tap now waits for the new draw's own start instead of firing for the old one.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt(100_000_000L);
+        assertFalse(FirstShotDrawGuard.pollPendingShot(300_000_000L, 600, false));
+        FirstShotDrawGuard.onDrawToGun(500_000_000L, DRAW_MS, "gun");
+        // Old draw done, new draw never started: must not fire for the superseded draw.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(900_000_000L, 0, false));
+        // New draw runs and ends: fires once...
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_000_000_000L, 400, false));
+        assertTrue(FirstShotDrawGuard.pollPendingShot(1_500_000_000L, 0, false));
+        // ...and never again for the same tap.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_550_000_000L, 0, false));
     }
 
     @Test
