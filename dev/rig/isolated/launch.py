@@ -112,6 +112,46 @@ def select_jar(directory, prefix, mod_id, side):
     return jars[0]
 
 
+def ensure_testbot():
+    """Fetch the pinned TestBot sources and rebuild the jar when stale.
+
+    Runs on every isolated build: fetch-testbot.sh is a no-op when the
+    unpacked marker matches the pin, so a stale upstream/ or jar from an
+    older pin is never used silently.
+    """
+    upstream = HERE.parent / "testbot" / "upstream"
+    subprocess.run(
+        ["bash", str(HERE.parent / "testbot" / "fetch-testbot.sh")], check=True
+    )
+    marker = (upstream / ".upstream-sha").stat().st_mtime
+    libs = upstream / "build" / "libs"
+    jars = (
+        [
+            p
+            for p in libs.glob("bftestbot-*.jar")
+            if not p.name.endswith(("-sources.jar", "-dev.jar"))
+        ]
+        if libs.is_dir()
+        else []
+    )
+    if len(jars) != 1 or jars[0].stat().st_mtime < marker:
+        for stale in jars:
+            stale.unlink()
+        subprocess.run(
+            [
+                "just",
+                "gradle",
+                "--no-daemon",
+                "--max-workers=2",
+                "-p",
+                str(upstream),
+                "build",
+            ],
+            cwd=str(REPO),
+            check=True,
+        )
+
+
 def build(output):
     ensure_local_engine()
     output = new_directory(output)
@@ -124,8 +164,9 @@ def build(output):
     client = select_jar(
         REPO / "client/build/libs", "blockfield-client-", "blockfield", "client"
     )
+    ensure_testbot()
     testbot = select_jar(
-        HERE.parent / "testbot/build/libs", "bftestbot-", "bftestbot", "client"
+        HERE.parent / "testbot/upstream/build/libs", "bftestbot-", "bftestbot", "client"
     )
     if (
         mod_jar(server, "blockfield", "server")

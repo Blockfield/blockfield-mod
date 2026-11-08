@@ -9,7 +9,7 @@ repositories { mavenCentral() }
 spotless {
     java {
         target 'common/src/**/*.java', 'client/src/**/*.java',
-                'dev/rig/testbot/src/**/*.java', 'dev/test/**/*.java', 'dev/oracleTest/**/*.java'
+                'dev/test/**/*.java', 'dev/oracleTest/**/*.java'
         googleJavaFormat('1.36.1').aosp()
     }
 }

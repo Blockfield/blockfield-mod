@@ -89,7 +89,6 @@ GJF_EXPORTS = [
 JAVA_FORMAT_ROOTS = (
     "common/src",
     "client/src",
-    "dev/rig/testbot/src",
     "dev/test",
     "dev/oracleTest",
 )

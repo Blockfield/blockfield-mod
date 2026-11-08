@@ -131,9 +131,18 @@ case "${1:-}" in
             exit 1
         }
         process_owner=$(python3 "$RIG/process_guard.py" owner)
-        bot_jar=$(/bin/ls "$RIG"/testbot/build/libs/bftestbot-*.jar 2>/dev/null | grep -v sources | head -1)
+        # The pin is verified on every start (fetch is a no-op when the
+        # marker matches); the jar is rebuilt when the sources changed.
+        "$RIG/testbot/fetch-testbot.sh" || exit 1
+        bot_jar=$(/bin/ls "$RIG"/testbot/upstream/build/libs/bftestbot-*.jar 2>/dev/null | grep -v sources | head -1)
+        if [ -z "$bot_jar" ] || [ "$RIG/testbot/upstream/.upstream-sha" -nt "$bot_jar" ]; then
+            echo "testbot jar missing or older than the pinned sources; rebuilding..."
+            rm -f "$RIG"/testbot/upstream/build/libs/bftestbot-*.jar
+            just --justfile "$MODROOT/justfile" gradle --no-daemon --max-workers=2 -p "$RIG/testbot/upstream" build || exit 1
+            bot_jar=$(/bin/ls "$RIG"/testbot/upstream/build/libs/bftestbot-*.jar 2>/dev/null | grep -v sources | head -1)
+        fi
         [ -n "$bot_jar" ] || {
-            echo "нет testbot: cd testbot && ./gradlew build"
+            echo "нет testbot jar: (cd \"$RIG/testbot/upstream\" && ./gradlew build)"
             exit 1
         }
         cp -f "$bot_jar" "$CLIENT/mods/bftestbot.jar"

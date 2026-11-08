@@ -1,0 +1,6 @@
+# Canonical TestBot source (blockfield-workspace, server#319 U5).
+# Line 1: workspace commit SHA. Line 2: sha256 of the sorted file-hash list
+# of scripts/dev/testbot at that commit (tree checksum, not tarball bytes:
+# the commit id itself is the integrity check).
+b55a8c3da01fbc60fbf759df8be189c2bb368593
+5f577c6cca686850c38cb23ab3e8dc7cc8ce79b2beb2bc380ce636dfff22a1ec

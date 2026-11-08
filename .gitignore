@@ -47,4 +47,7 @@ OldProject/
 # Python caches (dev/ scripts)
 __pycache__/
 
+# Canonical TestBot sources unpacked by dev/rig/testbot/fetch-testbot.sh
+dev/rig/testbot/upstream/
+
 .cache/quality/
