@@ -40,6 +40,10 @@ public final class PackContract {
     // token, else the old shape. Old servers read a v2 reply as OUTDATED (safe kick).
     public static final List<String> CAPABILITIES =
             List.of("balance-v1", "map.players-v1", "ui.envelope-v1");
+    // Max wire length of the login reply, shared by the client write and every
+    // read of it: a v2 reply is 108 chars, so the old 80-char limit throws
+    // during the handshake. Keep the server gate in sync (it kicks on overflow).
+    public static final int REPLY_MAX_LEN = 256;
     // Frozen at startup like PackVersion.CURRENT; build-client.py writes it, same digest as the
     // server image's build.json "compatibility".
     public static final String CURRENT = PackVersion.read("blockfield-pack-contract.txt");
