@@ -138,7 +138,7 @@ case "${1:-}" in
         if [ -z "$bot_jar" ] || [ "$RIG/testbot/upstream/.upstream-sha" -nt "$bot_jar" ]; then
             echo "testbot jar missing or older than the pinned sources; rebuilding..."
             rm -f "$RIG"/testbot/upstream/build/libs/bftestbot-*.jar
-            just --justfile "$MODROOT/justfile" gradle --no-daemon --max-workers=2 -p dev/rig/testbot/upstream build || exit 1
+            just --justfile "$MODROOT/justfile" gradle --no-daemon --max-workers=2 -p "$RIG/testbot/upstream" build || exit 1
             bot_jar=$(/bin/ls "$RIG"/testbot/upstream/build/libs/bftestbot-*.jar 2>/dev/null | grep -v sources | head -1)
         fi
         [ -n "$bot_jar" ] || {

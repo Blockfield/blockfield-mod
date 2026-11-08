@@ -144,7 +144,7 @@ def ensure_testbot():
                 "--no-daemon",
                 "--max-workers=2",
                 "-p",
-                "dev/rig/testbot/upstream",
+                str(upstream),
                 "build",
             ],
             cwd=str(REPO),
