@@ -56,7 +56,7 @@ jobs:
             java=false
             for f in $(git diff --name-only --no-renames "$BASE_SHA" HEAD); do
               case "$f" in
-                .github/workflows/quality.yml | dev/quality.py | scripts/toolchain.py) java=true ;;
+                .github/workflows/quality.yml | dev/quality.py | scripts/toolchain.py | scripts/toolchain_local.py) java=true ;;
                 *.md | docs/* | release-notes/* | .github/* | *.py | *.sh) ;;
                 *) java=true ;;
               esac
@@ -125,7 +125,7 @@ jobs:
           path: |
             .cache/quality
             .dev/jdk
-          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('scripts/toolchain.py', 'scripts/quality.py', 'dev/quality.py') }}
+          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/tools.lock.json', 'scripts/toolchain.py', 'scripts/toolchain_local.py', 'dev/quality.py') }}
       - run: python -I -X utf8 scripts/toolchain.py --ci
       - name: Python, shell and workflow lint and format
         run: just check
@@ -156,7 +156,7 @@ jobs:
           path: |
             .cache/quality
             .dev/jdk
-          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('scripts/toolchain.py', 'scripts/quality.py', 'dev/quality.py') }}
+          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/tools.lock.json', 'scripts/toolchain.py', 'scripts/toolchain_local.py', 'dev/quality.py') }}
       - run: python -I -X utf8 scripts/toolchain.py --ci
       - name: Cache fetched mod jars
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -211,7 +211,7 @@ jobs:
           path: |
             .cache/quality
             .dev/jdk
-          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('scripts/toolchain.py', 'scripts/quality.py', 'dev/quality.py') }}
+          key: quality-tools-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/tools.lock.json', 'scripts/toolchain.py', 'scripts/toolchain_local.py', 'dev/quality.py') }}
       - run: python -I -X utf8 scripts/toolchain.py --ci
       - name: Cache fetched mod jars
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
