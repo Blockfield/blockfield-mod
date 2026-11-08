@@ -74,8 +74,11 @@ jobs:
             fi
           fi
           echo "assemble_only=$assemble_only" >> "$GITHUB_OUTPUT"
-      # Main pushes usually merge a tree a green PR run already tested; re-testing
-      # the identical tree wastes a full run (release.yml trusts the same lookup).
+      # Main pushes (release merges from next) usually merge a tree a green PR
+      # run already tested; re-testing the identical tree wastes a full run
+      # (release.yml trusts the same lookup). The release PR run has
+      # head_branch=next, so both lookups below filter branch=next: other PRs'
+      # review rounds cannot push the release run out of the run-list window.
       # PR runs check out the prospective merge commit, so its tree is the tested tree.
       - name: Check for green run of the same tree
         id: same
@@ -85,12 +88,12 @@ jobs:
         run: |
           tree=$(git rev-parse "HEAD^{tree}")
           tested=false
-          for sha in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&per_page=30" --jq '.workflow_runs[] | select(.event == "push") | .head_sha'); do
+          for sha in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&branch=next&per_page=30" --jq '.workflow_runs[] | select(.event == "pull_request") | .head_sha'); do
             t=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${sha}" --jq '.tree.sha')
             if [ "$t" = "$tree" ]; then tested=true; break; fi
           done
           if [ "$tested" != true ]; then
-            for id in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&per_page=20" --jq '.workflow_runs[].id' || true); do
+            for id in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&branch=next&per_page=20" --jq '.workflow_runs[].id' || true); do
               if gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/artifacts?per_page=100" --jq '.artifacts[].name' 2>/dev/null | grep -qx "tested-tree-${tree}"; then tested=true; break; fi
             done
           fi

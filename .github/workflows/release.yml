@@ -59,12 +59,12 @@ jobs:
               # Anything else (including an unknown tree) runs full tests.
               tree=$(git rev-parse "HEAD^{tree}")
               tested=false
-              for sha in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&per_page=30" --jq '.workflow_runs[].head_sha'); do
+              for sha in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&branch=next&per_page=30" --jq '.workflow_runs[].head_sha'); do
                 t=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${sha}" --jq '.tree.sha')
                 if [ "$t" = "$tree" ]; then tested=true; break; fi
               done
               if [ "$tested" != true ]; then
-                for id in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?event=pull_request&status=success&per_page=20" --jq '.workflow_runs[].id' || true); do
+                for id in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?event=pull_request&status=success&branch=next&per_page=20" --jq '.workflow_runs[].id' || true); do
                   if gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/artifacts?per_page=100" --jq '.artifacts[].name' 2>/dev/null | grep -qx "tested-tree-${tree}"; then tested=true; break; fi
                 done
               fi
@@ -89,14 +89,14 @@ jobs:
             else
               tree=$(git rev-parse "HEAD^{tree}")
               tested=false
-              for sha in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&per_page=30" --jq '.workflow_runs[].head_sha'); do
+              for sha in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?status=success&branch=next&per_page=30" --jq '.workflow_runs[].head_sha'); do
                 t=$(gh api "repos/${GITHUB_REPOSITORY}/git/commits/${sha}" --jq '.tree.sha')
                 if [ "$t" = "$tree" ]; then tested=true; break; fi
               done
               # PR runs test the merge ref, whose tree differs from head_sha when
               # the PR was behind main; those runs record tested-tree-<tree>.
               if [ "$tested" != true ]; then
-                for id in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?event=pull_request&status=success&per_page=20" --jq '.workflow_runs[].id' || true); do
+                for id in $(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/quality.yml/runs?event=pull_request&status=success&branch=next&per_page=20" --jq '.workflow_runs[].id' || true); do
                   if gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/artifacts?per_page=100" --jq '.artifacts[].name' 2>/dev/null | grep -qx "tested-tree-${tree}"; then tested=true; break; fi
                 done
               fi
