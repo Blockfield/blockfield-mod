@@ -38,6 +38,12 @@ public final class CombatSceneClock {
     static final long CATCH_UP_BURST_WINDOW_MS = 1500;
 
     /**
+     * Episodes ending within this of starting never really caught up (false start: the first frame
+     * already meets the hand-back band); they don't mark the stream as bursty.
+     */
+    static final long CATCH_UP_MIN_EPISODE_MS = 50;
+
+    /**
      * Speed-capped traversal of non-teleport steps (remote-snap U2): while R crosses a tick whose
      * eligible horizontal displacement exceeds this cap, R advances at most cap metres per tick, so
      * the drawn speed stays ≤ cap. 1.0 m/tick clears the fastest legit single-tick ParCool move
@@ -161,11 +167,11 @@ public final class CombatSceneClock {
         lastArrival = nowMs;
         ticks.add(high);
         ticks.headSet(Math.max(0, high - 39), false).clear();
-        // Bursty arrivals bunch ticks without moving the jitter mean (constant high latency
-        // does the same), so the servo also watches occupancy: a tick gap with arrivals still
-        // flowing, and the peak occupancy since the last slew.
+        // Bursty arrivals bunch ticks without moving the jitter mean (high-latency bursts also
+        // freeze the estimators as backlog): a tick gap or an arrival after a substantial quiet
+        // spell marks the window, and the peak occupancy since the last slew sizes the absorption.
         if (!Double.isNaN(time)) occPeak = Math.max(occPeak, high - time);
-        if (gap && !backlog) burstSeen = true;
+        if (gap || silence >= holdMs / 2) burstSeen = true;
         // Ordered backlog remains valid decode history, but is not a network timing sample.
         if (backlog) return;
         if (batches++ == 0) {
@@ -185,6 +191,8 @@ public final class CombatSceneClock {
         if (nowMs - lastSlew >= 500
                 && (Math.abs(rate - 1) <= .05000001 || (catchUp && catchUpBurst))) {
             int desired = batches < 20 ? 3 : 2 + (int) Math.ceil(jitter / 50 * 1.5);
+            // A marked window absorbs its peak occupancy into a higher delay; an unmarked one
+            // follows the jitter term, so the delay also slews back down after bursts stop.
             if (burstSeen)
                 desired = Math.max(desired, Math.clamp((int) Math.ceil(occPeak) - 1, min, max));
             desired = Math.clamp(desired, min, max);
@@ -255,7 +263,6 @@ public final class CombatSceneClock {
             recovery = false;
             catchUp = false;
             catchUpBurst = false;
-            lastCatchUpEndMs = nowMs;
             silenceRecovery = gapRecovery = false;
             recoverySnaps++;
             rate = 1;
@@ -303,7 +310,9 @@ public final class CombatSceneClock {
             if (high - time <= delay + 1 && (a == null || b == null || b - a <= 2)) {
                 catchUp = false;
                 catchUpBurst = false;
-                lastCatchUpEndMs = nowMs;
+                // Only a real episode marks the stream as bursty; a false start hands back on
+                // its first frame without catching up anything.
+                if (nowMs - catchUpSinceMs >= CATCH_UP_MIN_EPISODE_MS) lastCatchUpEndMs = nowMs;
                 silenceRecovery = gapRecovery = false;
                 rate = 1;
             }
