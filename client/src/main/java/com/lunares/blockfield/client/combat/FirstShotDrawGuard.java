@@ -102,24 +102,25 @@ public final class FirstShotDrawGuard {
         if (!serverDrawSeen) {
             // Bound expired with no server draw ever observed: the queued tap can never replay
             // against a draw that will never arrive, so fire it through plain TaCZ gating instead
-            // of silently dropping it. A running draw still waits; a held trigger still defers
-            // to TaCZ's own tick (consumed without firing, no double shot).
+            // of silently dropping it. A running draw still waits (queue kept, so a release before
+            // it ends still replays); after it, a held trigger defers to TaCZ's own tick (consumed
+            // without firing, no double shot).
+            if (synDrawCoolDownMs > 0) return false;
             if (triggerDown) {
                 pendingShot = false;
                 return false;
             }
-            if (synDrawCoolDownMs > 0) return false;
             pendingShot = false;
             LOGGER.debug("First-shot replay: firing queued tap, server draw never observed");
             return true;
         }
         // Held trigger: TaCZ's own tick fires once the guard releases; a synthetic shot would
         // double it.
+        if (synDrawCoolDownMs > 0) return false;
         if (triggerDown) {
             pendingShot = false;
             return false;
         }
-        if (synDrawCoolDownMs > 0) return false;
         pendingShot = false;
         LOGGER.debug("First-shot replay: firing queued tap");
         return true;

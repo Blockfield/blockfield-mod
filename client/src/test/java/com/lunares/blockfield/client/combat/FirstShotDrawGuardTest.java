@@ -136,6 +136,18 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
+    void triggerHeldDuringDrawThenReleasedStillReplays() {
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
+        FirstShotDrawGuard.noteFireAttempt();
+        // Trigger still held while the server draw runs: the queued tap must survive.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(300_000_000L, 600, true));
+        // Released before the draw ends: TaCZ's tick fires nothing, so the replay must.
+        assertTrue(FirstShotDrawGuard.pollPendingShot(1_500_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_550_000_000L, 0, false));
+    }
+
+    @Test
     void expiredBoundFiresQueuedTap() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS);
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
