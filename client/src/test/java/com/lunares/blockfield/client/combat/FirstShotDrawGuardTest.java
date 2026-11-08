@@ -380,6 +380,32 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
+    void coincidentImpliedEndsSettleWithinWindow() {
+        // Fail-before for bot major 4508131963: B's implied end (200 + 300 = 500)
+        // coincides with A's (100 + 400 = 500) inside the 75 ms tolerance, so no
+        // end jump ever marks B seen. The miss must cost at most SETTLE_NS past
+        // the cooldown reaching 0 — never the ~1.7 s bound.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.onDrawToGun(150_000_000L, DRAW_MS, "gunB");
+        // Same implied end (500): detection misses, but the hold stays.
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(200_000_000L, 300));
+        FirstShotDrawGuard.noteFireAttempt(250_000_000L);
+        // B's draw ends: cooldown 0, gun ready — still settling, no fire yet.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(500_000_000L, 0, false));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(500_000_000L, 0));
+        // Inside the settle window a missed draw still can not fire (R1).
+        long midSettle = 500_000_000L + FirstShotDrawGuard.SETTLE_NS - 50_000_000L;
+        assertFalse(FirstShotDrawGuard.pollPendingShot(midSettle, 0, false));
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(midSettle, 0));
+        // Settle elapsed: the tap fires exactly once, live shots unblock.
+        long settled = 500_000_000L + FirstShotDrawGuard.SETTLE_NS;
+        assertTrue(FirstShotDrawGuard.pollPendingShot(settled, 0, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(settled + 50_000_000L, 0, false));
+        assertFalse(FirstShotDrawGuard.shouldBlockShoot(settled + 50_000_000L, 0));
+    }
+
+    @Test
     void cooldownJitterWithinToleranceNeverMarksNewDraw() {
         // Same-draw samples wobble a few ms (tick quantization, ms rounding) around
         // one implied end: wobble inside the tolerance must not mark a new draw (R1).

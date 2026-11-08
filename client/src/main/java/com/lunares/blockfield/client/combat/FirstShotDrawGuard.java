@@ -33,12 +33,15 @@ import org.slf4j.LoggerFactory;
  * draw id, and the countdown decays monotonically per draw with a constant end, so only a new draw
  * can move the end — up for a longer draw, down discontinuously for a shorter one). A cooldown
  * already running at arm time merely decays with a constant end, so it holds but never marks seen.
- * The tap has no time limit, but any tick with attacks disallowed (tablet, pre-match no-attacks)
- * drops it via {@link #noteAttacksBlocked}, so it can never fire when such a window ends. Otherwise
- * it is dropped — never fired — on death or respawn, when a different gun is drawn (a re-draw of
- * the same gun rebinds it to the new draw id), when the gun is gone, when the screen changes, when
- * a new fire press is no longer held (the player is shooting normally, so the old tap is
- * superseded), and when TaCZ performs a real shot (which would double with the replay).
+ * A missed detection must still cost at most {@link #SETTLE_NS} past the cooldown reaching 0 (see
+ * {@link #sampleSyncedDraw}): then the draw counts as seen, live shots unblock, and a queued tap
+ * replays once. A stale cooldown still can not fire before its own end + settle. The tap has no
+ * time limit, but any tick with attacks disallowed (tablet, pre-match no-attacks) drops it via
+ * {@link #noteAttacksBlocked}, so it can never fire when such a window ends. Otherwise it is
+ * dropped — never fired — on death or respawn, when a different gun is drawn (a re-draw of the same
+ * gun rebinds it to the new draw id), when the gun is gone, when the screen changes, when a new
+ * fire press is no longer held (the player is shooting normally, so the old tap is superseded), and
+ * when TaCZ performs a real shot (which would double with the replay).
  */
 public final class FirstShotDrawGuard {
     private static final Logger LOGGER = LoggerFactory.getLogger(FirstShotDrawGuard.class);
@@ -80,8 +83,23 @@ public final class FirstShotDrawGuard {
      */
     static final long END_TOLERANCE_MS = 75;
 
+    /**
+     * Settle window past a post-arm cooldown end after which a still-unseen draw counts as seen. No
+     * RTT signal reaches this class, so fixed 150 ms inside the 100..250 ms band: ~2x the
+     * end-tolerance, so tick quantization and wobble settle before a real end jump is sampled, far
+     * below the ~1.7 s bound.
+     */
+    static final long SETTLE_NS = 150_000_000L;
+
     /** Draw id whose server draw was observed. */
     private static long seenSeq = -1;
+
+    /**
+     * Ns time of the first 0-cooldown sample after a running (&gt;0) cooldown, reset by every
+     * {@link #onDrawToGun}; -1 when no post-arm draw ran yet. Only a draw that actually ran and
+     * ended can settle — a hold that never saw any cooldown keeps waiting for detection.
+     */
+    private static long cooldownZeroSinceNs = -1;
 
     private static TapState tapState = TapState.NONE;
     private static long tapDrawId = -1;
@@ -102,6 +120,7 @@ public final class FirstShotDrawGuard {
         armedAtNs = nowNs;
         boundNs = Math.max(0, drawTimeMs) * 1_000_000L + SLACK_NS;
         armedSeq = drawSeq;
+        cooldownZeroSinceNs = -1;
         if (!Objects.equals(armedWeapon, weaponKey)) {
             dropQueuedTap();
         } else if (tapState != TapState.NONE) {
@@ -129,9 +148,20 @@ public final class FirstShotDrawGuard {
             }
             lastEndMs = endMs;
         } else {
+            if (lastSynMs > 0) cooldownZeroSinceNs = nowNs;
             lastEndMs = -1;
         }
         lastSynMs = synDrawCoolDownMs;
+        // Settle fallback: detection missed (e.g. coincident implied ends), but a post-arm draw
+        // ran and ended. Treat it as seen once the cooldown has read 0 for SETTLE_NS: live shots
+        // unblock below and a queued tap replays once. Nothing can fire before its own end.
+        if (synDrawCoolDownMs == 0
+                && cooldownZeroSinceNs >= 0
+                && nowNs - cooldownZeroSinceNs >= SETTLE_NS) {
+            if (seenSeq != drawSeq) LOGGER.debug("First-shot hold released: draw settle elapsed");
+            seenSeq = drawSeq;
+            if (tapState == TapState.QUEUED && tapDrawId == drawSeq) tapState = TapState.DRAW_SEEN;
+        }
         if (armedAtNs < 0) return;
         if (seenSeq == armedSeq || nowNs - armedAtNs >= boundNs) {
             if (seenSeq != armedSeq)
@@ -179,9 +209,9 @@ public final class FirstShotDrawGuard {
 
     /**
      * True when a tap queued during the hold must be fired now — exactly once. Returns false while
-     * its own draw is still unseen (it may start late — firing now would be refused as {@code
-     * IS_DRAWING}), while the server draw is still running (plain TaCZ gating would refuse), and
-     * while the trigger is still held (TaCZ's own tick fires).
+     * its own draw is still unseen and unsettled (it may start late — firing now would be refused
+     * as {@code IS_DRAWING}), while the server draw is still running (plain TaCZ gating would
+     * refuse), and while the trigger is still held (TaCZ's own tick fires).
      */
     public static synchronized boolean pollPendingShot(
             long nowNs, long synDrawCoolDownMs, boolean triggerDown) {
@@ -193,7 +223,6 @@ public final class FirstShotDrawGuard {
         tapDrawId = -1;
         // Held trigger: TaCZ's own tick fires once the guard releases; a synthetic shot would
         // double it.
-        if (synDrawCoolDownMs > 0) return false;
         if (triggerDown) return false;
         LOGGER.debug("First-shot replay: firing queued tap");
         return true;
@@ -228,6 +257,7 @@ public final class FirstShotDrawGuard {
         armedWeapon = null;
         lastSynMs = 0;
         lastEndMs = -1;
+        cooldownZeroSinceNs = -1;
         seenSeq = -1;
         dropQueuedTap();
     }
