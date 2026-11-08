@@ -968,4 +968,56 @@ class CombatSceneClockTest {
         assertFalse(c.timedOut(250));
         assertTrue(c.timedOut(250.001));
     }
+
+    /**
+     * PING366-c4: snapshots arrive in bursts of 9-11 ticks every ~0.5 s (high ping). A single burst
+     * is indistinguishable from a genuine stall, so the first episode still drains fast; every
+     * later burst must slew smoothly: per-frame R advance stays within the burst catch-up cap
+     * (1.25x), with no freeze while ticks wait behind R and no recovery snap, while the servo
+     * absorbs the burstiness into a higher delay.
+     */
+    @Test
+    void sustainedBurstsSlewSmoothWithoutRush() {
+        var c = new CombatSceneClock();
+        for (int n = 0; n < 10; n++) {
+            c.arrival(batch(1000 + n), n * 50);
+            assertEquals(n >= 3, c.frame(n * 50), "warm-up frame " + n);
+        }
+        double t = 450;
+        long tick = 1010;
+        double nextBurst = 950;
+        double previous = c.time();
+        double maxAdaptedAdvance = 0;
+        int frozenRun = 0;
+        int maxFrozenRun = 0;
+        double end = 950 + 10000;
+        while (t < end) {
+            t += 16;
+            if (t >= nextBurst) {
+                int size = 9 + (int) ((tick / 10) % 3);
+                for (int k = 0; k < size; k++) c.arrival(batch(tick++), nextBurst + k * 2);
+                nextBurst += 500;
+            }
+            assertTrue(c.frame(t), "burst frame at " + t);
+            assertTrue(c.time() >= previous, "R never decreases at " + t);
+            double advance = c.time() - previous;
+            if (t >= 950 + 4000) maxAdaptedAdvance = Math.max(maxAdaptedAdvance, advance);
+            // Sitting at the live edge between bursts (occupancy 0) is correct: nothing new
+            // arrived. A freeze only counts while ticks wait unrendered behind R.
+            if (advance == 0 && c.occupancy() > 0.5) {
+                frozenRun++;
+                maxFrozenRun = Math.max(maxFrozenRun, frozenRun);
+            } else {
+                frozenRun = 0;
+            }
+            previous = c.time();
+        }
+        assertEquals(0, c.recoverySnaps(), "sustained bursts never snap");
+        assertTrue(maxFrozenRun <= 3, "no freeze, longest frozen run " + maxFrozenRun);
+        double cap = 1.25 * 16 / 50 + 1e-2;
+        assertTrue(
+                maxAdaptedAdvance <= cap,
+                "adapted burst playback within 1.25x: " + maxAdaptedAdvance + " > " + cap);
+        assertTrue(c.delay() >= 4, "servo absorbs burstiness, delay " + c.delay());
+    }
 }
