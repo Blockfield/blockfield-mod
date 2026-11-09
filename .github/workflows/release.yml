@@ -1,6 +1,6 @@
 # Релизный workflow: тег vX.Y.Z (= mod_version в gradle.properties) -> тесты + сборка ->
-# GitHub Release с client jar, версионированным common-артефактом
-# (blockfield-common-<version>.jar + SHA256SUMS, immutable на версию: существующий
+# GitHub Release с client jar, версионированными common- и oracle-fixtures артефактами
+# (blockfield-common-<version>.jar, blockfield-oracle-fixtures-<version>.jar + SHA256SUMS, immutable на версию: существующий
 # релиз decide пропускает, gh release create не перезаписывает). Клиент закрепляет
 # jar этого тега (Blockfield/blockfield-client: mods/blockfield-client.pw.toml); server jar
 # собирается и публикуется из blockfield-server (mod-server/).
@@ -160,7 +160,7 @@ jobs:
         if: needs.decide.outputs.full == 'true'
       - name: Build jars (tree already tested, no test re-run)
         if: needs.decide.outputs.jars == 'true'
-        run: just gradle --no-daemon --max-workers=2 assemble :client:remapJar :common:remapJar
+        run: just gradle --no-daemon --max-workers=2 assemble :client:remapJar :common:remapJar :client:remapOracleFixturesJar
       - name: Release text
         if: needs.decide.outputs.publish == 'true'
         uses: Blockfield/blockfield-workspace/.github/actions/release-text@2f20c9e9f66ddf63fbb59196c1ab69cfe30356d2
@@ -176,7 +176,7 @@ jobs:
         if: needs.decide.outputs.publish == 'true'
         # No write token here: build scripts and plugins must never see it;
         # Publish below only uploads built files.
-        run: just gradle --no-daemon --max-workers=2 :common:remapJar
+        run: just gradle --no-daemon --max-workers=2 :common:remapJar :client:remapOracleFixturesJar
       - name: Publish release
         if: needs.decide.outputs.publish == 'true'
         env:
@@ -186,8 +186,10 @@ jobs:
           mkdir -p dist
           cp client/build/libs/blockfield-client-*.jar dist/
           cp common/build/libs/blockfield-common-*.jar dist/
-          rm -f dist/*-sources.jar dist/blockfield-common-*-dev.jar
-          # Only the remapped jar may publish: a lone -dev.jar was just deleted.
+          cp client/build/libs/blockfield-oracle-fixtures-*.jar dist/
+          rm -f dist/*-sources.jar dist/blockfield-common-*-dev.jar dist/blockfield-oracle-fixtures-*-named.jar
+          # Only the remapped jars may publish: a lone -dev.jar was just deleted.
           ls dist/blockfield-common-*.jar >/dev/null || { echo "common remapped jar missing in dist"; exit 1; }
+          ls dist/blockfield-oracle-fixtures-*.jar >/dev/null || { echo "oracle fixtures remapped jar missing in dist"; exit 1; }
           (cd dist && sha256sum -- *.jar > SHA256SUMS)
           gh release create "$version" --target "$GITHUB_SHA" --title "blockfield $version" --notes-file dist/release-notes.md dist/*
