@@ -223,9 +223,11 @@ public class BlockFieldClient implements ClientModInitializer {
                 });
         ClientPlayNetworking.registerGlobalReceiver(
                 TicketUpdatePacket.TYPE,
-                (p, c) ->
-                        com.lunares.blockfield.client.render.HudRenderer.updateTickets(
-                                p.redTickets, p.blueTickets));
+                (p, c) -> {
+                    if (!p.valid()) return;
+                    com.lunares.blockfield.client.render.HudRenderer.updateTickets(
+                            p.redTickets, p.blueTickets);
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 MapPingS2CPacket.TYPE,
                 (p, c) -> com.lunares.blockfield.client.gui.tablet.MapPings.add(p));
@@ -253,6 +255,7 @@ public class BlockFieldClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(
                 ScoreDeltaPacket.TYPE,
                 (p, c) -> {
+                    if (!p.valid()) return;
                     com.lunares.blockfield.client.render.TabMenuRenderer.updatePlayerStatsCache(p);
                     var local = net.minecraft.client.Minecraft.getInstance().player;
                     if (local != null && local.getUUID().equals(p.playerUUID))

@@ -9,7 +9,9 @@ public class TicketUpdatePacket implements CustomPacketPayload {
     public static final Type<TicketUpdatePacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "ticket_update"));
     public static final StreamCodec<FriendlyByteBuf, TicketUpdatePacket> CODEC =
-            CustomPacketPayload.codec(TicketUpdatePacket::toBytes, TicketUpdatePacket::new);
+            CustomPacketPayload.codec(TicketUpdatePacket::toBytes, TicketUpdatePacket::decode);
+
+    private static final TicketUpdatePacket INVALID = new TicketUpdatePacket(0, 0);
 
     public final int redTickets;
     public final int blueTickets;
@@ -27,6 +29,20 @@ public class TicketUpdatePacket implements CustomPacketPayload {
     public void toBytes(FriendlyByteBuf buf) {
         buf.writeInt(this.redTickets);
         buf.writeInt(this.blueTickets);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static TicketUpdatePacket decode(FriendlyByteBuf buf) {
+        try {
+            return new TicketUpdatePacket(buf);
+        } catch (RuntimeException bad) {
+            return INVALID;
+        }
     }
 
     @Override
