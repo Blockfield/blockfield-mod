@@ -40,7 +40,22 @@ public record WorkshopAiStateS2CPacket(
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "workshop_ai_state"));
     public static final StreamCodec<FriendlyByteBuf, WorkshopAiStateS2CPacket> CODEC =
             CustomPacketPayload.codec(
-                    WorkshopAiStateS2CPacket::write, WorkshopAiStateS2CPacket::new);
+                    WorkshopAiStateS2CPacket::write, WorkshopAiStateS2CPacket::decode);
+
+    private static final UUID NIL = new UUID(0, 0);
+    private static final WorkshopAiStateS2CPacket INVALID =
+            new WorkshopAiStateS2CPacket(
+                    NIL, NIL, "idle", "", "", BlockPos.ZERO, BlockPos.ZERO, 0, 0, false, false);
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static WorkshopAiStateS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, WorkshopAiStateS2CPacket::new, INVALID);
+    }
 
     public WorkshopAiStateS2CPacket {
         if (ownerId == null

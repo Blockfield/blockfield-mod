@@ -50,8 +50,7 @@ public record AnimationEventS2CPacket(List<AnimationEvent> events) implements Cu
         AnimationSchema.count(
                 b.readableBytes(), AnimationSchema.MAX_PAYLOAD_BYTES, "event payload");
         AnimationSchema.require(b, 1);
-        if (b.readUnsignedByte() != AnimationSchema.VERSION)
-            throw new IllegalArgumentException("Unknown event version");
+        AnimationSchema.checkVersion(b.readUnsignedByte(), "event");
         int count = AnimationSchema.readCount(b, AnimationSchema.MAX_NODES, 1);
         List<AnimationEvent> events = new ArrayList<>(Math.min(count, 64));
         for (int i = 0; i < count; i++) events.add(AnimationSchema.read(b, AnimationEvent.class));

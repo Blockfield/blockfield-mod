@@ -404,6 +404,22 @@ public final class AnimationSchema {
         if (value < 0) throw new IllegalArgumentException("Negative " + what);
     }
 
+    /**
+     * Wire-schema gate: a mismatch still rejects (an older client cannot play a newer schema), but
+     * names both versions and tells the player to update instead of a raw disconnect.
+     */
+    public static void checkVersion(int seen, String kind) {
+        if (seen != VERSION)
+            throw new IllegalArgumentException(
+                    "Unsupported "
+                            + kind
+                            + " schema v"
+                            + seen
+                            + " (this mod supports v"
+                            + VERSION
+                            + "): update BlockField");
+    }
+
     public static void require(FriendlyByteBuf buf, int length) {
         if (length < 0 || length > buf.readableBytes())
             throw new IllegalArgumentException("Truncated animation value");

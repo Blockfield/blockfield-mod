@@ -38,16 +38,7 @@ public class TicketUpdatePacket implements CustomPacketPayload {
 
     /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
     static TicketUpdatePacket decode(FriendlyByteBuf buf) {
-        try {
-            return new TicketUpdatePacket(buf);
-        } catch (RuntimeException bad) {
-            return INVALID;
-        } finally {
-            // PacketDecoder disconnects on any unread bytes, so consume this
-            // packet's slice: trailing fields added by newer servers and
-            // malformed tails are both ignored instead of fatal.
-            buf.skipBytes(buf.readableBytes());
-        }
+        return PacketCompat.decode(buf, TicketUpdatePacket::new, INVALID);
     }
 
     @Override

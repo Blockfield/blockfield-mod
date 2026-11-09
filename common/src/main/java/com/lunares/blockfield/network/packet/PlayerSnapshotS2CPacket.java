@@ -97,8 +97,8 @@ public record PlayerSnapshotS2CPacket(
         com.lunares.blockfield.common.combat.AnimationSchema.count(
                 b.readableBytes(), MAX_PAYLOAD_BYTES, "snapshot payload");
         require(b, 1);
-        if (b.readUnsignedByte() != com.lunares.blockfield.common.combat.AnimationSchema.VERSION)
-            throw new IllegalArgumentException("Unknown snapshot schema");
+        com.lunares.blockfield.common.combat.AnimationSchema.checkVersion(
+                b.readUnsignedByte(), "snapshot");
         long stream = SnapshotWireMath.readUvarLong(b),
                 previous = SnapshotWireMath.readUvarLong(b),
                 tick = SnapshotWireMath.readUvarLong(b);

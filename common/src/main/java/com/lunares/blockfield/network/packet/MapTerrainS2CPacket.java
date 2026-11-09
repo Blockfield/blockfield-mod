@@ -39,7 +39,26 @@ public record MapTerrainS2CPacket(
     public static final Type<MapTerrainS2CPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "map_terrain"));
     public static final StreamCodec<FriendlyByteBuf, MapTerrainS2CPacket> CODEC =
-            CustomPacketPayload.codec(MapTerrainS2CPacket::write, MapTerrainS2CPacket::new);
+            CustomPacketPayload.codec(MapTerrainS2CPacket::write, MapTerrainS2CPacket::decode);
+
+    private static final MapTerrainS2CPacket INVALID =
+            new MapTerrainS2CPacket(
+                    ResourceLocation.fromNamespaceAndPath("blockfield", "invalid"),
+                    "invalid",
+                    0,
+                    1,
+                    0,
+                    1,
+                    1,
+                    1,
+                    1,
+                    0,
+                    1,
+                    0,
+                    new int[1],
+                    new int[1],
+                    new byte[2],
+                    new byte[1]);
 
     public MapTerrainS2CPacket {
         int size = MapTileS2CPacket.SIZE;
@@ -151,6 +170,16 @@ public record MapTerrainS2CPacket(
         for (int color : colors) buf.writeInt(color);
         buf.writeByteArray(pixels);
         buf.writeByteArray(light);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static MapTerrainS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, MapTerrainS2CPacket::new, INVALID);
     }
 
     @Override

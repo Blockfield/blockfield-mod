@@ -23,7 +23,9 @@ public record SelfEyeS2CPacket(long serverTick, float dx, float dy, float dz)
     public static final Type<SelfEyeS2CPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "self_eye_local"));
     public static final StreamCodec<FriendlyByteBuf, SelfEyeS2CPacket> CODEC =
-            CustomPacketPayload.codec(SelfEyeS2CPacket::write, SelfEyeS2CPacket::new);
+            CustomPacketPayload.codec(SelfEyeS2CPacket::write, SelfEyeS2CPacket::decode);
+
+    private static final SelfEyeS2CPacket INVALID = new SelfEyeS2CPacket(0, 0, 0, 0);
 
     public SelfEyeS2CPacket {
         if (serverTick < 0
@@ -42,6 +44,16 @@ public record SelfEyeS2CPacket(long serverTick, float dx, float dy, float dz)
         buf.writeFloat(dx);
         buf.writeFloat(dy);
         buf.writeFloat(dz);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static SelfEyeS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, SelfEyeS2CPacket::new, INVALID);
     }
 
     @Override

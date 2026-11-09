@@ -22,7 +22,17 @@ public record MapSnapshotS2CPacket(
     public static final Type<MapSnapshotS2CPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "map_snapshot"));
     public static final StreamCodec<FriendlyByteBuf, MapSnapshotS2CPacket> CODEC =
-            CustomPacketPayload.codec(MapSnapshotS2CPacket::write, MapSnapshotS2CPacket::new);
+            CustomPacketPayload.codec(MapSnapshotS2CPacket::write, MapSnapshotS2CPacket::decode);
+
+    private static final MapSnapshotS2CPacket INVALID =
+            new MapSnapshotS2CPacket(
+                    ResourceLocation.fromNamespaceAndPath("blockfield", "invalid"),
+                    "invalid",
+                    0,
+                    1,
+                    0,
+                    1,
+                    new byte[BYTES]);
 
     public MapSnapshotS2CPacket {
         if (rgb.length != BYTES
@@ -55,6 +65,16 @@ public record MapSnapshotS2CPacket(
         buf.writeDouble(minZ);
         buf.writeDouble(maxZ);
         buf.writeByteArray(rgb);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static MapSnapshotS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, MapSnapshotS2CPacket::new, INVALID);
     }
 
     @Override

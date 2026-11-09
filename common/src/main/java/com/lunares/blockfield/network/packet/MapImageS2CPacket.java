@@ -21,7 +21,12 @@ public record MapImageS2CPacket(
     public static final Type<MapImageS2CPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "map_image"));
     public static final StreamCodec<FriendlyByteBuf, MapImageS2CPacket> CODEC =
-            CustomPacketPayload.codec(MapImageS2CPacket::write, MapImageS2CPacket::new);
+            CustomPacketPayload.codec(MapImageS2CPacket::write, MapImageS2CPacket::decode);
+
+    private static final ResourceLocation INVALID_DIMENSION =
+            ResourceLocation.fromNamespaceAndPath("blockfield", "invalid");
+    private static final MapImageS2CPacket INVALID =
+            new MapImageS2CPacket(INVALID_DIMENSION, "invalid", 0, 1, 0, 1, 1, 1, new byte[3]);
 
     public MapImageS2CPacket {
         if (width < 1
@@ -62,6 +67,16 @@ public record MapImageS2CPacket(
         buf.writeVarInt(width);
         buf.writeVarInt(height);
         buf.writeByteArray(rgb);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static MapImageS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, MapImageS2CPacket::new, INVALID);
     }
 
     @Override

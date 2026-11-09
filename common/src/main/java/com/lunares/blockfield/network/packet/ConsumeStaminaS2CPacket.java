@@ -14,7 +14,9 @@ public class ConsumeStaminaS2CPacket implements CustomPacketPayload {
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "consume_stamina"));
     public static final StreamCodec<FriendlyByteBuf, ConsumeStaminaS2CPacket> CODEC =
             CustomPacketPayload.codec(
-                    ConsumeStaminaS2CPacket::toBytes, ConsumeStaminaS2CPacket::new);
+                    ConsumeStaminaS2CPacket::toBytes, ConsumeStaminaS2CPacket::decode);
+
+    private static final ConsumeStaminaS2CPacket INVALID = new ConsumeStaminaS2CPacket(0);
 
     public final int amount;
 
@@ -28,6 +30,16 @@ public class ConsumeStaminaS2CPacket implements CustomPacketPayload {
 
     public void toBytes(FriendlyByteBuf buf) {
         buf.writeVarInt(this.amount);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static ConsumeStaminaS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, ConsumeStaminaS2CPacket::new, INVALID);
     }
 
     @Override

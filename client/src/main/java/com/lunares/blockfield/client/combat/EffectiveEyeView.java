@@ -29,6 +29,7 @@ public final class EffectiveEyeView {
 
     /** Client thread packet intake (Fabric already delivers play packets there). */
     public static void onPacket(SelfEyeS2CPacket packet) {
+        if (!packet.valid()) return;
         var anchor = new Vec3(packet.dx(), packet.dy(), packet.dz());
         if (packet.serverTick() <= currTick) return;
         prev = curr == null ? anchor : blended();

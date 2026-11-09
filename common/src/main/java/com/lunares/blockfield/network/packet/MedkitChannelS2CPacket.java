@@ -20,9 +20,22 @@ public record MedkitChannelS2CPacket(int player, int kit, boolean active)
                         buf.writeVarInt(packet.kit);
                         buf.writeBoolean(packet.active);
                     },
-                    buf ->
-                            new MedkitChannelS2CPacket(
-                                    buf.readVarInt(), buf.readVarInt(), buf.readBoolean()));
+                    MedkitChannelS2CPacket::decode);
+
+    private static final MedkitChannelS2CPacket INVALID = new MedkitChannelS2CPacket(0, 0, false);
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static MedkitChannelS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(
+                buf,
+                b -> new MedkitChannelS2CPacket(b.readVarInt(), b.readVarInt(), b.readBoolean()),
+                INVALID);
+    }
 
     @Override
     public Type<? extends CustomPacketPayload> type() {

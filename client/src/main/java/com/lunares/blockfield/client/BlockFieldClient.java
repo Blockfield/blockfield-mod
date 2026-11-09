@@ -230,15 +230,21 @@ public class BlockFieldClient implements ClientModInitializer {
                 });
         ClientPlayNetworking.registerGlobalReceiver(
                 MapPingS2CPacket.TYPE,
-                (p, c) -> com.lunares.blockfield.client.gui.tablet.MapPings.add(p));
+                (p, c) -> {
+                    if (!p.valid()) return;
+                    com.lunares.blockfield.client.gui.tablet.MapPings.add(p);
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 RadioStateS2CPacket.TYPE,
-                (p, c) ->
-                        com.lunares.blockfield.client.voice.VoiceHudState.setRadio(
-                                p.player(), p.held()));
+                (p, c) -> {
+                    if (!p.valid()) return;
+                    com.lunares.blockfield.client.voice.VoiceHudState.setRadio(
+                            p.player(), p.held());
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 PlaySound2DS2CPacket.TYPE,
                 (p, c) -> {
+                    if (!p.valid()) return;
                     var instance = soundInstance(p.soundId, p.volume, p.pitch);
                     if (instance != null) {
                         net.minecraft.client.Minecraft.getInstance()
@@ -249,6 +255,7 @@ public class BlockFieldClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(
                 ConsumeStaminaS2CPacket.TYPE,
                 (p, c) -> {
+                    if (!p.valid()) return;
                     var local = net.minecraft.client.Minecraft.getInstance().player;
                     if (local != null) com.alrex.parcool.api.Stamina.get(local).consume(p.amount);
                 });

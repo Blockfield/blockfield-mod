@@ -128,8 +128,7 @@ public record AnimationWireS2CPacket(Fragment fragment) implements CustomPacketP
         }
         FriendlyByteBuf b = transaction.buffer();
         AnimationSchema.require(b, 1);
-        if (b.readUnsignedByte() != AnimationSchema.VERSION)
-            throw new IllegalArgumentException("Unknown animation schema");
+        AnimationSchema.checkVersion(b.readUnsignedByte(), "animation");
         CustomPacketPayload result;
         if (header.family() == Family.SNAPSHOT) {
             long stream = SnapshotWireMath.readUvarLong(b),

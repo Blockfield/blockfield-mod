@@ -20,7 +20,20 @@ public record WorkshopAiLibraryS2CPacket(List<Entry> entries) implements CustomP
                             "blockfield", "workshop_ai_library_list"));
     public static final StreamCodec<FriendlyByteBuf, WorkshopAiLibraryS2CPacket> CODEC =
             CustomPacketPayload.codec(
-                    WorkshopAiLibraryS2CPacket::write, WorkshopAiLibraryS2CPacket::new);
+                    WorkshopAiLibraryS2CPacket::write, WorkshopAiLibraryS2CPacket::decode);
+
+    private static final WorkshopAiLibraryS2CPacket INVALID =
+            new WorkshopAiLibraryS2CPacket(List.of());
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static WorkshopAiLibraryS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, WorkshopAiLibraryS2CPacket::new, INVALID);
+    }
 
     public record Entry(UUID id, String name, int sx, int sy, int sz, int cells, long createdAt) {
         public Entry {

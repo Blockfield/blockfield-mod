@@ -20,7 +20,20 @@ public record WorkshopAiSketchPlanS2CPacket(
                     ResourceLocation.fromNamespaceAndPath("blockfield", "workshop_ai_sketch_plan"));
     public static final StreamCodec<FriendlyByteBuf, WorkshopAiSketchPlanS2CPacket> CODEC =
             CustomPacketPayload.codec(
-                    WorkshopAiSketchPlanS2CPacket::write, WorkshopAiSketchPlanS2CPacket::new);
+                    WorkshopAiSketchPlanS2CPacket::write, WorkshopAiSketchPlanS2CPacket::decode);
+
+    private static final WorkshopAiSketchPlanS2CPacket INVALID =
+            new WorkshopAiSketchPlanS2CPacket(new UUID(0, 0), "invalid", 1, 1, 1, "", 0, false);
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static WorkshopAiSketchPlanS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, WorkshopAiSketchPlanS2CPacket::new, INVALID);
+    }
 
     public WorkshopAiSketchPlanS2CPacket {
         if (sketchId == null
