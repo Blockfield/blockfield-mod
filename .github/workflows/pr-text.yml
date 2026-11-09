@@ -7,7 +7,9 @@ permissions:
   contents: read
 jobs:
   text:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # The next->main release PR aggregates already-reviewed work; rewriting its
+    # body would bury the per-feature notes, so release-text skips it.
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != 'next'
     # Tiny LLM-call job: GitHub-hosted is enough, keep Blacksmith for Gradle/Docker.
     runs-on: ubuntu-24.04
     timeout-minutes: 10

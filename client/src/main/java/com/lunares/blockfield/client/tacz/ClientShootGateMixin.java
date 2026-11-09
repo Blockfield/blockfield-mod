@@ -26,9 +26,20 @@ public abstract class ClientShootGateMixin {
         // First shot after a draw: hold until the server draw is observed, never predict into a
         // certain IS_DRAWING refusal (see FirstShotDrawGuard).
         else if (FirstShotDrawGuard.shouldBlockShoot(System.nanoTime(), synDrawCoolDown())) {
-            FirstShotDrawGuard.noteFireAttempt();
+            FirstShotDrawGuard.noteFireAttempt(System.nanoTime());
             cir.setReturnValue(ShootResult.IS_DRAWING);
+        } else {
+            // A real press that is not held supersedes any queued tap: the player is shooting
+            // normally, so the old tap must never fire later.
+            FirstShotDrawGuard.dropQueuedTap();
         }
+    }
+
+    @Inject(method = "shoot", at = @At("RETURN"), remap = false)
+    private void blockfield$observeShot(CallbackInfoReturnable<ShootResult> cir) {
+        // A real TaCZ shot supersedes any queued tap: the gun fired, so the old tap must never
+        // fire later (no double shot with the replay).
+        if (cir.getReturnValue() == ShootResult.SUCCESS) FirstShotDrawGuard.dropQueuedTap();
     }
 
     @Inject(method = "chargeShoot", at = @At("HEAD"), cancellable = true, remap = false)
@@ -36,11 +47,14 @@ public abstract class ClientShootGateMixin {
         if (Tablet.isOpen() || com.lunares.blockfield.client.combat.PreMatchCombat.noAttacks())
             cir.setReturnValue(false);
         // Only a real press (trigger down) queues a replay. Idle per-tick polls with a released
-        // trigger must not queue a shot the user never asked for; they fall through to TaCZ.
+        // trigger must not queue a shot the user never asked for; they fall through without
+        // touching the queued tap. A real press that is not held supersedes it instead.
         else if (start
                 && FirstShotDrawGuard.shouldBlockShoot(System.nanoTime(), synDrawCoolDown())) {
-            FirstShotDrawGuard.noteFireAttempt();
+            FirstShotDrawGuard.noteFireAttempt(System.nanoTime());
             cir.setReturnValue(false);
+        } else if (start) {
+            FirstShotDrawGuard.dropQueuedTap();
         }
     }
 
