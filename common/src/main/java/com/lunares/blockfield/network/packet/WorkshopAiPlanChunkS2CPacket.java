@@ -34,7 +34,22 @@ public record WorkshopAiPlanChunkS2CPacket(
                     ResourceLocation.fromNamespaceAndPath("blockfield", "workshop_ai_plan_chunk"));
     public static final StreamCodec<FriendlyByteBuf, WorkshopAiPlanChunkS2CPacket> CODEC =
             CustomPacketPayload.codec(
-                    WorkshopAiPlanChunkS2CPacket::write, WorkshopAiPlanChunkS2CPacket::new);
+                    WorkshopAiPlanChunkS2CPacket::write, WorkshopAiPlanChunkS2CPacket::decode);
+
+    private static final UUID NIL = new UUID(0, 0);
+    private static final WorkshopAiPlanChunkS2CPacket INVALID =
+            new WorkshopAiPlanChunkS2CPacket(
+                    NIL, NIL, NIL, BlockPos.ZERO, "invalid", 1, 1, 1, 0, false, false, 0, 1, "x");
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static WorkshopAiPlanChunkS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, WorkshopAiPlanChunkS2CPacket::new, INVALID);
+    }
 
     public WorkshopAiPlanChunkS2CPacket {
         if (transferId == null

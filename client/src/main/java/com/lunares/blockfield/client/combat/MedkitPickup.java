@@ -80,6 +80,7 @@ public final class MedkitPickup {
     }
 
     private static void sync(Minecraft mc, MedkitChannelS2CPacket packet) {
+        if (!packet.valid()) return;
         if (packet.active()) POSING.add(packet.player());
         else POSING.remove(packet.player());
         // Only the end of the current request: a stop for a kit given up earlier arrives late.

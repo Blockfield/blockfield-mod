@@ -31,7 +31,8 @@ class MapTerrainCodecTest {
         var buf = header();
         buf.writeVarInt(-1);
         // Before the fix this allocated `new int[-1]` and died with NegativeArraySizeException.
-        assertThrows(IllegalArgumentException.class, () -> MapTerrainS2CPacket.CODEC.decode(buf));
+        // N-1 compat: a malformed payload decodes to the ignored INVALID packet, never throws.
+        assertFalse(MapTerrainS2CPacket.CODEC.decode(buf).valid());
     }
 
     @Test

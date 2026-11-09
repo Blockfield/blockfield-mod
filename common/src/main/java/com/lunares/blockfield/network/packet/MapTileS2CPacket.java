@@ -24,7 +24,21 @@ public record MapTileS2CPacket(
     public static final Type<MapTileS2CPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "map_tile"));
     public static final StreamCodec<FriendlyByteBuf, MapTileS2CPacket> CODEC =
-            CustomPacketPayload.codec(MapTileS2CPacket::write, MapTileS2CPacket::new);
+            CustomPacketPayload.codec(MapTileS2CPacket::write, MapTileS2CPacket::decode);
+
+    private static final MapTileS2CPacket INVALID =
+            new MapTileS2CPacket(
+                    ResourceLocation.fromNamespaceAndPath("blockfield", "invalid"),
+                    "invalid",
+                    0,
+                    1,
+                    0,
+                    1,
+                    1,
+                    1,
+                    0,
+                    0,
+                    new byte[3]);
 
     public MapTileS2CPacket {
         if (width < 1
@@ -110,6 +124,16 @@ public record MapTileS2CPacket(
         buf.writeLong(revision);
         buf.writeVarInt(index);
         buf.writeByteArray(rgb);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static MapTileS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, MapTileS2CPacket::new, INVALID);
     }
 
     @Override

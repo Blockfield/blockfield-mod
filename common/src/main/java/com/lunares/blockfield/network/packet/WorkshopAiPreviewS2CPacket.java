@@ -25,7 +25,21 @@ public record WorkshopAiPreviewS2CPacket(
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "workshop_ai_preview"));
     public static final StreamCodec<FriendlyByteBuf, WorkshopAiPreviewS2CPacket> CODEC =
             CustomPacketPayload.codec(
-                    WorkshopAiPreviewS2CPacket::write, WorkshopAiPreviewS2CPacket::new);
+                    WorkshopAiPreviewS2CPacket::write, WorkshopAiPreviewS2CPacket::decode);
+
+    private static final UUID NIL = new UUID(0, 0);
+    private static final WorkshopAiPreviewS2CPacket INVALID =
+            new WorkshopAiPreviewS2CPacket(NIL, NIL, BlockPos.ZERO, "", 1, 1, 1, 0, false);
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static WorkshopAiPreviewS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, WorkshopAiPreviewS2CPacket::new, INVALID);
+    }
 
     public WorkshopAiPreviewS2CPacket {
         if (ownerId == null
