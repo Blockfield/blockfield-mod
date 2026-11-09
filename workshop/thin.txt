@@ -27,6 +27,7 @@ com/lunares/blockfield/network/packet/WorkshopAiRequestC2SPacket.java
 com/lunares/blockfield/network/packet/WorkshopAiAudioC2SPacket.java
 com/lunares/blockfield/network/packet/WorkshopAiTransformC2SPacket.java
 com/lunares/blockfield/network/packet/WorkshopAiLibraryC2SPacket.java
+com/lunares/blockfield/network/packet/PacketCompat.java
 com/lunares/blockfield/network/packet/WorkshopAiFillC2SPacket.java
 com/lunares/blockfield/network/packet/WorkshopAiLibraryS2CPacket.java
 com/lunares/blockfield/network/packet/WorkshopAiSketchPlanS2CPacket.java
