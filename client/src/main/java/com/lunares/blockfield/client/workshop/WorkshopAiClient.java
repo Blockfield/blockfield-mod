@@ -80,6 +80,7 @@ public final class WorkshopAiClient {
         ClientPlayNetworking.registerGlobalReceiver(
                 WorkshopAiProgressS2CPacket.TYPE,
                 (packet, context) -> {
+                    if (!packet.valid()) return;
                     if (context.client().player != null
                             && context.client().player.getUUID().equals(packet.ownerId()))
                         progress = WorkshopAiProgressState.decode(packet, System.nanoTime());
@@ -87,6 +88,7 @@ public final class WorkshopAiClient {
         ClientPlayNetworking.registerGlobalReceiver(
                 WorkshopAiPlanChunkS2CPacket.TYPE,
                 (packet, context) -> {
+                    if (!packet.valid()) return;
                     var complete = transfers.accept(packet, System.currentTimeMillis());
                     if (complete == null) return;
                     var h = complete.header();
@@ -117,10 +119,17 @@ public final class WorkshopAiClient {
                                         h.mirror()));
                 });
         ClientPlayNetworking.registerGlobalReceiver(
-                WorkshopAiStateS2CPacket.TYPE, (packet, context) -> accept(packet));
+                WorkshopAiStateS2CPacket.TYPE,
+                (packet, context) -> {
+                    if (!packet.valid()) return;
+                    accept(packet);
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 WorkshopAiPreviewS2CPacket.TYPE,
-                (packet, context) -> WorkshopAiEffects.acceptPreview(packet));
+                (packet, context) -> {
+                    if (!packet.valid()) return;
+                    WorkshopAiEffects.acceptPreview(packet);
+                });
         // Capability advertisement only: the payload is never sent, but registering tells
         // the server this client parses v2 plans (old clients keep v1 generation).
         ClientPlayNetworking.registerGlobalReceiver(
@@ -131,10 +140,16 @@ public final class WorkshopAiClient {
         // renders the list and the hand ghost; old clients get neither.
         ClientPlayNetworking.registerGlobalReceiver(
                 WorkshopAiLibraryS2CPacket.TYPE,
-                (packet, context) -> library = List.copyOf(packet.entries()));
+                (packet, context) -> {
+                    if (!packet.valid()) return;
+                    library = List.copyOf(packet.entries());
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 WorkshopAiSketchPlanS2CPacket.TYPE,
-                (packet, context) -> WorkshopSketchPlacement.accept(packet));
+                (packet, context) -> {
+                    if (!packet.valid()) return;
+                    WorkshopSketchPlacement.accept(packet);
+                });
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> reset());
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> reset());
         ClientTickEvents.END_CLIENT_TICK.register(client -> uploadTick());

@@ -118,8 +118,8 @@ public record CombatViewC2SPacket(
                 com.lunares.blockfield.common.combat.AnimationSchema.MAX_PAYLOAD_BYTES,
                 "ticket payload");
         com.lunares.blockfield.common.combat.AnimationSchema.require(b, 1);
-        if (b.readUnsignedByte() != com.lunares.blockfield.common.combat.AnimationSchema.VERSION)
-            throw new IllegalArgumentException("Unknown animation receipt version");
+        com.lunares.blockfield.common.combat.AnimationSchema.checkVersion(
+                b.readUnsignedByte(), "animation receipt");
         long seq = SnapshotWireMath.readUvarLong(b),
                 connection = SnapshotWireMath.readUvarLong(b),
                 stream = SnapshotWireMath.readUvarLong(b),

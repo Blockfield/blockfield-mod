@@ -12,7 +12,9 @@ public class PlaySound2DS2CPacket implements CustomPacketPayload {
     public static final Type<PlaySound2DS2CPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "play_sound_2d"));
     public static final StreamCodec<FriendlyByteBuf, PlaySound2DS2CPacket> CODEC =
-            CustomPacketPayload.codec(PlaySound2DS2CPacket::toBytes, PlaySound2DS2CPacket::new);
+            CustomPacketPayload.codec(PlaySound2DS2CPacket::toBytes, PlaySound2DS2CPacket::decode);
+
+    private static final PlaySound2DS2CPacket INVALID = new PlaySound2DS2CPacket("", 0, 0);
 
     public final String soundId;
     public final float volume;
@@ -34,6 +36,16 @@ public class PlaySound2DS2CPacket implements CustomPacketPayload {
         buf.writeUtf(this.soundId);
         buf.writeFloat(this.volume);
         buf.writeFloat(this.pitch);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static PlaySound2DS2CPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, PlaySound2DS2CPacket::new, INVALID);
     }
 
     @Override

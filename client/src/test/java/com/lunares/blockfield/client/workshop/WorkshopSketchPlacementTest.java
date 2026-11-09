@@ -141,12 +141,10 @@ class WorkshopSketchPlacementTest {
             buffer.writeUtf("{}");
             buffer.writeVarInt(99);
             buffer.writeBoolean(true);
-            assertThrows(
-                    IllegalArgumentException.class,
-                    () ->
-                            com.lunares.blockfield.network.packet.WorkshopAiSketchPlanS2CPacket
-                                    .CODEC
-                                    .decode(buffer));
+            assertFalse(
+                    com.lunares.blockfield.network.packet.WorkshopAiSketchPlanS2CPacket.CODEC
+                            .decode(buffer)
+                            .valid());
         } finally {
             buffer.release();
         }

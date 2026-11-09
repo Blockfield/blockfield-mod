@@ -46,23 +46,30 @@ public final class MapSnapshots {
     public static void register() {
         ClientPlayNetworking.registerGlobalReceiver(
                 MapSnapshotS2CPacket.TYPE,
-                (packet, context) ->
-                        accept(
-                                new MapImageS2CPacket(
-                                        packet.dimension(),
-                                        packet.mapId(),
-                                        packet.minX(),
-                                        packet.maxX(),
-                                        packet.minZ(),
-                                        packet.maxZ(),
-                                        256,
-                                        256,
-                                        packet.rgb())));
+                (packet, context) -> {
+                    if (!packet.valid()) return;
+                    accept(
+                            new MapImageS2CPacket(
+                                    packet.dimension(),
+                                    packet.mapId(),
+                                    packet.minX(),
+                                    packet.maxX(),
+                                    packet.minZ(),
+                                    packet.maxZ(),
+                                    256,
+                                    256,
+                                    packet.rgb()));
+                });
         ClientPlayNetworking.registerGlobalReceiver(
-                MapImageS2CPacket.TYPE, (packet, context) -> accept(packet));
+                MapImageS2CPacket.TYPE,
+                (packet, context) -> {
+                    if (!packet.valid()) return;
+                    accept(packet);
+                });
         ClientPlayNetworking.registerGlobalReceiver(
                 MapTileS2CPacket.TYPE,
                 (packet, context) -> {
+                    if (!packet.valid()) return;
                     if (current != null && current.sameImage(packet)) return;
                     if (pending == null || !pending.header.sameImage(packet)) {
                         if (packet.index() != 0) return;
@@ -74,7 +81,11 @@ public final class MapSnapshots {
                     }
                 });
         ClientPlayNetworking.registerGlobalReceiver(
-                MapTerrainS2CPacket.TYPE, (packet, context) -> accept(packet));
+                MapTerrainS2CPacket.TYPE,
+                (packet, context) -> {
+                    if (!packet.valid()) return;
+                    accept(packet);
+                });
         ResourceManagerHelper.get(PackType.CLIENT_RESOURCES)
                 .registerReloadListener(
                         new SimpleSynchronousResourceReloadListener() {

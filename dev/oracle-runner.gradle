@@ -367,6 +367,36 @@ def remapOracle = tasks.register('remapOracleJar', tasks.named('remapJar').get()
     addNestedDependencies = false
     classpath.from(sourceSets.oracleTest.compileClasspath)
 }
+// Versioned oracle fixtures for blockfield-server#318: the fixture classes the
+// server oracleTest needs, plus their in-oracle deps (Fx* helpers). Compiled in
+// named with the rest of oracleTest, remapped to intermediary below — the same
+// namespace as the published common jar, so the server remaps/consumes it the
+// same way. Test-only: never enters the client pack.
+def oracleFixtureClasses = [
+        'FxClientCases', 'FxPoseCases',
+        'LrSelectorNativeCases', 'LrTransitionNativeCases', 'MixedRendererCases',
+        'OracleReflection', 'OracleTransformAudit',
+        'PaGraphNativeCases', 'PaObserverNativeCases',
+        'ParCoolNativeValues', 'ParCoolPresentationCases', 'ParCoolProjectionCases',
+        'ParCoolStagesCases', 'ParCoolZiplineCases',
+        'StanceEaseCases', 'WireReportVectors',
+]
+def oracleFixturesJar = tasks.register('oracleFixturesJar', Jar) {
+    dependsOn 'oracleTestClasses'
+    archiveBaseName = 'blockfield-oracle-fixtures'
+    archiveClassifier = 'named'
+    oracleFixtureClasses.each { name ->
+        from(sourceSets.oracleTest.output) { include "com/lunares/blockfield/oracle/${name}*.class" }
+    }
+}
+def remapOracleFixtures = tasks.register('remapOracleFixturesJar', tasks.named('remapJar').get().class.superclass) {
+    dependsOn oracleFixturesJar
+    inputFile = oracleFixturesJar.flatMap { it.archiveFile }
+    archiveBaseName = 'blockfield-oracle-fixtures'
+    archiveClassifier = ''
+    addNestedDependencies = false
+    classpath.from(sourceSets.oracleTest.compileClasspath)
+}
 // ORACLE-TIME: the transformed oracle runs as sequential shards (dev/oracle-shards.json), each a
 // bounded JavaExec over a disjoint fixture subset through the existing blockfield.oracle.only
 // filter. Every fixture runs exactly once per :client:oracleTest gate invocation with production

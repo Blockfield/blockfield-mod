@@ -10,7 +10,10 @@ public class ScoreDeltaPacket implements CustomPacketPayload {
     public static final Type<ScoreDeltaPacket> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath("blockfield", "score_delta"));
     public static final StreamCodec<FriendlyByteBuf, ScoreDeltaPacket> CODEC =
-            CustomPacketPayload.codec(ScoreDeltaPacket::toBytes, ScoreDeltaPacket::new);
+            CustomPacketPayload.codec(ScoreDeltaPacket::toBytes, ScoreDeltaPacket::decode);
+
+    private static final ScoreDeltaPacket INVALID =
+            new ScoreDeltaPacket(new UUID(0, 0), 0, 0, 0.0, 0, "assault", 0);
 
     public final UUID playerUUID;
     public final int kills;
@@ -55,6 +58,16 @@ public class ScoreDeltaPacket implements CustomPacketPayload {
         buf.writeInt(this.pointTime);
         buf.writeUtf(this.classId);
         buf.writeInt(this.streak);
+    }
+
+    /** False only for a wire payload that failed to decode; receivers ignore those. */
+    public boolean valid() {
+        return this != INVALID;
+    }
+
+    /** Malformed payloads degrade to the invalid sentinel instead of throwing. */
+    static ScoreDeltaPacket decode(FriendlyByteBuf buf) {
+        return PacketCompat.decode(buf, ScoreDeltaPacket::new, INVALID);
     }
 
     @Override

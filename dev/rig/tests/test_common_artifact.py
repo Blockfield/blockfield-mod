@@ -1,9 +1,10 @@
-"""mod-server consumes the versioned common artifact (blockfield-server#318).
+"""mod-server consumes the versioned common and oracle-fixtures artifacts (blockfield-server#318).
 
-The mod Release workflow publishes blockfield-common-<version>.jar with
-SHA256SUMS; this test resolves those published coordinates + checksum the
-way a consumer does: a fixture release layout (offline), the workflow
-contract (offline) and the live release (skipped until the artifact exists).
+The mod Release workflow publishes blockfield-common-<version>.jar and
+blockfield-oracle-fixtures-<version>.jar with SHA256SUMS; this test resolves
+those published coordinates + checksum the way a consumer does: a fixture
+release layout (offline), the workflow contract (offline) and the live release
+(skipped until the artifact exists).
 """
 
 import hashlib
@@ -33,6 +34,7 @@ def coordinates():
         f"{gradle_property('mod_version')}+mc{gradle_property('minecraft_version')}"
     )
     asset = f"blockfield-common-{version}.jar"
+    fixtures_asset = f"blockfield-oracle-fixtures-{version}.jar"
     tag = f"v{gradle_property('mod_version')}"
     return {
         "group": gradle_property("mod_group_id"),
@@ -40,6 +42,7 @@ def coordinates():
         "version": version,
         "tag": tag,
         "asset": asset,
+        "fixtures_asset": fixtures_asset,
         "base_url": f"{REPO}/releases/download/{tag}/",
     }
 
@@ -86,12 +89,20 @@ class ConsumerResolvesArtifact(unittest.TestCase):
         return f"http://127.0.0.1:{server.server_address[1]}/"
 
     def test_fixture_release_layout_verifies(self):
-        asset = coordinates()["asset"]
-        payload = b"published common jar bytes"
-        digest = hashlib.sha256(payload).hexdigest()
-        sums = f"{digest}  {asset}\n".encode()
-        base = self.serve({asset: payload, "SHA256SUMS": sums})
-        self.assertEqual(resolve_and_verify(base, asset), digest)
+        coords = coordinates()
+        payloads = {
+            coords["asset"]: b"published common jar bytes",
+            coords["fixtures_asset"]: b"published fixtures jar bytes",
+        }
+        sums = "".join(
+            f"{hashlib.sha256(payload).hexdigest()}  {name}\n"
+            for name, payload in payloads.items()
+        ).encode()
+        base = self.serve({**payloads, "SHA256SUMS": sums})
+        for name, payload in payloads.items():
+            self.assertEqual(
+                resolve_and_verify(base, name), hashlib.sha256(payload).hexdigest()
+            )
 
     def test_fixture_tampered_jar_rejected(self):
         asset = coordinates()["asset"]
@@ -106,11 +117,14 @@ class ConsumerResolvesArtifact(unittest.TestCase):
         coords = coordinates()
         try:
             resolve_and_verify(coords["base_url"], coords["asset"])
+            resolve_and_verify(coords["base_url"], coords["fixtures_asset"])
         except (urllib.error.URLError, OSError) as error:
             self.skipTest(f"published artifact not reachable: {error}")
         except AssertionError as error:
             if "missing from" in str(error):
-                self.skipTest(f"release {coords['tag']} predates the common artifact")
+                self.skipTest(
+                    f"release {coords['tag']} predates the published artifacts"
+                )
             raise
 
 
@@ -120,6 +134,12 @@ class WorkflowPublishesCommonArtifact(unittest.TestCase):
         self.assertIn(":common:remapJar", workflow)
         self.assertIn("blockfield-common-", workflow)
         self.assertIn("SHA256SUMS", workflow)
+
+    def test_release_workflow_builds_and_uploads_fixtures_jar(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn(":client:remapOracleFixturesJar", workflow)
+        self.assertIn("blockfield-oracle-fixtures-", workflow)
+        self.assertIn("blockfield-oracle-fixtures-*-named.jar", workflow)
 
     def _steps(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -138,6 +158,8 @@ class WorkflowPublishesCommonArtifact(unittest.TestCase):
         # A lone -dev.jar must fail the step instead of publishing.
         self.assertIn("blockfield-common-", body)
         self.assertIn("exit 1", body)
+        # The fixtures jar publishes remapped only: the -named input is deleted.
+        self.assertIn("blockfield-oracle-fixtures-", body)
 
     def test_build_runs_without_write_token(self):
         builders = [s for s in self._steps() if ":common:remapJar" in s]
