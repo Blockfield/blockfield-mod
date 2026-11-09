@@ -42,6 +42,11 @@ public class TicketUpdatePacket implements CustomPacketPayload {
             return new TicketUpdatePacket(buf);
         } catch (RuntimeException bad) {
             return INVALID;
+        } finally {
+            // PacketDecoder disconnects on any unread bytes, so consume this
+            // packet's slice: trailing fields added by newer servers and
+            // malformed tails are both ignored instead of fatal.
+            buf.skipBytes(buf.readableBytes());
         }
     }
 
