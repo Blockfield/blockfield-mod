@@ -265,6 +265,15 @@ public final class AnimationResources {
                                             && !keep.test(ref));
         }
 
+        /**
+         * Single pass over every definition: the caller pins the live closure first, so one scan
+         * retires exactly what the per-generation loop would, without re-scanning the whole store
+         * for each retained generation.
+         */
+        public void retireUnpinned() {
+            definitions.keySet().removeIf(ref -> !pins.containsKey(ref));
+        }
+
         private static void closure(
                 ResourceRef ref,
                 java.util.function.Function<ResourceRef, Definition> values,

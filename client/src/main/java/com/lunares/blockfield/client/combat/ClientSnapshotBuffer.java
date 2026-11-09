@@ -82,14 +82,16 @@ public final class ClientSnapshotBuffer {
             while (!pending.isEmpty())
                 for (var dependency : resources.get(pending.removeFirst()).dependencies())
                     if (closure.add(dependency)) pending.add(dependency);
-            for (long generation : resourceGenerations) resources.retireUnpinned(generation);
-            resourceGenerations.retainAll(
-                    closure.stream()
-                            .map(
-                                    com.lunares.blockfield.common.combat.AnimationResources
-                                                    .ResourceRef
-                                            ::resourceGeneration)
-                            .toList());
+            var live =
+                    new HashSet<>(
+                            closure.stream()
+                                    .map(
+                                            com.lunares.blockfield.common.combat.AnimationResources
+                                                            .ResourceRef
+                                                    ::resourceGeneration)
+                                    .toList());
+            resources.retireUnpinned();
+            resourceGenerations.retainAll(live);
         } catch (IllegalArgumentException unavailable) {
             // A held batch may still be carrying a required definition: retain until it applies.
         }
