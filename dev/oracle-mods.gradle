@@ -29,6 +29,26 @@ class OracleMods {
         return value
     }
 
+    static boolean fetchWithGh(String url, File target) {
+        // Private fork releases answer 404 without credentials; `gh release download`
+        // uses the ambient auth (GH_TOKEN/gh login) where it exists, exactly like the
+        // server's oracle fetch. No new secrets: CI has no private-release token, so
+        // there it fails fast and the public mirrors below decide (they must be seeded
+        // with the pin first). The hash check after the download still decides.
+        def release = (url =~ /^https:\/\/github\.com\/([^\/]+\/[^\/]+)\/releases\/download\/([^\/]+)\/(.+)$/)
+        if (!release.matches()) return false
+        try {
+            def proc = ['gh', 'release', 'download', java.net.URLDecoder.decode(release.group(2), 'UTF-8'),
+                        '--repo', java.net.URLDecoder.decode(release.group(1), 'UTF-8'),
+                        '--pattern', java.net.URLDecoder.decode(release.group(3), 'UTF-8'),
+                        '--clobber', '--output', target.absolutePath].execute()
+            proc.waitFor()
+            return proc.exitValue() == 0 && target.isFile()
+        } catch (IOException ignored) {
+            return false
+        }
+    }
+
     static File resolve(Map pins, File projectRoot, File modDir, Map unavailable, String name) {
         if (unavailable.containsKey(name)) return null
         def pin = pins[name]
@@ -49,14 +69,16 @@ class OracleMods {
         // client and server fetch tasks run in parallel into this shared directory.
         File temporary = File.createTempFile("${name}.", '.download.tmp', modDir)
         try {
-            // Private Blockfield repos answer 404 without credentials; the public pack mirror
-            // names every pack file by the hash the pack declares, which is this pin's hash.
+            // The public mirror lags new pins (bf12/bf6 are not mirrored yet); `gh`
+            // covers private fork releases with the ambient auth where it exists.
+            // Private Blockfield repos answer 404 without credentials; the public pack
+            // mirror names every pack file by the hash the pack declares, which is this pin's hash.
             // github.com release downloads transiently answer 504 in CI (runs 42043834718,
             // 42054850560): the R2 CDN serves the same bytes (verified sha512-identical), so it
             // is tried before the github.com mirror. Bounded retries with backoff per URL,
             // then the hash check below still decides.
             IOException failed = null
-            for (String url : [pin.url, CDN_MIRROR + pin.hash, MIRROR + pin.hash]) {
+            if (!fetchWithGh(pin.url, temporary)) for (String url : [pin.url, CDN_MIRROR + pin.hash, MIRROR + pin.hash]) {
                 for (int attempt = 1; attempt <= 3; attempt++) {
                     try {
                         def connection = new URL(url).openConnection()

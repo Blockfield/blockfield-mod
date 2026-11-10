@@ -70,7 +70,7 @@ public record AnimationManifest(
                                     "tacz",
                                     "b95cd70bae2f5bec56a7bdc14822d3afc63e5ec3102a5b42403376be374ced3d",
                                     "lrtactical",
-                                    "bc76627ee188de7b092e61f9b3c303c1ea47f2216e16e94929dc1cb7f455afd7",
+                                    "e4d43b10ba590d0f7b21b19c9aae9c814921ca31295bbeb210f5819903ed7f60",
                                     "parcool",
                                     "7caaddc5ee48aefad610d520c4cbd92426561df9f29cc56a9ca60c4eeb61800b",
                                     "playeranimator",
