@@ -40,6 +40,7 @@ class CpSseClientTest {
     private final List<String> ackBodies = new CopyOnWriteArrayList<>();
     private final List<String> seenAuth = new CopyOnWriteArrayList<>();
     private final List<String> seenResume = new CopyOnWriteArrayList<>();
+    private final List<String> seenUpgrade = new CopyOnWriteArrayList<>();
     private final AtomicBoolean stop = new AtomicBoolean();
     private final AtomicBoolean ackSeenWhileOpen = new AtomicBoolean();
     private final AtomicInteger snapshotHits = new AtomicInteger();
@@ -60,6 +61,7 @@ class CpSseClientTest {
                 "/v2/agents/game-1/snapshot",
                 exchange -> {
                     seenAuth.add(exchange.getRequestHeaders().getFirst("Authorization"));
+                    seenUpgrade.add(exchange.getRequestHeaders().getFirst("Upgrade"));
                     snapshotHits.incrementAndGet();
                     if (snapshotHits.get() >= stopAfterSnapshots.get()) stop.set(true);
                     respond(exchange, snapshotStatus, snapshotBody.get());
@@ -68,6 +70,7 @@ class CpSseClientTest {
                 "/v2/agents/game-1/events",
                 exchange -> {
                     seenAuth.add(exchange.getRequestHeaders().getFirst("Authorization"));
+                    seenUpgrade.add(exchange.getRequestHeaders().getFirst("Upgrade"));
                     seenResume.add(exchange.getRequestHeaders().getFirst("Last-Event-ID"));
                     eventsHits.incrementAndGet();
                     respond(exchange, eventsStatus, eventsBody.apply(queryCursor(exchange)));
@@ -75,6 +78,7 @@ class CpSseClientTest {
         server.createContext(
                 "/v2/agents/game-1/acks",
                 exchange -> {
+                    seenUpgrade.add(exchange.getRequestHeaders().getFirst("Upgrade"));
                     String body =
                             new String(
                                     exchange.getRequestBody().readAllBytes(),
@@ -144,6 +148,24 @@ class CpSseClientTest {
         assertEquals(42, store.loadLkg("gameplay", "*").revision());
         assertEquals(42, store.loadCursor().sequence());
         assertTrue(ackBodies.stream().allMatch(body -> body.contains(EPOCH)));
+    }
+
+    @Test
+    void noH2cUpgradeHeaderOnPlainHttp() throws Exception {
+        CpStore store = new CpStore(directory.resolve("cp-http11"));
+        CpConsumer consumer =
+                new CpConsumer(
+                        store,
+                        (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                        CLOCK);
+        CpSseClient client = newClient(store, consumer);
+
+        client.postAckJson("{}");
+
+        assertFalse(seenUpgrade.isEmpty(), "ack request never reached the stub");
+        assertTrue(
+                seenUpgrade.stream().allMatch(header -> header == null),
+                "h2c Upgrade header on plain HTTP: " + seenUpgrade);
     }
 
     @Test
