@@ -7,7 +7,6 @@
     "KnifeExhaustedSwingMixin",
     "KnifeHeavyHoldMixin",
     "LRThrowableMovementRenderMixin",
-    "LrMouseReleaseMixin",
     "RemoteLrCompatTickMixin",
     "RemoteLrLayerMixin"
   ],

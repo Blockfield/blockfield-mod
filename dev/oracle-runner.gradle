@@ -373,8 +373,10 @@ def remapOracle = tasks.register('remapOracleJar', tasks.named('remapJar').get()
 // namespace as the published common jar, so the server remaps/consumes it the
 // same way. Test-only: never enters the client pack.
 def oracleFixtureClasses = [
-        'FxClientCases', 'FxPoseCases',
+        'AnimationManifestCases',
+        'FxClientCases', 'FxClientItems', 'FxPoseCases',
         'LrSelectorNativeCases', 'LrTransitionNativeCases', 'MixedRendererCases',
+        'OracleFixtureRegistry', 'OracleProvenance',
         'OracleReflection', 'OracleTransformAudit',
         'PaGraphNativeCases', 'PaObserverNativeCases',
         'ParCoolNativeValues', 'ParCoolPresentationCases', 'ParCoolProjectionCases',

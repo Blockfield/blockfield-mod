@@ -178,9 +178,10 @@ Camera Overhaul (клиентский мод пака) поворачивает 
 ствола до прихода пакета доставания; Lua нового ствола тикала чужую перезарядку без своего кэша, у помпы
 Benelli/SPAS это падение тика игрока («Ticking player», игрока выкидывает). Серверный `tacz/LivingEntityReloadMixin`
 запоминает ствол, для которого началась перезарядка, и сбрасывает её, если в руке уже другой.
-`tacz/LocalPlayerDrawSoundMixin`: TaCZ Refabricated 0.7.0 перенёс звуки доставания/убирания в
+`tacz/LocalPlayerDrawSoundMixin` (удалён в FORKS320-U5): TaCZ Refabricated 0.7.0 перенёс звуки доставания/убирания в
 `AnimateGeoItemRenderer.triggerDraw/triggerPutAway` (апстрим 47c078f0), но оставил старые вызовы `doDraw`/`doPutAway`
-в `LocalPlayerDraw.draw`, закомментированные в Forge 1.1.8, — каждый звук играл дважды. Миксин отменяет оба метода.
+в `LocalPlayerDraw.draw`, закомментированные в Forge 1.1.8, — каждый звук играл дважды. Поведение переехало одним слоем
+в форк: рецепт `tacz-refabricated` (кандидат в bf12) вырезает оба метода байтовым патчем `scripts/PatchTaczDrawSound.java`.
 Критерий проверки — один `SoundPlayManager.playDrawSound` и один `playPutAwaySound` на смену
 оружия. Прежний `dev/rig/jdbtrace.py` использовался для этого замера; текущий стенд и probe testbot
 находятся в workspace. Число звуков не доказывает отсутствие двойного рендера оружия.
