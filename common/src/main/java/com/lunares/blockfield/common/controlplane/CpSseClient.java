@@ -107,6 +107,9 @@ public final class CpSseClient {
         this.http =
                 HttpClient.newBuilder()
                         .connectTimeout(CONNECT_TIMEOUT)
+                        // Pin HTTP/1.1: the default client offers an h2c upgrade on plain
+                        // HTTP and the control plane logs it as an unsupported upgrade.
+                        .version(HttpClient.Version.HTTP_1_1)
                         .followRedirects(HttpClient.Redirect.NEVER)
                         .build();
     }
