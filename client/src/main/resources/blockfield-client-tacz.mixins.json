@@ -19,7 +19,6 @@
     "InteractKeyTacticalMixin",
     "InteractKeyTextOverlayMixin",
     "LocalPlayerAimInspectMixin",
-    "LocalPlayerDrawSoundMixin",
     "LocalPlayerDrawGuardMixin",
     "LocalPlayerEquipmentInspectMixin",
     "LocalPlayerReloadSprintMixin",
