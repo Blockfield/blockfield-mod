@@ -93,8 +93,9 @@ class TabletSharedBlocksTest {
         assertEquals(-1, BfTheme.tabAt(-1, 30, 4, 0, 22, 106, 26));
         assertEquals(-1, BfTheme.tabAt(50, 21, 4, 0, 22, 106, 26));
         assertEquals(-1, BfTheme.tabAt(50, 48, 4, 0, 22, 106, 26));
-        assertEquals(0, BfTheme.tabAt(106, 22, 2, 50, 30, 100, 20));
-        assertEquals(-1, BfTheme.tabAt(49, 30, 2, 50, 30, 100, 20));
+        assertEquals(0, BfTheme.tabAt(106, 35, 2, 50, 30, 100, 20));
+        assertEquals(1, BfTheme.tabAt(160, 35, 2, 50, 30, 100, 20));
+        assertEquals(-1, BfTheme.tabAt(49, 35, 2, 50, 30, 100, 20));
     }
 
     @Test
