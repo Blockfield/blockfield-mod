@@ -191,5 +191,11 @@ jobs:
           # Only the remapped jars may publish: a lone -dev.jar was just deleted.
           ls dist/blockfield-common-*.jar >/dev/null || { echo "common remapped jar missing in dist"; exit 1; }
           ls dist/blockfield-oracle-fixtures-*.jar >/dev/null || { echo "oracle fixtures remapped jar missing in dist"; exit 1; }
+          # mod#46: a tag once named a protocol nothing proved the artifact spoke.
+          # Historical releases are immutable, but every new release proves its
+          # jars were built from this tree: filename version and baked protocol.
+          python -I -X utf8 dev/rig/release_artifact.py --version "$version" \
+            --source common/src/main/java/com/lunares/blockfield/network/PackContract.java \
+            dist/blockfield-client-*.jar dist/blockfield-common-*.jar dist/blockfield-oracle-fixtures-*.jar
           (cd dist && sha256sum -- *.jar > SHA256SUMS)
           gh release create "$version" --target "$GITHUB_SHA" --title "blockfield $version" --notes-file dist/release-notes.md dist/*
