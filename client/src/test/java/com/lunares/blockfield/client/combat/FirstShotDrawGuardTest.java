@@ -304,6 +304,25 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
+    void deliberateSwitchAfterReleaseDropsConfirmedTap() {
+        // Fail-before for the round-2 review finding: the tap lands during draw A after A's
+        // server draw was observed (confirmed press), the player releases and only much later
+        // switches to B deliberately. The stale press must die with its draw — the new gun
+        // fires nothing unrequested, even once its own draw is observed and finished.
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.noteFireAttempt(150_000_000L);
+        // Long after the press (far past the redraw race window), a deliberate switch to B:
+        // the confirmed tap is dropped, not rebound.
+        FirstShotDrawGuard.onDrawToGun(2_000_000_000L, DRAW_MS, "gunB");
+        // B's draw runs and ends: nothing replays...
+        assertFalse(FirstShotDrawGuard.pollPendingShot(2_100_000_000L, 400, false));
+        assertFalse(FirstShotDrawGuard.pollPendingShot(3_000_000_000L, 0, false));
+        // ...and never again for the stale tap.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(3_050_000_000L, 0, false));
+    }
+
+    @Test
     void expiredBoundWithHeldTriggerDefersToTacz() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
