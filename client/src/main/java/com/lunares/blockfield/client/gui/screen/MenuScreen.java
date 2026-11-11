@@ -834,13 +834,14 @@ public class MenuScreen extends Screen {
         if (cells.size() > 1)
             g.drawString(
                     this.font,
-                    ellipsize(UiJson.str(cells.get(1), ""), nameW),
+                    BfTheme.ellipsize(this.font, UiJson.str(cells.get(1), ""), nameW),
                     it.x() + 30,
                     ty,
                     nameInk,
                     false);
         for (int i = 0; i < nums; i++) {
-            String cell = ellipsize(UiJson.str(cells.get(2 + i), ""), NUM_COL_W - 12);
+            String cell =
+                    BfTheme.ellipsize(this.font, UiJson.str(cells.get(2 + i), ""), NUM_COL_W - 12);
             int right = it.x() + it.w() - 6 - (nums - 1 - i) * NUM_COL_W;
             g.drawString(this.font, cell, right - this.font.width(cell), ty, numInk, false);
         }
@@ -1107,14 +1108,6 @@ public class MenuScreen extends Screen {
         int scrollRange = Math.max(1, l.contentHeight() - viewportH);
         int thumbY = l.viewportTop() + (viewportH - thumbH) * l.scrollOffset() / scrollRange;
         g.fill(trackX, thumbY, trackX + w, thumbY + thumbH, BfTheme.AMBER);
-    }
-
-    private String ellipsize(String text, int width) {
-        if (this.font.width(text) <= width) return text;
-        return this.font
-                        .plainSubstrByWidth(text, Math.max(0, width - this.font.width("…")))
-                        .stripTrailing()
-                + "…";
     }
 
     private float hover(Item it, Layout l) {

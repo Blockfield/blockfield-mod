@@ -182,6 +182,7 @@ public final class TabletMapTab {
 
     public static void render(GuiGraphics g, TabletFrame f, int mouseX, int mouseY) {
         Minecraft mc = Minecraft.getInstance();
+        var font = BfTheme.font();
         g.fill(
                 f.contentX(),
                 f.contentY(),
@@ -191,7 +192,7 @@ public final class TabletMapTab {
         JsonObject map = zone();
         if (map == null) {
             g.drawCenteredString(
-                    mc.font,
+                    font,
                     "НЕТ ДАННЫХ КАРТЫ",
                     f.contentX() + f.contentW() / 2,
                     f.contentY() + f.contentH() / 2 - 4,
@@ -261,18 +262,17 @@ public final class TabletMapTab {
             int px = Math.round(at[0]);
             int py = Math.round(at[1]);
             PointMarkerRenderer.drawMarker(g, ping, px, py, 0xF0);
-            int width = mc.font.width(ping.name());
+            int width = font.width(ping.name());
             g.fill(
                     px - width / 2 - 2,
                     py + 9,
                     px + width / 2 + 2,
                     py + 20,
                     BfTheme.alpha(BfTheme.BG, 0xB0));
-            g.drawString(
-                    mc.font, ping.name(), px - width / 2, py + 11, BfTheme.AMBER_BRIGHT, false);
+            g.drawString(font, ping.name(), px - width / 2, py + 11, BfTheme.AMBER_BRIGHT, false);
         }
 
-        drawPlayers(g, mc, view, workshop);
+        drawPlayers(g, view, workshop);
         // Свой маркер и координаты — только живому в бою: убитый в посмертном лобби остаётся
         // в том же измерении, поэтому проверки измерения мало — сервер присылает ему dead
         // (см. HudRenderer.isDeployed). Чужие карты мёртвых уже не видят: MapTeammates шлёт
@@ -285,12 +285,12 @@ public final class TabletMapTab {
         }
         g.disableScissor();
 
-        if (view.flipped()) drawNorth(g, mc, f);
-        if (workshop) drawCursor(g, mc, f, view, mouseX, mouseY);
+        if (view.flipped()) drawNorth(g, f);
+        if (workshop) drawCursor(g, f, view, mouseX, mouseY);
         if (onBattlefield) {
             String coords = Math.round(mc.player.getX()) + " / " + Math.round(mc.player.getZ());
             // Подпись поверх снимка: без тёмной подложки цифры теряются на светлых участках карты.
-            int width = mc.font.width(coords) + 6;
+            int width = font.width(coords) + 6;
             int top = f.contentY() + f.contentH() - 11;
             g.fill(
                     f.contentX(),
@@ -298,7 +298,7 @@ public final class TabletMapTab {
                     f.contentX() + width,
                     top + 11,
                     BfTheme.alpha(BfTheme.BG, 0xC0));
-            g.drawString(mc.font, coords, f.contentX() + 3, top + 2, BfTheme.TEXT_SECONDARY, false);
+            g.drawString(font, coords, f.contentX() + 3, top + 2, BfTheme.TEXT_SECONDARY, false);
         }
     }
 
@@ -328,13 +328,13 @@ public final class TabletMapTab {
     }
 
     /** Развёрнутая карта: север снизу, без метки стороны света не угадать. */
-    private static void drawNorth(GuiGraphics g, Minecraft mc, TabletFrame f) {
+    private static void drawNorth(GuiGraphics g, TabletFrame f) {
         int x = f.contentX() + 3;
         int y = f.contentY() + 3;
         g.fill(x, y, x + 22, y + 11, BfTheme.alpha(BfTheme.BG, 0xC0));
         for (int i = 0; i < 4; i++)
             g.fill(x + 3 + i, y + 2 + i, x + 10 - i, y + 3 + i, BfTheme.AMBER);
-        g.drawString(mc.font, "С", x + 12, y + 2, BfTheme.AMBER, false);
+        g.drawString(BfTheme.font(), "С", x + 12, y + 2, BfTheme.AMBER, false);
     }
 
     private static String snapshotId = "";
@@ -432,7 +432,7 @@ public final class TabletMapTab {
         g.fill(left, top, Math.max(right, left + 1), Math.max(bottom, top + 1), color);
     }
 
-    private static void drawPlayers(GuiGraphics g, Minecraft mc, MapView view, boolean names) {
+    private static void drawPlayers(GuiGraphics g, MapView view, boolean names) {
         for (MapPlayerMotion.Position other : mapPlayers()) {
             if (!view.contains(other.x(), other.z())) continue;
             float[] at = view.screen(other.x(), other.z());
@@ -445,9 +445,10 @@ public final class TabletMapTab {
                     other.enemy());
             String name = names ? WorkshopMarks.playerName(other.id()) : null;
             if (name != null) {
-                int width = mc.font.width(name);
+                var font = BfTheme.font();
+                int width = font.width(name);
                 g.fill(px + 4, py - 5, px + 8 + width, py + 5, BfTheme.alpha(BfTheme.BG, 0xB0));
-                g.drawString(mc.font, name, px + 6, py - 4, BfTheme.OK, false);
+                g.drawString(font, name, px + 6, py - 4, BfTheme.OK, false);
             }
         }
     }
@@ -500,7 +501,7 @@ public final class TabletMapTab {
      * map.
      */
     private static void drawCursor(
-            GuiGraphics g, Minecraft mc, TabletFrame f, MapView view, int mouseX, int mouseY) {
+            GuiGraphics g, TabletFrame f, MapView view, int mouseX, int mouseY) {
         String text = "ПКМ — телепорт";
         if (f.inContent(mouseX, mouseY) && view.onMap(mouseX, mouseY)) {
             double[] world = view.world(mouseX, mouseY);
@@ -512,10 +513,10 @@ public final class TabletMapTab {
                             + "  ·  "
                             + text;
         }
-        int width = mc.font.width(text) + 6;
+        int width = BfTheme.font().width(text) + 6;
         int left = f.contentX() + f.contentW() - width, top = f.contentY() + f.contentH() - 11;
         g.fill(left, top, left + width, top + 11, BfTheme.alpha(BfTheme.BG, 0xC0));
-        g.drawString(mc.font, text, left + 3, top + 2, BfTheme.TEXT_SECONDARY, false);
+        g.drawString(BfTheme.font(), text, left + 3, top + 2, BfTheme.TEXT_SECONDARY, false);
     }
 
     /**

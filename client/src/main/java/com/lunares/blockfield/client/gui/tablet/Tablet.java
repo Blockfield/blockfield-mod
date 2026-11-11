@@ -609,7 +609,7 @@ public final class Tablet {
             GuiGraphics g, Minecraft mc, TabletFrame f, int mouseX, int mouseY, float partialTick) {
         if (menuJson == null) {
             g.drawCenteredString(
-                    mc.font,
+                    BfTheme.font(),
                     "ЗАПРОС МЕНЮ…",
                     f.contentX() + f.contentW() / 2,
                     f.contentY() + f.contentH() / 2 - 4,
