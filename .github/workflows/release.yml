@@ -196,6 +196,9 @@ jobs:
           # jars were built from this tree: filename version and baked protocol.
           python -I -X utf8 dev/rig/release_artifact.py --version "$version" \
             --source common/src/main/java/com/lunares/blockfield/network/PackContract.java \
-            dist/blockfield-client-*.jar dist/blockfield-common-*.jar dist/blockfield-oracle-fixtures-*.jar
+            dist/blockfield-client-*.jar dist/blockfield-common-*.jar
+          # Oracle fixtures carry no PackContract: only their filename version must match.
+          ls "dist/blockfield-oracle-fixtures-${version#v}+mc"*.jar >/dev/null \
+            || { echo "oracle fixtures jar does not carry version ${version#v}"; exit 1; }
           (cd dist && sha256sum -- *.jar > SHA256SUMS)
           gh release create "$version" --target "$GITHUB_SHA" --title "blockfield $version" --notes-file dist/release-notes.md dist/*
