@@ -30,6 +30,7 @@ public abstract class LocalPlayerDrawGuardMixin {
         FirstShotDrawGuard.onDrawToGun(
                 System.nanoTime(),
                 drawMs,
-                gun.getGunId(mainHand) + "@" + player.getInventory().selected);
+                gun.getGunId(mainHand) + "@" + player.getInventory().selected,
+                player.level().getGameTime());
     }
 }
