@@ -1,5 +1,6 @@
 package com.lunares.blockfield.client.gui;
 
+import com.lunares.blockfield.client.gui.screen.MenuLayout;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 
@@ -361,5 +362,280 @@ public final class BfTheme {
     public static void statusDot(GuiGraphics g, int x, int y, int color) {
         g.fill(x - 1, y - 1, x + 4, y + 4, alpha(color, 0x40));
         g.fill(x, y, x + 3, y + 3, color);
+    }
+
+    /**
+     * Tablet glass: graphite fill over the frame rect (tabs strip + content). The border goes on
+     * last via {@link #outline}, after the tab content is drawn.
+     */
+    public static void frame(GuiGraphics g, int x, int y, int w, int h) {
+        g.fill(x, y, x + w, y + h, BG);
+    }
+
+    /**
+     * Tab strip: elevated band with one fixed-width tab per entry (icon + label), CARD fill on
+     * hover/active, amber underline tracking the animated {@code underlineX} slot. Screens pass
+     * icons/labels/active only; bounds come from their frame.
+     */
+    public static void tabs(
+            GuiGraphics g,
+            Font font,
+            BfIcon[] icons,
+            String[] labels,
+            int active,
+            int mouseX,
+            int mouseY,
+            int x,
+            int y,
+            int w,
+            int tabW,
+            int h,
+            float underlineX) {
+        g.fill(x, y, x + w, y + h, BG_ELEVATED);
+        for (int i = 0; i < labels.length; i++) {
+            int tx = x + i * tabW;
+            boolean on = i == active;
+            boolean hovered = hit(mouseX, mouseY, tx, y, tabW, h);
+            if (hovered || on) g.fill(tx, y, tx + tabW, y + h, CARD);
+            int ink = on ? AMBER : hovered ? TEXT : MUTED;
+            icons[i].draw(g, tx + 10, y + 7, 12, ink);
+            g.drawString(font, labels[i], tx + 30, y + 9, ink, false);
+        }
+        g.pose().pushPose();
+        g.pose().translate(x + tabW * underlineX, y + h - 2, 0);
+        g.fill(0, 0, tabW, 2, AMBER);
+        g.pose().popPose();
+    }
+
+    /** Tab-strip hit test: index of the tab under the cursor, or -1. Pure geometry. */
+    public static int tabAt(int mouseX, int mouseY, int count, int x, int y, int tabW, int h) {
+        if (mouseY < y || mouseY >= y + h) return -1;
+        int i = (mouseX - x) / tabW;
+        return i >= 0 && i < count ? i : -1;
+    }
+
+    /**
+     * Map label chip: single-line text on a graphite tag, 11px high with 3px text insets (ping
+     * names, player names, coordinates, cursor hint). Returns the chip width.
+     */
+    public static int chipWidth(Font font, String text) {
+        return font.width(text) + 6;
+    }
+
+    public static void chip(GuiGraphics g, Font font, int x, int y, String text, int ink, int bg) {
+        g.fill(x, y, x + chipWidth(font, text), y + 11, bg);
+        g.drawString(font, text, x + 3, y + 2, ink, false);
+    }
+
+    /** Chip background alone, for chips with extra graphics (the north arrow). */
+    public static void chipBox(GuiGraphics g, int x, int y, int w, int bg) {
+        g.fill(x, y, x + w, y + 11, bg);
+    }
+
+    /**
+     * Selection surface of vote/mode cards and buttons: CARD/POPOVER mix on hover, accent border
+     * (red for destructive), amber underline while hovered or selected.
+     */
+    public static void selectSurface(
+            GuiGraphics g,
+            int x,
+            int y,
+            int w,
+            int h,
+            boolean enabled,
+            boolean selected,
+            float hover,
+            boolean destructive) {
+        int accent = destructive ? DANGER : AMBER;
+        g.fill(x, y, x + w, y + h, enabled ? mix(CARD, POPOVER, hover) : BG_ELEVATED);
+        outline(g, x, y, w, h, enabled ? mix(BORDER, accent, selected ? 1f : hover) : BORDER_SOFT);
+        if (hover > 0f || selected) {
+            g.fill(x, y + h - 1, x + Math.round(w * (selected ? 1f : hover)), y + h, accent);
+        }
+    }
+
+    /**
+     * Vote/mode card: selection surface, leading icon, label at {@code scale}, hint pinned to the
+     * bottom, arrow on hover. Screens pass data only (icon, texts, scale, padding).
+     */
+    public static void card(
+            GuiGraphics g,
+            Font font,
+            int x,
+            int y,
+            int w,
+            int h,
+            BfIcon icon,
+            String label,
+            String hint,
+            float scale,
+            int pad,
+            boolean compact,
+            boolean enabled,
+            float hover) {
+        selectSurface(g, x, y, w, h, enabled, false, hover, false);
+        float iconSize = compact ? 20 : 30;
+        icon.draw(
+                g, x + pad, y + pad, iconSize, enabled ? mix(TEXT_SECONDARY, AMBER, hover) : MUTED);
+        BfIcon.ARROW.draw(
+                g,
+                x + w - pad - 12 + 2 * hover,
+                y + pad,
+                12,
+                enabled ? mix(MUTED, AMBER, hover) : MUTED_DARK);
+        int room = w - 2 * pad;
+        int labelY = y + pad + (compact ? 27 : 42);
+        g.pose().pushPose();
+        g.pose().translate(x + pad, labelY, 0);
+        g.pose().scale(scale, scale, 1f);
+        int ly = 0;
+        for (var line :
+                font.getSplitter()
+                        .splitLines(
+                                label,
+                                (int) (room / scale),
+                                net.minecraft.network.chat.Style.EMPTY)) {
+            g.drawString(font, line.getString(), 0, ly, enabled ? TEXT : MUTED, false);
+            ly += 11;
+        }
+        g.pose().popPose();
+        int hy = y + h - pad + 3;
+        for (var line :
+                font.getSplitter().splitLines(hint, room, net.minecraft.network.chat.Style.EMPTY)) {
+            hy -= 11;
+            g.drawString(font, line.getString(), x + pad, hy, MUTED, false);
+        }
+    }
+
+    /**
+     * Vote list / settings button: selection surface, leading icon, label with an inline or stacked
+     * hint. {@code room} is the text width available right of the icon, {@code stacked} means the
+     * hint did not fit beside the label.
+     */
+    public static void menuButton(
+            GuiGraphics g,
+            Font font,
+            int x,
+            int y,
+            int w,
+            int h,
+            BfIcon icon,
+            String label,
+            String hint,
+            boolean stacked,
+            int room,
+            boolean enabled,
+            boolean primary,
+            boolean destructive,
+            float hover) {
+        selectSurface(g, x, y, w, h, enabled, false, hover, destructive);
+        if (primary && enabled && !destructive)
+            g.fill(x, y, x + w, y + h, mix(AMBER, AMBER_BRIGHT, hover));
+        int ink = !enabled ? MUTED : destructive ? DANGER : primary ? BG : TEXT;
+        icon.draw(g, x + 7, y + (h - 11) / 2f, 11, ink);
+        var splitter = font.getSplitter();
+        var labelLines =
+                splitter.splitLines(label, room, net.minecraft.network.chat.Style.EMPTY).stream()
+                        .map(net.minecraft.network.chat.FormattedText::getString)
+                        .toList();
+        var hintLines =
+                stacked
+                        ? splitter
+                                .splitLines(hint, room, net.minecraft.network.chat.Style.EMPTY)
+                                .stream()
+                                .map(net.minecraft.network.chat.FormattedText::getString)
+                                .toList()
+                        : java.util.List.<String>of();
+        int y0 = y + (h - (labelLines.size() + hintLines.size()) * 11) / 2 + 1;
+        int labelY = y0;
+        for (String line : labelLines) {
+            g.drawString(font, line, x + 26, y0, ink, false);
+            y0 += 11;
+        }
+        int hintInk = primary && enabled ? BG : MUTED;
+        for (String line : hintLines) {
+            g.drawString(font, line, x + 26, y0, hintInk, false);
+            y0 += 11;
+        }
+        if (!stacked && !hint.isEmpty())
+            g.drawString(font, hint, x + w - 8 - font.width(hint), labelY, hintInk, false);
+    }
+
+    /** Table row height and numeric-column width: shared by menu layout and rendering. */
+    public static final int TABLE_ROW_H = 16;
+
+    public static final int TABLE_NUM_W = 72;
+
+    /**
+     * Table data row: rank, name (takes the slack, ellipsized), right-aligned numbers. Narrow
+     * screens drop trailing-priority numbers first via {@link MenuLayout}. Truncated cells are
+     * reported so the screen can show the full text in a shared tooltip.
+     */
+    public record TruncatedCell(int x, int y, int w, int h, String text) {}
+
+    public static java.util.List<TruncatedCell> tableRow(
+            GuiGraphics g,
+            Font font,
+            int x,
+            int y,
+            int w,
+            java.util.List<String> cells,
+            int rankInk,
+            int nameInk,
+            int numInk) {
+        int nums = MenuLayout.tableNumbers(w, cells.size(), TABLE_NUM_W);
+        int nameW = MenuLayout.tableNameWidth(w, nums, TABLE_NUM_W);
+        var tips = new java.util.ArrayList<TruncatedCell>();
+        int ty = y + (TABLE_ROW_H - 8) / 2;
+        if (!cells.isEmpty()) g.drawString(font, cells.get(0), x + 6, ty, rankInk, false);
+        if (cells.size() > 1) {
+            String shown = ellipsize(font, cells.get(1), nameW);
+            if (!shown.equals(cells.get(1)))
+                tips.add(new TruncatedCell(x + 30, y, nameW, TABLE_ROW_H, cells.get(1)));
+            g.drawString(font, shown, x + 30, ty, nameInk, false);
+        }
+        for (int i = 0; i < nums; i++) {
+            String full = cells.get(2 + i);
+            String shown = ellipsize(font, full, TABLE_NUM_W - 12);
+            int right = x + w - 6 - (nums - 1 - i) * TABLE_NUM_W;
+            if (!shown.equals(full))
+                tips.add(
+                        new TruncatedCell(
+                                right - font.width(shown),
+                                y,
+                                font.width(shown),
+                                TABLE_ROW_H,
+                                full));
+            g.drawString(font, shown, right - font.width(shown), ty, numInk, false);
+        }
+        return tips;
+    }
+
+    /**
+     * Table row band: amber-edged CARD for the player's own row, graphite zebra otherwise. Screens
+     * pass which row this is; style stays here.
+     */
+    public static void tableBand(GuiGraphics g, int x, int y, int w, boolean own, boolean zebra) {
+        if (own) {
+            g.fill(x, y, x + w, y + TABLE_ROW_H, CARD);
+            g.fill(x, y, x + 2, y + TABLE_ROW_H, AMBER);
+        } else if (zebra) {
+            g.fill(x, y, x + w, y + TABLE_ROW_H, BG_ELEVATED);
+        }
+    }
+
+    /**
+     * Thin scrollbar in its own gutter: never sits over content (layout already narrowed the
+     * content while scrolling). Screens pass the track x, viewport and content height.
+     */
+    public static void scrollbar(
+            GuiGraphics g, int x, int top, int bottom, int contentH, int offset) {
+        int viewportH = bottom - top;
+        if (contentH <= viewportH) return;
+        g.fill(x, top, x + 3, bottom, alpha(BORDER_SOFT, 0xC0));
+        int thumbH = Math.max(20, viewportH * viewportH / contentH);
+        int scrollRange = Math.max(1, contentH - viewportH);
+        int thumbY = top + (viewportH - thumbH) * offset / scrollRange;
+        g.fill(x, thumbY, x + 3, thumbY + thumbH, AMBER);
     }
 }

@@ -262,14 +262,14 @@ public final class TabletMapTab {
             int px = Math.round(at[0]);
             int py = Math.round(at[1]);
             PointMarkerRenderer.drawMarker(g, ping, px, py, 0xF0);
-            int width = font.width(ping.name());
-            g.fill(
-                    px - width / 2 - 2,
+            BfTheme.chip(
+                    g,
+                    font,
+                    px - BfTheme.chipWidth(font, ping.name()) / 2,
                     py + 9,
-                    px + width / 2 + 2,
-                    py + 20,
+                    ping.name(),
+                    BfTheme.AMBER_BRIGHT,
                     BfTheme.alpha(BfTheme.BG, 0xB0));
-            g.drawString(font, ping.name(), px - width / 2, py + 11, BfTheme.AMBER_BRIGHT, false);
         }
 
         drawPlayers(g, view, workshop);
@@ -290,15 +290,14 @@ public final class TabletMapTab {
         if (onBattlefield) {
             String coords = Math.round(mc.player.getX()) + " / " + Math.round(mc.player.getZ());
             // Подпись поверх снимка: без тёмной подложки цифры теряются на светлых участках карты.
-            int width = font.width(coords) + 6;
-            int top = f.contentY() + f.contentH() - 11;
-            g.fill(
+            BfTheme.chip(
+                    g,
+                    font,
                     f.contentX(),
-                    top,
-                    f.contentX() + width,
-                    top + 11,
+                    f.contentY() + f.contentH() - 11,
+                    coords,
+                    BfTheme.TEXT_SECONDARY,
                     BfTheme.alpha(BfTheme.BG, 0xC0));
-            g.drawString(font, coords, f.contentX() + 3, top + 2, BfTheme.TEXT_SECONDARY, false);
         }
     }
 
@@ -331,7 +330,7 @@ public final class TabletMapTab {
     private static void drawNorth(GuiGraphics g, TabletFrame f) {
         int x = f.contentX() + 3;
         int y = f.contentY() + 3;
-        g.fill(x, y, x + 22, y + 11, BfTheme.alpha(BfTheme.BG, 0xC0));
+        BfTheme.chipBox(g, x, y, 22, BfTheme.alpha(BfTheme.BG, 0xC0));
         for (int i = 0; i < 4; i++)
             g.fill(x + 3 + i, y + 2 + i, x + 10 - i, y + 3 + i, BfTheme.AMBER);
         g.drawString(BfTheme.font(), "С", x + 12, y + 2, BfTheme.AMBER, false);
@@ -446,9 +445,8 @@ public final class TabletMapTab {
             String name = names ? WorkshopMarks.playerName(other.id()) : null;
             if (name != null) {
                 var font = BfTheme.font();
-                int width = font.width(name);
-                g.fill(px + 4, py - 5, px + 8 + width, py + 5, BfTheme.alpha(BfTheme.BG, 0xB0));
-                g.drawString(font, name, px + 6, py - 4, BfTheme.OK, false);
+                BfTheme.chip(
+                        g, font, px + 4, py - 5, name, BfTheme.OK, BfTheme.alpha(BfTheme.BG, 0xB0));
             }
         }
     }
@@ -513,10 +511,16 @@ public final class TabletMapTab {
                             + "  ·  "
                             + text;
         }
-        int width = BfTheme.font().width(text) + 6;
+        int width = BfTheme.chipWidth(BfTheme.font(), text);
         int left = f.contentX() + f.contentW() - width, top = f.contentY() + f.contentH() - 11;
-        g.fill(left, top, left + width, top + 11, BfTheme.alpha(BfTheme.BG, 0xC0));
-        g.drawString(BfTheme.font(), text, left + 3, top + 2, BfTheme.TEXT_SECONDARY, false);
+        BfTheme.chip(
+                g,
+                BfTheme.font(),
+                left,
+                top,
+                text,
+                BfTheme.TEXT_SECONDARY,
+                BfTheme.alpha(BfTheme.BG, 0xC0));
     }
 
     /**

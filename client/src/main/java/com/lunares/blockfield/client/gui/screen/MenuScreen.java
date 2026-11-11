@@ -110,6 +110,9 @@ public class MenuScreen extends Screen {
     private boolean paged;
     private int page;
 
+    /** Truncated table cells under the cursor get the shared tooltip (see render). */
+    private final java.util.List<BfTheme.TruncatedCell> truncatedTips = new java.util.ArrayList<>();
+
     public void setPaged(boolean value) {
         paged = value;
         scrollOffset = 0;
@@ -546,17 +549,26 @@ public class MenuScreen extends Screen {
                                 null));
                 y += 15;
             }
-            items.add(new Item(Kind.TABLE, contentX, y, contentWidth, ROW_H, null, null, section));
-            y += ROW_H;
+            items.add(
+                    new Item(
+                            Kind.TABLE,
+                            contentX,
+                            y,
+                            contentWidth,
+                            BfTheme.TABLE_ROW_H,
+                            null,
+                            null,
+                            section));
+            y += BfTheme.TABLE_ROW_H;
             int rows = Math.max(1, UiJson.arr(section, "rows").size());
-            for (int row = 0; row < rows; row++, y += ROW_H)
+            for (int row = 0; row < rows; row++, y += BfTheme.TABLE_ROW_H)
                 items.add(
                         new Item(
                                 Kind.TABLE,
                                 contentX,
                                 y,
                                 contentWidth,
-                                ROW_H,
+                                BfTheme.TABLE_ROW_H,
                                 null,
                                 null,
                                 section,
@@ -749,13 +761,13 @@ public class MenuScreen extends Screen {
         return h;
     }
 
-    private static final int ROW_H = 16;
-    private static final int NUM_COL_W = 72;
-
     /** Header row, data rows (or one note row when empty), trailing section gap. */
     private static int tableHeight(JsonObject section) {
         int rows = Math.max(1, UiJson.arr(section, "rows").size());
-        return (str(section, "label", null) != null ? 15 : 0) + ROW_H + rows * ROW_H + 10;
+        return (str(section, "label", null) != null ? 15 : 0)
+                + BfTheme.TABLE_ROW_H
+                + rows * BfTheme.TABLE_ROW_H
+                + 10;
     }
 
     private static int tablesHeight(List<JsonObject> sections) {
@@ -764,20 +776,29 @@ public class MenuScreen extends Screen {
         return h;
     }
 
+    /** Table rows are data (which inks, whose row); geometry+style live in {@link BfTheme}. */
     private void renderTable(GuiGraphics g, Item it) {
         JsonObject section = it.btn();
         JsonArray rows = UiJson.arr(section, "rows");
         int y = it.y();
         if (it.tableRow() < 0) {
-            tableRow(
-                    g,
-                    it,
-                    y,
-                    UiJson.arr(section, "columns"),
-                    BfTheme.MUTED_DARK,
-                    BfTheme.MUTED_DARK,
-                    BfTheme.MUTED_DARK);
-            g.fill(it.x(), y + ROW_H - 1, it.x() + it.w(), y + ROW_H, BfTheme.BORDER);
+            truncatedTips.addAll(
+                    BfTheme.tableRow(
+                            g,
+                            this.font,
+                            it.x(),
+                            y,
+                            it.w(),
+                            strings(UiJson.arr(section, "columns")),
+                            BfTheme.MUTED_DARK,
+                            BfTheme.MUTED_DARK,
+                            BfTheme.MUTED_DARK));
+            g.fill(
+                    it.x(),
+                    y + BfTheme.TABLE_ROW_H - 1,
+                    it.x() + it.w(),
+                    y + BfTheme.TABLE_ROW_H,
+                    BfTheme.BORDER);
             return;
         }
         if (rows.isEmpty()) {
@@ -785,7 +806,7 @@ public class MenuScreen extends Screen {
                     g,
                     str(section, "empty", ""),
                     it.x() + 6,
-                    y + (ROW_H - 8) / 2,
+                    y + (BfTheme.TABLE_ROW_H - 8) / 2,
                     it.w() - 12,
                     BfTheme.MUTED);
             return;
@@ -797,54 +818,26 @@ public class MenuScreen extends Screen {
                         ? this.minecraft.player.getGameProfile().getName()
                         : "";
         boolean mine = cells.size() > 1 && own.equals(UiJson.str(cells.get(1), ""));
-        if (mine) ownRowSurface(g, it, y);
-        else if (it.tableRow() % 2 == 1)
-            g.fill(it.x(), y, it.x() + it.w(), y + ROW_H, BfTheme.BG_ELEVATED);
+        BfTheme.tableBand(g, it.x(), y, it.w(), mine, it.tableRow() % 2 == 1);
         boolean podium =
                 cells.size() > 0 && List.of("1", "2", "3").contains(UiJson.str(cells.get(0), ""));
-        tableRow(
-                g,
-                it,
-                y,
-                cells,
-                podium ? BfTheme.AMBER : BfTheme.MUTED,
-                mine ? BfTheme.AMBER : BfTheme.TEXT,
-                BfTheme.TEXT_SECONDARY);
+        truncatedTips.addAll(
+                BfTheme.tableRow(
+                        g,
+                        this.font,
+                        it.x(),
+                        y,
+                        it.w(),
+                        strings(cells),
+                        podium ? BfTheme.AMBER : BfTheme.MUTED,
+                        mine ? BfTheme.AMBER : BfTheme.TEXT,
+                        BfTheme.TEXT_SECONDARY));
     }
 
-    private void ownRowSurface(GuiGraphics g, Item it, int y) {
-        g.fill(it.x(), y, it.x() + it.w(), y + ROW_H, BfTheme.CARD);
-        g.fill(it.x(), y, it.x() + 2, y + ROW_H, BfTheme.AMBER);
-    }
-
-    /**
-     * First cell is the rank, second the name (takes the slack), the rest are right-aligned
-     * numbers.
-     */
-    private void tableRow(
-            GuiGraphics g, Item it, int y, JsonArray cells, int rankInk, int nameInk, int numInk) {
-        int nums = Math.max(0, cells.size() - 2);
-        // Narrow GUI scales keep rank, name and as many trailing-priority numbers as fit beside a
-        // readable name.
-        while (nums > 1 && it.w() - 30 - nums * NUM_COL_W < 90) nums--;
-        int ty = y + (ROW_H - 8) / 2;
-        if (cells.size() > 0)
-            g.drawString(this.font, UiJson.str(cells.get(0), ""), it.x() + 6, ty, rankInk, false);
-        int nameW = it.w() - 30 - nums * NUM_COL_W - 6;
-        if (cells.size() > 1)
-            g.drawString(
-                    this.font,
-                    BfTheme.ellipsize(this.font, UiJson.str(cells.get(1), ""), nameW),
-                    it.x() + 30,
-                    ty,
-                    nameInk,
-                    false);
-        for (int i = 0; i < nums; i++) {
-            String cell =
-                    BfTheme.ellipsize(this.font, UiJson.str(cells.get(2 + i), ""), NUM_COL_W - 12);
-            int right = it.x() + it.w() - 6 - (nums - 1 - i) * NUM_COL_W;
-            g.drawString(this.font, cell, right - this.font.width(cell), ty, numInk, false);
-        }
+    private static List<String> strings(JsonArray cells) {
+        List<String> out = new ArrayList<>();
+        for (JsonElement cell : cells) out.add(UiJson.str(cell, ""));
+        return out;
     }
 
     private int gridHeight(List<JsonObject> sections, int width) {
@@ -930,6 +923,7 @@ public class MenuScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        truncatedTips.clear();
         // Живой режим: меню обновляется само, пока открыто.
         if (bool(this.data, "live", false)
                 && this.minecraft != null
@@ -1018,15 +1012,15 @@ public class MenuScreen extends Screen {
                 case LINE ->
                         guiGraphics.drawString(
                                 this.font, it.label(), it.x(), it.y(), BfTheme.MUTED, false);
-                case BUTTON -> renderButton(guiGraphics, it, l);
-                case CARD -> renderCard(guiGraphics, it, l);
+                case BUTTON -> drawButton(guiGraphics, it, l);
+                case CARD -> drawCard(guiGraphics, it, l);
                 case CORNER, PAGE -> {}
                 case TABLE -> renderTable(guiGraphics, it);
             }
         }
         guiGraphics.disableScissor();
         for (Item it : l.items()) {
-            if (it.kind() == Kind.CORNER) renderCorner(guiGraphics, it, l);
+            if (it.kind() == Kind.CORNER) drawButton(guiGraphics, it, l);
             if (it.kind() == Kind.PAGE) {
                 boolean enabled = it.code().equals("prev") ? page > 0 : page + 1 < l.pages();
                 BfTheme.button(
@@ -1051,7 +1045,7 @@ public class MenuScreen extends Screen {
                     l.contentX() + l.contentWidth() / 2,
                     l.viewportBottom() + 11,
                     BfTheme.MUTED);
-        if (!paged) renderScrollCue(guiGraphics, l);
+        if (!paged) drawScrollCue(guiGraphics, l);
 
         String footer = str(this.data, "footer", null);
         if (footer != null)
@@ -1073,6 +1067,23 @@ public class MenuScreen extends Screen {
                     this.height,
                     BfTheme.alpha(BfTheme.BG, Math.round(190 * (1f - reveal))));
         }
+        renderTruncatedTip(guiGraphics, l);
+    }
+
+    /** Full text of the truncated table cell under the cursor, in the shared tooltip. */
+    private void renderTruncatedTip(GuiGraphics g, Layout l) {
+        for (BfTheme.TruncatedCell tip : truncatedTips) {
+            if (!BfTheme.hit(l.mouseX(), l.mouseY(), tip.x(), tip.y(), tip.w(), tip.h())) continue;
+            BfTheme.tooltip(
+                    g,
+                    this.font,
+                    java.util.List.of(Component.literal(tip.text())),
+                    l.mouseX(),
+                    l.mouseY(),
+                    this.width,
+                    this.height);
+            return;
+        }
     }
 
     private void renderTimer(GuiGraphics g, int x, int y, int secondsLeft) {
@@ -1088,26 +1099,14 @@ public class MenuScreen extends Screen {
                 this.font, "ДО КОНЦА", x + TIMER_W / 2, y + TIMER_H - 11, BfTheme.MUTED);
     }
 
-    /**
-     * Thin scrollbar in the gutter {@link MenuLayout#contentWidthFor} already reserved to its
-     * right, so it never sits over headers/codes/hints/buttons (which were laid out narrower
-     * whenever this is visible).
-     */
-    private void renderScrollCue(GuiGraphics g, Layout l) {
-        int viewportH = l.viewportBottom() - l.viewportTop();
-        if (l.contentHeight() <= viewportH) return;
-        int w = MenuLayout.SCROLLBAR_WIDTH;
-        int trackX = l.contentX() + l.contentWidth() + MenuLayout.SCROLLBAR_GAP;
-        g.fill(
-                trackX,
+    private void drawScrollCue(GuiGraphics g, Layout l) {
+        BfTheme.scrollbar(
+                g,
+                l.contentX() + l.contentWidth() + MenuLayout.SCROLLBAR_GAP,
                 l.viewportTop(),
-                trackX + w,
                 l.viewportBottom(),
-                BfTheme.alpha(BfTheme.BORDER_SOFT, 0xC0));
-        int thumbH = Math.max(20, viewportH * viewportH / l.contentHeight());
-        int scrollRange = Math.max(1, l.contentHeight() - viewportH);
-        int thumbY = l.viewportTop() + (viewportH - thumbH) * l.scrollOffset() / scrollRange;
-        g.fill(trackX, thumbY, trackX + w, thumbY + thumbH, BfTheme.AMBER);
+                l.contentHeight(),
+                l.scrollOffset());
     }
 
     private float hover(Item it, Layout l) {
@@ -1123,128 +1122,47 @@ public class MenuScreen extends Screen {
         return motion.value(now);
     }
 
-    private void surface(GuiGraphics g, Item it, float hover) {
-        boolean enabled = bool(it.btn(), "enabled", true);
-        boolean selected = bool(it.btn(), "selected", false);
-        int accent = bool(it.btn(), "destructive", false) ? BfTheme.DANGER : BfTheme.AMBER;
-        g.fill(
-                it.x(),
-                it.y(),
-                it.x() + it.w(),
-                it.y() + it.h(),
-                enabled ? BfTheme.mix(BfTheme.CARD, BfTheme.POPOVER, hover) : BfTheme.BG_ELEVATED);
-        BfTheme.outline(
+    /** Cards and buttons pass data only; the selection surface lives in {@link BfTheme}. */
+    private void drawCard(GuiGraphics g, Item it, Layout l) {
+        JsonObject b = it.btn();
+        boolean enabled = bool(b, "enabled", true);
+        BfTheme.card(
                 g,
+                this.font,
                 it.x(),
                 it.y(),
                 it.w(),
                 it.h(),
-                enabled
-                        ? BfTheme.mix(BfTheme.BORDER, accent, selected ? 1f : hover)
-                        : BfTheme.BORDER_SOFT);
-        if (hover > 0f || selected) {
-            g.fill(
-                    it.x(),
-                    it.y() + it.h() - 1,
-                    it.x() + Math.round(it.w() * (selected ? 1f : hover)),
-                    it.y() + it.h(),
-                    accent);
-        }
-    }
-
-    private void renderCard(GuiGraphics g, Item it, Layout l) {
-        JsonObject b = it.btn();
-        boolean enabled = bool(b, "enabled", true);
-        float hover = hover(it, l);
-        surface(g, it, hover);
-        int pad = MenuLayout.cardPadding(it.compactCard());
-        float iconSize = it.compactCard() ? 20 : 30;
-        BfIcon icon = enabled ? BfIcon.forAction(str(b, "action", "")) : BfIcon.LOCK;
-        icon.draw(
-                g,
-                it.x() + pad,
-                it.y() + pad,
-                iconSize,
-                enabled
-                        ? BfTheme.mix(BfTheme.TEXT_SECONDARY, BfTheme.AMBER, hover)
-                        : BfTheme.MUTED);
-        BfIcon.ARROW.draw(
-                g,
-                it.x() + it.w() - pad - 12 + 2 * hover,
-                it.y() + pad,
-                12,
-                enabled ? BfTheme.mix(BfTheme.MUTED, BfTheme.AMBER, hover) : BfTheme.MUTED_DARK);
-        int labelY = it.y() + pad + MenuLayout.cardLabelTop(it.compactCard());
-        float scale = it.scale();
-        int room = it.w() - 2 * pad;
-        g.pose().pushPose();
-        g.pose().translate(it.x() + pad, labelY, 0);
-        g.pose().scale(scale, scale, 1f);
-        drawLines(
-                g,
+                enabled ? BfIcon.forAction(str(b, "action", "")) : BfIcon.LOCK,
                 str(b, "label", ""),
-                0,
-                0,
-                (int) (room / scale),
-                enabled ? BfTheme.TEXT : BfTheme.MUTED);
-        g.pose().popPose();
-        String hint = str(b, "hint", "");
-        drawLines(
-                g,
-                hint,
-                it.x() + pad,
-                it.y() + it.h() - pad - wrap(hint, room).size() * 11 + 3,
-                room,
-                BfTheme.MUTED);
+                str(b, "hint", ""),
+                it.scale(),
+                MenuLayout.cardPadding(it.compactCard()),
+                it.compactCard(),
+                enabled,
+                hover(it, l));
     }
 
-    private void renderCorner(GuiGraphics g, Item it, Layout l) {
-        renderButton(g, it, l);
-    }
-
-    private void renderButton(GuiGraphics g, Item it, Layout l) {
+    private void drawButton(GuiGraphics g, Item it, Layout l) {
         JsonObject b = it.btn();
         boolean enabled = bool(b, "enabled", true);
-        boolean primary = bool(b, "primary", false);
-        boolean destructive = bool(b, "destructive", false);
-        float hover = hover(it, l);
-        surface(g, it, hover);
-        if (primary && enabled && !destructive)
-            g.fill(
-                    it.x(),
-                    it.y(),
-                    it.x() + it.w(),
-                    it.y() + it.h(),
-                    BfTheme.mix(BfTheme.AMBER, BfTheme.AMBER_BRIGHT, hover));
-        int ink =
-                !enabled
-                        ? BfTheme.MUTED
-                        : destructive ? BfTheme.DANGER : primary ? BfTheme.BG : BfTheme.TEXT;
-        BfIcon icon = enabled ? BfIcon.forAction(str(b, "action", "")) : BfIcon.LOCK;
-        icon.draw(g, it.x() + 7, it.y() + (it.h() - 11) / 2f, 11, ink);
-        String label = buttonLabel(b);
         String hint = str(b, "hint", "");
-        boolean stacked = stackedHint(b, it.w());
-        int room = it.w() - MenuLayout.BUTTON_PAD_W;
-        int lines = wrap(label, room).size() + (stacked ? wrap(hint, room).size() : 0);
-        int y = it.y() + (it.h() - lines * 11) / 2 + 1;
-        int nextY = drawLines(g, label, it.x() + 26, y, room, ink);
-        if (stacked)
-            drawLines(
-                    g,
-                    hint,
-                    it.x() + 26,
-                    nextY,
-                    room,
-                    primary && enabled ? BfTheme.BG : BfTheme.MUTED);
-        else if (!hint.isEmpty())
-            g.drawString(
-                    this.font,
-                    hint,
-                    it.x() + it.w() - 8 - this.font.width(hint),
-                    y,
-                    primary && enabled ? BfTheme.BG : BfTheme.MUTED,
-                    false);
+        BfTheme.menuButton(
+                g,
+                this.font,
+                it.x(),
+                it.y(),
+                it.w(),
+                it.h(),
+                enabled ? BfIcon.forAction(str(b, "action", "")) : BfIcon.LOCK,
+                buttonLabel(b),
+                hint,
+                stackedHint(b, it.w()),
+                it.w() - MenuLayout.BUTTON_PAD_W,
+                enabled,
+                bool(b, "primary", false),
+                bool(b, "destructive", false),
+                hover(it, l));
     }
 
     private void activate(JsonObject button) {

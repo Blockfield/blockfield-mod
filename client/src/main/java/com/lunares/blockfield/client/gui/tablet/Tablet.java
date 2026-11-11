@@ -475,13 +475,9 @@ public final class Tablet {
 
     private static void drawSurface(
             GuiGraphics g, Minecraft mc, TabletFrame f, int mouseX, int mouseY, float partialTick) {
-        g.fill(
-                f.contentX(),
-                f.tabsY(),
-                f.contentX() + f.contentW(),
-                f.contentY() + f.contentH(),
-                BfTheme.BG);
-        tabs(g, mc, f, mouseX, mouseY);
+        BfTheme.frame(
+                g, f.contentX(), f.tabsY(), f.contentW(), f.contentY() + f.contentH() - f.tabsY());
+        tabs(g, f, mouseX, mouseY);
         if (tab == Tab.MAP) {
             TabletMapTab.render(g, f, mouseX, mouseY);
         } else if (tab == Tab.RESULT) {
@@ -511,50 +507,48 @@ public final class Tablet {
         hint(g, mc, f);
     }
 
-    private static void tabs(GuiGraphics g, Minecraft mc, TabletFrame f, int mouseX, int mouseY) {
+    /**
+     * Tab strip data: visible tabs with their icons and labels; drawing is {@link BfTheme#tabs}.
+     */
+    private static void tabs(GuiGraphics g, TabletFrame f, int mouseX, int mouseY) {
         var font = BfTheme.font();
-        g.fill(
-                f.contentX(),
-                f.tabsY(),
-                f.contentX() + f.contentW(),
-                f.tabsY() + f.tabsH(),
-                BfTheme.BG_ELEVATED);
-        for (Tab t : visibleTabs()) {
-            int x = f.contentX() + slot(t) * TAB_W;
-            boolean active = tab == t;
-            boolean hovered = BfTheme.hit(mouseX, mouseY, x, f.tabsY(), TAB_W, f.tabsH());
-            if (hovered || active)
-                g.fill(x, f.tabsY(), x + TAB_W, f.tabsY() + f.tabsH(), BfTheme.CARD);
-            int ink = active ? BfTheme.AMBER : hovered ? BfTheme.TEXT : BfTheme.MUTED;
-            (switch (t) {
+        java.util.List<Tab> visible = visibleTabs();
+        BfIcon[] icons = new BfIcon[visible.size()];
+        String[] labels = new String[visible.size()];
+        for (int i = 0; i < visible.size(); i++) {
+            icons[i] =
+                    switch (visible.get(i)) {
                         case DEPLOY -> BfIcon.TARGET;
                         case MAP -> BfIcon.MAP;
                         case RESULT -> BfIcon.RANK;
                         case MENU -> BfIcon.MENU;
                         case MATCHES -> BfIcon.SQUAD;
                         case STATS -> BfIcon.CHART;
-                    })
-                    .draw(g, x + 10, f.tabsY() + 7, 12, ink);
-            g.drawString(
-                    font,
-                    switch (t) {
+                    };
+            labels[i] =
+                    switch (visible.get(i)) {
                         case DEPLOY -> "ВЫСАДКА";
                         case MAP -> "КАРТА";
                         case RESULT -> "ИТОГ БОЯ";
                         case MENU -> "МЕНЮ";
                         case MATCHES -> "МАТЧИ";
                         case STATS -> "СТАТИСТИКА";
-                    },
-                    x + 30,
-                    f.tabsY() + 9,
-                    ink,
-                    false);
+                    };
         }
-        float x = f.contentX() + TAB_W * tabPosition.value(System.nanoTime());
-        g.pose().pushPose();
-        g.pose().translate(x, f.tabsY() + f.tabsH() - 2, 0);
-        g.fill(0, 0, TAB_W, 2, BfTheme.AMBER);
-        g.pose().popPose();
+        BfTheme.tabs(
+                g,
+                font,
+                icons,
+                labels,
+                Math.max(0, visible.indexOf(tab)),
+                mouseX,
+                mouseY,
+                f.contentX(),
+                f.tabsY(),
+                f.contentW(),
+                TAB_W,
+                f.tabsH(),
+                tabPosition.value(System.nanoTime()));
     }
 
     private static void hint(GuiGraphics g, Minecraft mc, TabletFrame f) {
@@ -786,16 +780,18 @@ public final class Tablet {
     }
 
     private static boolean clickTab(Minecraft mc, TabletFrame f, double mouseX, double mouseY) {
-        int x = f.contentX();
-        for (Tab t : visibleTabs()) {
-            int w = TAB_W;
-            if (BfTheme.hit((int) mouseX, (int) mouseY, x, f.tabsY(), w, f.tabsH())) {
-                setTab(t);
-                return true;
-            }
-            x += w;
-        }
-        return false;
+        int i =
+                BfTheme.tabAt(
+                        (int) mouseX,
+                        (int) mouseY,
+                        visibleTabs().size(),
+                        f.contentX(),
+                        f.tabsY(),
+                        TAB_W,
+                        f.tabsH());
+        if (i < 0) return false;
+        setTab(visibleTabs().get(i));
+        return true;
     }
 
     static boolean scroll(TabletFrame f, double mouseX, double mouseY, double scrollY) {
