@@ -54,7 +54,7 @@ public class TabMenuRenderer {
     }
 
     /** Pages for the current roster; 0 with no rows. */
-    static int pageCount(int screenWidth, int screenHeight) {
+    public static int pageCount(int screenWidth, int screenHeight) {
         return pagesFor(statsCache.size(), rowsPerPage(tableHeight(screenHeight)));
     }
 
@@ -67,7 +67,7 @@ public class TabMenuRenderer {
      * Wheel paging while TAB is held. Returns false with a single page so the wheel keeps its
      * normal behavior (hotbar); the mixin cancels only consumed scrolls.
      */
-    static boolean scrollPages(double y, int pages) {
+    public static boolean scrollPages(double y, int pages) {
         if (pages <= 1 || y == 0) return false;
         tabPage = Math.max(0, Math.min(pages - 1, tabPage + (y > 0 ? -1 : 1)));
         return true;
