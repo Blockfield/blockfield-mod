@@ -19,7 +19,9 @@ public abstract class TabScrollMixin {
         Minecraft mc = Minecraft.getInstance();
         if (window != mc.getWindow().getWindow()
                 || mc.screen != null
-                || !TabMenuRenderer.isTabActive()) return;
+                || !TabMenuRenderer.isTabActive()
+                // tabActive means the room has a table; only a held TAB owns the wheel.
+                || !mc.options.keyPlayerList.isDown()) return;
         int pages =
                 TabMenuRenderer.pageCount(
                         mc.getWindow().getGuiScaledWidth(), mc.getWindow().getGuiScaledHeight());
