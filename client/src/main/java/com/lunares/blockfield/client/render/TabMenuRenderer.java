@@ -1,6 +1,7 @@
 package com.lunares.blockfield.client.render;
 
 import com.lunares.blockfield.client.gui.BfTheme;
+import com.lunares.blockfield.client.gui.screen.MenuLayout;
 import com.lunares.blockfield.network.packet.ScoreDeltaPacket;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -59,8 +60,7 @@ public class TabMenuRenderer {
     }
 
     static int pagesFor(int totalRows, int perPage) {
-        if (totalRows <= 0) return 0;
-        return (totalRows + perPage - 1) / perPage;
+        return MenuLayout.pagesFor(totalRows, perPage);
     }
 
     /**
@@ -69,13 +69,14 @@ public class TabMenuRenderer {
      */
     public static boolean scrollPages(double y, int pages) {
         if (pages <= 1 || y == 0) return false;
-        tabPage = Math.max(0, Math.min(pages - 1, tabPage + (y > 0 ? -1 : 1)));
+        int next = MenuLayout.scrollPage(tabPage, y, pages);
+        if (next == tabPage) return true;
+        tabPage = next;
         return true;
     }
 
     static int currentPage(int pages) {
-        if (pages <= 0) return 0;
-        tabPage = Math.max(0, Math.min(pages - 1, tabPage));
+        tabPage = MenuLayout.clampPage(tabPage, pages);
         return tabPage;
     }
 
@@ -318,7 +319,7 @@ public class TabMenuRenderer {
             rowY += ROW_H;
         }
         if (pages > 1) {
-            String pager = "‹ стр. " + (page + 1) + "/" + pages + " · колесо ›";
+            String pager = MenuLayout.pageLabel(page, pages);
             g.drawCenteredString(
                     mc.font, pager, x + menuWidth / 2, y + menuHeight - 11, BfTheme.MUTED);
         }
