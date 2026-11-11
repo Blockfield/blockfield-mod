@@ -291,6 +291,32 @@ class CpConsumerTest {
     }
 
     @Test
+    void nullAuthorizationEpochParsesAsServiceFrame() {
+        // Service-issued frames carry no account, so CP emits explicit null; the
+        // consumer never reads the epoch, and the frame must not poison the stream.
+        String frame =
+                settingsFrame(42, 42, gameplayValue(false), false)
+                        .replace("\"authorizationEpoch\":3", "\"authorizationEpoch\":null");
+
+        List<CpAck> acks = consumer.onFrame(frame);
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(42, store.loadLkg("gameplay", "*").revision());
+    }
+
+    @Test
+    void missingAuthorizationEpochIsContractErrorNeverSilentDrop() {
+        String frame =
+                settingsFrame(42, 42, gameplayValue(false), false)
+                        .replace(",\"authorizationEpoch\":3", "");
+
+        assertThrows(CpContractException.class, () -> consumer.onFrame(frame));
+        assertEquals(41, store.loadCursor().sequence());
+        assertNull(store.lastTerminal(EPOCH, "op-42"));
+        assertTrue(applier.calls.isEmpty());
+    }
+
+    @Test
     void oldEpochReceiptDoesNotShadowNewEpochFrame() {
         consumer.onSnapshot(snapshotWithCursor(OTHER_EPOCH, GENERATION, 0, 41));
         store.recordTerminal(OTHER_EPOCH, "op-old", 1, CpAck.State.EFFECTIVE, CpAck.Result.OK);

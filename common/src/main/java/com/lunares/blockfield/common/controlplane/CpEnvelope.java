@@ -91,7 +91,12 @@ public final class CpEnvelope {
                         : null;
         String payloadHash = requiredString(frame, "payloadHash");
         if (!payloadHash.matches("[0-9a-f]{64}")) throw new CpContractException("bad payloadHash");
-        long authorizationEpoch = requiredLong(frame, "authorizationEpoch", 0);
+        // Service-issued frames carry no account, so CP emits explicit null; the
+        // consumer never reads the epoch, and 0 keeps the primitive as the sentinel.
+        long authorizationEpoch =
+                frame.has("authorizationEpoch") && frame.get("authorizationEpoch").isJsonNull()
+                        ? 0
+                        : requiredLong(frame, "authorizationEpoch", 0);
         OffsetDateTime expiresAt;
         try {
             expiresAt = OffsetDateTime.parse(requiredString(frame, "expiresAt"));
