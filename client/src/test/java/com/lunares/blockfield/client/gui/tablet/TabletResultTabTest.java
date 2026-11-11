@@ -70,9 +70,20 @@ class TabletResultTabTest {
         // availH=100 px: 6 rows without the pager, 5 once it is drawn.
         assertEquals(6, TabletResultTab.perPage(100, false));
         assertEquals(5, TabletResultTab.perPage(100, true));
+        // The pinned own row reserves one line: 4 data rows per paged page.
+        assertEquals(4, TabletResultTab.dataPerPage(100, true, true));
         assertEquals(3, TabletResultTab.pageCount(15, 100));
         assertEquals(4, TabletResultTab.pageCount(20, 100));
         assertEquals(1, TabletResultTab.pageCount(5, 100));
+    }
+
+    @Test
+    void pinnedPageCountReservesOwnRow() {
+        List<MatchResult.Player> roster = twentyPlayers();
+        // 15 rows, own row pinned: 5 data rows unpaged check, then 4 per page.
+        assertEquals(4, TabletResultTab.pageCount(15, 100, roster.get(0)));
+        assertEquals(5, TabletResultTab.pageCount(20, 100, roster.get(17)));
+        assertEquals(1, TabletResultTab.pageCount(5, 100, roster.get(0)));
     }
 
     @Test
@@ -83,10 +94,28 @@ class TabletResultTabTest {
         assertEquals(5, first.size());
         assertEquals("p0", first.get(0).name());
         assertEquals("u17", first.get(4).uuid());
-        List<MatchResult.Player> last = TabletResultTab.visiblePage(roster, me, 100, 3);
-        assertEquals(5, last.size());
+        List<MatchResult.Player> last = TabletResultTab.visiblePage(roster, me, 100, 4);
+        assertEquals(4, last.size());
         assertTrue(last.contains(me));
-        assertEquals("p15", last.get(0).name());
+        assertEquals("p16", last.get(0).name());
+    }
+
+    @Test
+    void pinnedRowDisplacesNoParticipant() {
+        // Bot review on #60: replacing the last row per page hid participants 4, 9
+        // and 14 with 20 rows, 5 per page and the own row at index 17.
+        List<MatchResult.Player> roster = twentyPlayers();
+        MatchResult.Player me = roster.get(17);
+        int pages = TabletResultTab.pageCount(20, 100, me);
+        List<MatchResult.Player> seen = new ArrayList<>();
+        for (int p = 0; p < pages; p++) {
+            List<MatchResult.Player> shown = TabletResultTab.visiblePage(roster, me, 100, p);
+            assertTrue(shown.contains(me), "own row pinned on page " + p);
+            assertTrue(shown.size() <= 5, "fits the page: " + shown.size());
+            for (MatchResult.Player row : shown) if (!seen.contains(row)) seen.add(row);
+        }
+        assertEquals(20, seen.size());
+        for (int i = 0; i < 20; i++) assertTrue(seen.contains(roster.get(i)), "p" + i + " shown");
     }
 
     @Test

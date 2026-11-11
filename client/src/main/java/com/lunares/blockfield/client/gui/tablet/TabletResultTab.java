@@ -63,28 +63,44 @@ public final class TabletResultTab {
         return Math.max(1, (availH - ROSTER_HEAD_H - (paged ? ROSTER_PAGER_H : 0)) / ROSTER_ROW_H);
     }
 
+    /**
+     * Data rows per roster page; with the own row pinned every paged page keeps one line free for
+     * it, so no participant is ever displaced (a shared-block slice alone would cut one row per
+     * page). Single-row fits keep the old priority: the own row wins.
+     */
+    static int dataPerPage(int availH, boolean paged, boolean pin) {
+        int per = perPage(availH, paged);
+        return pin ? Math.max(1, per - 1) : per;
+    }
+
     /** Page count for a roster of {@code total} rows in {@code availH} px. */
-    static int pageCount(int total, int availH) {
-        int pages = MenuLayout.pagesFor(total, perPage(availH, false));
-        if (pages > 1) pages = MenuLayout.pagesFor(total, perPage(availH, true));
+    static int pageCount(int total, int availH, MatchResult.Player me) {
+        int pages = MenuLayout.pagesFor(total, dataPerPage(availH, false, me != null));
+        if (pages > 1) pages = MenuLayout.pagesFor(total, dataPerPage(availH, true, me != null));
         return pages;
     }
 
+    /** Page count for a roster of {@code total} rows in {@code availH} px. */
+    static int pageCount(int total, int availH) {
+        return pageCount(total, availH, null);
+    }
+
     /**
-     * Page slice of the roster with the own row pinned to the last line when it is cut from the
-     * current page (same guarantee as the old truncation). Pure helper for tests and render.
+     * Page slice of the roster with the own row pinned to the last line on every page (same
+     * guarantee as the old truncation, but on a reserved line: every participant stays on exactly
+     * one page). Pure helper for tests and render.
      */
     static List<MatchResult.Player> visiblePage(
             List<MatchResult.Player> roster, MatchResult.Player me, int availH, int page) {
-        int pages = pageCount(roster.size(), availH);
+        int pages = pageCount(roster.size(), availH, me);
         int at = MenuLayout.clampPage(page, pages);
-        int per = perPage(availH, pages > 1);
+        boolean pin = me != null && pages > 1;
+        int per = dataPerPage(availH, pages > 1, pin);
         int from = at * per;
         int to = Math.min(roster.size(), from + per);
         if (from >= to) return List.of();
         List<MatchResult.Player> shown = new ArrayList<>(roster.subList(from, to));
-        if (me != null && (roster.indexOf(me) < from || roster.indexOf(me) >= to))
-            shown.set(shown.size() - 1, me);
+        if (pin && (roster.indexOf(me) < from || roster.indexOf(me) >= to)) shown.add(me);
         return shown;
     }
 
@@ -650,7 +666,7 @@ public final class TabletResultTab {
 
         int rowH = ROSTER_ROW_H;
         List<MatchResult.Player> roster = result.roster();
-        int pages = pageCount(roster.size(), h);
+        int pages = pageCount(roster.size(), h, result.me());
         lastPages = Math.max(1, pages);
         resultPage = MenuLayout.clampPage(resultPage, lastPages);
         List<MatchResult.Player> shown = visiblePage(roster, result.me(), h, resultPage);
