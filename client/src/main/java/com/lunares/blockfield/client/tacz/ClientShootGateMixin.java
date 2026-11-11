@@ -26,7 +26,7 @@ public abstract class ClientShootGateMixin {
         // First shot after a draw: hold until the server draw is observed, never predict into a
         // certain IS_DRAWING refusal (see FirstShotDrawGuard).
         else if (FirstShotDrawGuard.shouldBlockShoot(System.nanoTime(), synDrawCoolDown())) {
-            FirstShotDrawGuard.noteFireAttempt(System.nanoTime());
+            FirstShotDrawGuard.noteFireAttempt(clientTick());
             cir.setReturnValue(ShootResult.IS_DRAWING);
         } else {
             // A real press that is not held supersedes any queued tap: the player is shooting
@@ -51,7 +51,7 @@ public abstract class ClientShootGateMixin {
         // touching the queued tap. A real press that is not held supersedes it instead.
         else if (start
                 && FirstShotDrawGuard.shouldBlockShoot(System.nanoTime(), synDrawCoolDown())) {
-            FirstShotDrawGuard.noteFireAttempt(System.nanoTime());
+            FirstShotDrawGuard.noteFireAttempt(clientTick());
             cir.setReturnValue(false);
         } else if (start) {
             FirstShotDrawGuard.dropQueuedTap();
@@ -62,5 +62,12 @@ public abstract class ClientShootGateMixin {
         var player = Minecraft.getInstance().player;
         if (player == null) return 0;
         return IGunOperator.fromLivingEntity(player).getSynDrawCoolDown();
+    }
+
+    /** Vanilla client tick for the rebind window; 0 when no level is loaded. */
+    private static long clientTick() {
+        var player = Minecraft.getInstance().player;
+        if (player == null || player.level() == null) return 0;
+        return player.level().getGameTime();
     }
 }
