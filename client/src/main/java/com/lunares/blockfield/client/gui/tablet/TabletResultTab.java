@@ -3,6 +3,7 @@ package com.lunares.blockfield.client.gui.tablet;
 import com.google.gson.JsonObject;
 import com.lunares.blockfield.client.gui.BfIcon;
 import com.lunares.blockfield.client.gui.BfTheme;
+import com.lunares.blockfield.client.gui.screen.MenuLayout;
 import com.lunares.blockfield.client.render.HudRenderer;
 import com.lunares.blockfield.client.render.PointMarkerRenderer;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -36,12 +37,88 @@ public final class TabletResultTab {
 
     private static final int PAD = 14;
 
+    /** Roster table geometry (shared paging block in {@link MenuLayout}, same as TAB). */
+    static final int ROSTER_ROW_H = 14;
+
+    static final int ROSTER_HEAD_H = 12;
+    static final int ROSTER_PAGER_H = 14;
+
     private static MatchResult result;
     private static JsonObject zone;
     private static List<PointMarkerRenderer.Marker> points = List.of();
     private static long receivedAt;
     private static long startedAt = -1;
     private static boolean autoOpened;
+
+    /** Current roster page; the render clamps it, the tablet owns the wheel/keys. */
+    private static int resultPage;
+
+    private static int lastPages = 1;
+
+    /**
+     * Rows per roster page; the pager line reserves height only once it has to be drawn (same
+     * pattern as class/spawn page buttons).
+     */
+    static int perPage(int availH, boolean paged) {
+        return Math.max(1, (availH - ROSTER_HEAD_H - (paged ? ROSTER_PAGER_H : 0)) / ROSTER_ROW_H);
+    }
+
+    /**
+     * Data rows per roster page; with the own row pinned every paged page keeps one line free for
+     * it, so no participant is ever displaced (a shared-block slice alone would cut one row per
+     * page). Single-row fits keep the old priority: the own row wins.
+     */
+    static int dataPerPage(int availH, boolean paged, boolean pin) {
+        int per = perPage(availH, paged);
+        return pin ? Math.max(1, per - 1) : per;
+    }
+
+    /** Page count for a roster of {@code total} rows in {@code availH} px. */
+    static int pageCount(int total, int availH, MatchResult.Player me) {
+        int pages = MenuLayout.pagesFor(total, dataPerPage(availH, false, me != null));
+        if (pages > 1) pages = MenuLayout.pagesFor(total, dataPerPage(availH, true, me != null));
+        return pages;
+    }
+
+    /** Page count for a roster of {@code total} rows in {@code availH} px. */
+    static int pageCount(int total, int availH) {
+        return pageCount(total, availH, null);
+    }
+
+    /**
+     * Page slice of the roster with the own row pinned to the last line on every page (same
+     * guarantee as the old truncation, but on a reserved line: every participant stays on exactly
+     * one page). Pure helper for tests and render.
+     */
+    static List<MatchResult.Player> visiblePage(
+            List<MatchResult.Player> roster, MatchResult.Player me, int availH, int page) {
+        int pages = pageCount(roster.size(), availH, me);
+        int at = MenuLayout.clampPage(page, pages);
+        boolean pin = me != null && pages > 1;
+        int per = dataPerPage(availH, pages > 1, pin);
+        int from = at * per;
+        int to = Math.min(roster.size(), from + per);
+        if (from >= to) return List.of();
+        List<MatchResult.Player> shown = new ArrayList<>(roster.subList(from, to));
+        if (pin && (roster.indexOf(me) < from || roster.indexOf(me) >= to)) shown.add(me);
+        return shown;
+    }
+
+    /** Wheel paging on the results tab (tablet-owned input); false with a single page. */
+    static boolean scroll(double y) {
+        if (result == null || y == 0 || lastPages <= 1) return false;
+        int next = MenuLayout.scrollPage(resultPage, y, lastPages);
+        if (next == resultPage) return true;
+        resultPage = next;
+        return true;
+    }
+
+    /** PageUp/PageDown stepping on the results tab (tablet-owned input). */
+    static boolean pageBy(int delta) {
+        if (result == null || lastPages <= 1) return false;
+        resultPage = MenuLayout.clampPage(resultPage + delta, lastPages);
+        return true;
+    }
 
     public static void accept(JsonObject json) {
         Minecraft mc = Minecraft.getInstance();
@@ -52,6 +129,8 @@ public final class TabletResultTab {
         receivedAt = System.nanoTime();
         startedAt = -1;
         autoOpened = false;
+        resultPage = 0;
+        lastPages = 1;
     }
 
     public static boolean available() {
@@ -81,6 +160,8 @@ public final class TabletResultTab {
         zone = null;
         points = List.of();
         startedAt = -1;
+        resultPage = 0;
+        lastPages = 1;
     }
 
     static String subtitle() {
@@ -583,10 +664,13 @@ public final class TabletResultTab {
         right(g, font, "У / С", colKd, y, BfTheme.MUTED_DARK, head);
         if (pointColumn) right(g, font, "НА ТОЧКАХ", colTime, y, BfTheme.MUTED_DARK, head);
 
-        int rowH = 14;
+        int rowH = ROSTER_ROW_H;
         List<MatchResult.Player> roster = result.roster();
-        List<MatchResult.Player> shown = result.visibleRoster(Math.max(1, (h - 12) / rowH));
-        int rowY = y + 12;
+        int pages = pageCount(roster.size(), h, result.me());
+        lastPages = Math.max(1, pages);
+        resultPage = MenuLayout.clampPage(resultPage, lastPages);
+        List<MatchResult.Player> shown = visiblePage(roster, result.me(), h, resultPage);
+        int rowY = y + ROSTER_HEAD_H;
         for (int i = 0; i < shown.size(); i++) {
             MatchResult.Player p = shown.get(i);
             float a = fade(t, 3.1f + i * 0.07f, 0.3f);
@@ -632,6 +716,15 @@ public final class TabletResultTab {
                 right(g, font, MatchResult.clock(p.pointTime()), colTime + dx, ty, ink, a);
             rowY += rowH;
         }
+        if (lastPages > 1)
+            centered(
+                    g,
+                    font,
+                    MenuLayout.pageLabel(resultPage, lastPages),
+                    x + w / 2,
+                    y + h - 10,
+                    BfTheme.MUTED,
+                    head);
     }
 
     // ---- «железо» планшета поверх экрана: мерцание включения, скан, строки развёртки ----

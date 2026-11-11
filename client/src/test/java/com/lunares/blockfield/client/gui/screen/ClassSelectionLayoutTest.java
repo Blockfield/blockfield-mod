@@ -58,10 +58,10 @@ class ClassSelectionLayoutTest {
     @Test
     void tabCyclesForwardAndBack() {
         List<String> order = List.of("a:0", "b:1", "page:next");
-        assertEquals("a:0", ClassSelectionScreen.cycleFocus(order, null, true));
-        assertEquals("b:1", ClassSelectionScreen.cycleFocus(order, "a:0", true));
-        assertEquals("a:0", ClassSelectionScreen.cycleFocus(order, "b:1", false));
-        assertEquals("page:next", ClassSelectionScreen.cycleFocus(order, "a:0", false));
+        assertEquals("a:0", MenuLayout.cycleFocus(order, null, true));
+        assertEquals("b:1", MenuLayout.cycleFocus(order, "a:0", true));
+        assertEquals("a:0", MenuLayout.cycleFocus(order, "b:1", false));
+        assertEquals("page:next", MenuLayout.cycleFocus(order, "a:0", false));
     }
 
     @Test

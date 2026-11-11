@@ -809,6 +809,8 @@ public final class Tablet {
                     0,
                     scrollY);
         }
+        if (tab == Tab.RESULT && f.inContent(mouseX, mouseY))
+            return TabletResultTab.scroll(scrollY);
         return tab == Tab.MAP && TabletMapTab.zoom(mouseX, mouseY, scrollY, f);
     }
 
@@ -832,6 +834,11 @@ public final class Tablet {
     static boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (tab == Tab.DEPLOY)
             return deployment != null && deployment.keyPressed(keyCode, scanCode, modifiers);
+        if (tab == Tab.RESULT) {
+            if (keyCode == GLFW.GLFW_KEY_PAGE_UP) return TabletResultTab.pageBy(-1);
+            if (keyCode == GLFW.GLFW_KEY_PAGE_DOWN) return TabletResultTab.pageBy(1);
+            return false;
+        }
         return menu != null && isMenuTab() && menu.keyPressed(keyCode, scanCode, modifiers);
     }
 }
