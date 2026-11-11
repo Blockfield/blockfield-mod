@@ -40,9 +40,11 @@ import org.slf4j.LoggerFactory;
  * settle. The tap has no time limit, but any tick with attacks disallowed (tablet, pre-match
  * no-attacks) drops it via {@link #noteAttacksBlocked}, so it can never fire when such a window
  * ends. Otherwise it is dropped — never fired — on death or respawn, when a different gun is drawn
- * (a re-draw of the same gun rebinds it to the new draw id), when the gun is gone, when the screen
- * changes, when a new fire press is no longer held (the player is shooting normally, so the old tap
- * is superseded), and when TaCZ performs a real shot (which would double with the replay).
+ * before its draw is observed (a confirmed tap rebinds to the new draw only when the press raced
+ * the redraw — see {@link #REBIND_WINDOW_TICKS} — like a same-gun re-draw; a later deliberate
+ * switch drops it), when the gun is gone, when the screen changes, when a new fire press is no
+ * longer held (the player is shooting normally, so the old tap is superseded), and when TaCZ
+ * performs a real shot (which would double with the replay).
  */
 public final class FirstShotDrawGuard {
     private static final Logger LOGGER = LoggerFactory.getLogger(FirstShotDrawGuard.class);
@@ -106,6 +108,15 @@ public final class FirstShotDrawGuard {
     private static long tapDrawId = -1;
 
     /**
+     * Client tick of the tap {@link #noteFireAttempt} queued, or -1 when no tap is queued. A
+     * confirmed tap rebinds to a different gun's redraw only while this press is fresh (see {@link
+     * #onDrawToGun}): the race is near-simultaneous inputs within few ticks, while a deliberate
+     * switch follows a release ticks later. Wall time must not decide: a stalled tick runs no ticks
+     * while stalled, so a genuine race stays within the window however long it lasts.
+     */
+    private static long tapQueuedAtTick = -1;
+
+    /**
      * Draw id of the tap the last successful {@link #pollPendingShot} handed out, or -1. A refused
      * replay ({@link #noteReplayMissed}) re-queues exactly this tap — never a newer rebind or a tap
      * dropped since.
@@ -115,15 +126,30 @@ public final class FirstShotDrawGuard {
     private FirstShotDrawGuard() {}
 
     /**
+     * Race window for rebinding a confirmed tap to a different gun's redraw, in client ticks
+     * ({@code level.getGameTime()} at the call sites). A press and a redraw within few ticks are
+     * one racing input burst; a deliberate switch needs a release plus a keypress ticks later, so
+     * an older tap dies with its draw instead of firing the new gun unrequested. Ticks, not wall
+     * time: a stalled tick runs no ticks while stalled, so a genuine race survives any stall.
+     */
+    static final long REBIND_WINDOW_TICKS = 2;
+
+    /**
      * A local draw to a gun started now; the server draw for it is not observed yet. A draw of a
      * different gun means a new gun context: a tap queued for the previous one is dropped, never
-     * replayed for the new gun. A re-draw of the same gun (deploy double draw) rebinds the queued
-     * tap to the new draw id: it waits for the new draw's own start instead of firing for the
-     * superseded one.
+     * replayed for the new gun — unless its draw was already server-observed (a confirmed press)
+     * and the press landed within {@link #REBIND_WINDOW_TICKS} client ticks of this draw, so it
+     * raced the redraw instead of preceding a deliberate switch: then it rebinds to the new draw
+     * and waits for the new draw's own start, like a same-gun re-draw. A re-draw of the same gun
+     * (deploy double draw) rebinds the queued tap to the new draw id: it waits for the new draw's
+     * own start instead of firing for the superseded one.
      *
-     * @param weaponKey gun id + slot of the drawn gun, from the caller; only a change drops the tap
+     * @param weaponKey gun id + slot of the drawn gun, from the caller; only a recent confirmed tap
+     *     survives a change, an older or unconfirmed one is dropped
+     * @param tick current client tick ({@code level.getGameTime()}), for the rebind window
      */
-    public static synchronized void onDrawToGun(long nowNs, long drawTimeMs, String weaponKey) {
+    public static synchronized void onDrawToGun(
+            long nowNs, long drawTimeMs, String weaponKey, long tick) {
         drawSeq++;
         armedAtNs = nowNs;
         boundNs = Math.max(0, drawTimeMs) * 1_000_000L + SLACK_NS;
@@ -131,7 +157,21 @@ public final class FirstShotDrawGuard {
         cooldownZeroSinceNs = -1;
         lastPolledDrawId = -1;
         if (!Objects.equals(armedWeapon, weaponKey)) {
-            dropQueuedTap();
+            long tapAgeTicks = tick - tapQueuedAtTick;
+            if (tapState == TapState.DRAW_SEEN
+                    && tapQueuedAtTick >= 0
+                    && tapAgeTicks >= 0
+                    && tapAgeTicks <= REBIND_WINDOW_TICKS) {
+                // Confirmed press racing the redraw: the tap landed on the same or previous
+                // tick. Rebind to the new draw and wait for its own start (a stale settle or an
+                // unsynced start must not fire it early) instead of losing it. An older tap
+                // means the player released and switched deliberately: it dies with its draw.
+                tapDrawId = drawSeq;
+                tapState = TapState.QUEUED;
+                LOGGER.debug("First-shot tap rebound to the new draw");
+            } else {
+                dropQueuedTap();
+            }
         } else if (tapState != TapState.NONE) {
             tapDrawId = drawSeq;
             tapState = TapState.QUEUED;
@@ -197,10 +237,13 @@ public final class FirstShotDrawGuard {
      * #pollPendingShot}. Call only for real attempts (a {@code shoot()} call, or a {@code
      * chargeShoot} with the trigger down) — never for TaCZ's idle per-tick polls with a released
      * trigger, which must not queue a shot the user never asked for.
+     *
+     * @param tick current client tick ({@code level.getGameTime()}), for the rebind window
      */
-    public static synchronized void noteFireAttempt(long nowNs) {
+    public static synchronized void noteFireAttempt(long tick) {
         if (tapState == TapState.NONE) {
             tapDrawId = drawSeq;
+            tapQueuedAtTick = tick;
             tapState = seenSeq == drawSeq ? TapState.DRAW_SEEN : TapState.QUEUED;
             LOGGER.debug("First-shot hold: tap queued for replay");
         }
@@ -281,6 +324,7 @@ public final class FirstShotDrawGuard {
             LOGGER.debug("First-shot replay dropped: queued tap discarded");
         tapState = TapState.NONE;
         tapDrawId = -1;
+        tapQueuedAtTick = -1;
     }
 
     /** Clears the armed hold and any queued tap (death, respawn, logout). */
