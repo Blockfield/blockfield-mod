@@ -51,6 +51,9 @@ public final class CpSseClient {
     private static final long BACKOFF_MAX_MILLIS = 30_000;
     private static final long POLL_MILLIS = 200;
 
+    /** One poison frame replays every backoff; repeats of its rejection stay silent this long. */
+    static final long CONTRACT_WARN_SUPPRESS_MILLIS = 5 * 60 * 1_000;
+
     private final String baseUrl;
     private final String agentId;
     private final String bearer;
@@ -61,6 +64,9 @@ public final class CpSseClient {
     private final HttpClient http;
     private final Duration idleTimeout;
     private final Sleeper sleeper;
+
+    private String lastContractMessage;
+    private long lastContractWarnMillis;
 
     public CpSseClient(
             String baseUrl,
@@ -135,10 +141,11 @@ public final class CpSseClient {
     /**
      * Snapshot, then stream until {@code stop} is set. Io failures back off and resume from the
      * durable cursor; any resync (epoch/generation/gap/conflict) re-snapshots before resuming. A
-     * poison frame that fails contract parsing is warned and retried with backoff, never fatal: the
-     * cursor does not advance past it, so it replays until an operator reconciles it. Keep-alive
-     * comments refresh liveness: a connection that carried any line resumes without growing the
-     * backoff; only a totally silent close backs off. Returns when stopped.
+     * poison frame that fails contract parsing is logged once as one line without a stack trace
+     * (repeats rate-limited) and retried with backoff, never fatal: the cursor does not advance
+     * past it, so it replays until an operator reconciles it. Keep-alive comments refresh liveness:
+     * a connection that carried any line resumes without growing the backoff; only a totally silent
+     * close backs off. Returns when stopped.
      */
     public void run(AtomicBoolean stop) {
         long backoff = BACKOFF_MIN_MILLIS;
@@ -164,6 +171,10 @@ public final class CpSseClient {
                 needsSnapshot = true;
                 if (!sleeper.sleep(backoff, stop)) return;
                 backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
+            } catch (CpContractException e) {
+                warnContractOnce("control-plane frame rejected, retrying: " + e.getMessage());
+                if (!sleeper.sleep(backoff, stop)) return;
+                backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
             } catch (RuntimeException e) {
                 reporter.warn("control-plane consumer failed, retrying", e);
                 if (!sleeper.sleep(backoff, stop)) return;
@@ -178,6 +189,22 @@ public final class CpSseClient {
                 backoff = Math.min(backoff * 2, BACKOFF_MAX_MILLIS);
             }
         }
+    }
+
+    /**
+     * One line per rejected frame, without a stack trace: repeats of the same rejection stay silent
+     * for {@link #CONTRACT_WARN_SUPPRESS_MILLIS}. A poison frame replays every backoff, so an
+     * unthrottled warn would log a full stack ~120 times an hour.
+     */
+    void warnContractOnce(String message) {
+        long now = clock.millis();
+        if (message.equals(lastContractMessage)
+                && now - lastContractWarnMillis < CONTRACT_WARN_SUPPRESS_MILLIS) {
+            return;
+        }
+        lastContractMessage = message;
+        lastContractWarnMillis = now;
+        reporter.info(message);
     }
 
     private void resnapshot() throws IOException, InterruptedException {

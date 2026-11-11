@@ -367,6 +367,72 @@ class CpSseClientTest {
     }
 
     @Test
+    void poisonFrameLogsOneLineWithoutStack() {
+        eventsBody =
+                cursor ->
+                        "id: "
+                                + EPOCH
+                                + ":42\nevent: control\ndata: "
+                                + frame().replace("\"schema\":2", "\"schema\":3")
+                                + "\n\n";
+        CpStore store = new CpStore(directory.resolve("cp-poison-once"));
+        CpConsumer consumer =
+                new CpConsumer(
+                        store,
+                        (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                        CLOCK);
+        String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
+        List<String> infos = new CopyOnWriteArrayList<>();
+        List<String> warns = new CopyOnWriteArrayList<>();
+        CpSseClient.Reporter recording =
+                new CpSseClient.Reporter() {
+                    @Override
+                    public void info(String message) {
+                        infos.add(message);
+                    }
+
+                    @Override
+                    public void warn(String message, Throwable error) {
+                        warns.add(
+                                message
+                                        + "|"
+                                        + (error == null
+                                                ? "null"
+                                                : error.getClass().getSimpleName()));
+                    }
+                };
+        Clock fixed =
+                Clock.fixed(
+                        java.time.Instant.parse("2026-11-06T12:00:00Z"), java.time.ZoneOffset.UTC);
+        AtomicBoolean stop = new AtomicBoolean();
+        AtomicInteger sleeps = new AtomicInteger();
+        CpSseClient client =
+                new CpSseClient(
+                        baseUrl,
+                        "game-1",
+                        "bearer",
+                        store,
+                        consumer,
+                        recording,
+                        fixed,
+                        CpSseClient.IDLE_TIMEOUT,
+                        (millis, stopFlag) -> {
+                            if (sleeps.incrementAndGet() >= 3) {
+                                stopFlag.set(true);
+                                return false;
+                            }
+                            return true;
+                        });
+
+        client.run(stop);
+
+        assertEquals(3, sleeps.get(), "poison frame did not retry with backoff");
+        assertEquals(1, infos.size(), "rejected frame must log one line, not one per retry");
+        assertTrue(warns.isEmpty(), "rejected frame must not log a stack trace per retry");
+        assertEquals(41, store.loadCursor().sequence());
+    }
+
+    @Test
     void resyncLoopBacksOff() {
         eventsStatus = 409;
         CpStore store = new CpStore(directory.resolve("cp-backoff"));
