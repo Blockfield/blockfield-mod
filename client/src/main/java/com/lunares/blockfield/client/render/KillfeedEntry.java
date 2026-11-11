@@ -72,26 +72,30 @@ public final class KillfeedEntry {
         boolean drawn =
                 switch (cause) {
                     case GUN -> gunDraw.draw(iconX, y - 1, ICON_W, ROW_H);
-                    case KNIFE ->
-                            ItemSilhouette.draw(
-                                    graphics,
-                                    "knife",
-                                    ItemSilhouette.Style.FLAT,
-                                    iconX,
-                                    y - 1,
-                                    ICON_W,
-                                    ROW_H,
-                                    0.5f);
-                    case EXPLOSIVE ->
-                            ItemSilhouette.draw(
-                                    graphics,
-                                    "frag",
-                                    ItemSilhouette.Style.FLAT,
-                                    iconX,
-                                    y - 1,
-                                    ICON_W,
-                                    ROW_H,
-                                    0.5f);
+                    case KNIFE -> {
+                        ItemSilhouette.draw(
+                                graphics,
+                                "knife",
+                                ItemSilhouette.Style.FLAT,
+                                iconX,
+                                y - 1,
+                                ICON_W,
+                                ROW_H,
+                                0.5f);
+                        yield true;
+                    }
+                    case EXPLOSIVE -> {
+                        ItemSilhouette.draw(
+                                graphics,
+                                "frag",
+                                ItemSilhouette.Style.FLAT,
+                                iconX,
+                                y - 1,
+                                ICON_W,
+                                ROW_H,
+                                0.5f);
+                        yield true;
+                    }
                     case ENVIRONMENT -> false;
                 };
         if (!drawn) neutral(graphics, iconX + ICON_W / 2, y + ROW_H / 2 - 1);
