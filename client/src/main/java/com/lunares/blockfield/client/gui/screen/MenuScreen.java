@@ -1140,7 +1140,8 @@ public class MenuScreen extends Screen {
                 MenuLayout.cardPadding(it.compactCard()),
                 it.compactCard(),
                 enabled,
-                hover(it, l));
+                hover(it, l),
+                bool(b, "selected", false));
     }
 
     private void drawButton(GuiGraphics g, Item it, Layout l) {
@@ -1162,7 +1163,8 @@ public class MenuScreen extends Screen {
                 enabled,
                 bool(b, "primary", false),
                 bool(b, "destructive", false),
-                hover(it, l));
+                hover(it, l),
+                bool(b, "selected", false));
     }
 
     private void activate(JsonObject button) {

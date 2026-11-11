@@ -472,8 +472,9 @@ public final class BfTheme {
             int pad,
             boolean compact,
             boolean enabled,
-            float hover) {
-        selectSurface(g, x, y, w, h, enabled, false, hover, false);
+            float hover,
+            boolean selected) {
+        selectSurface(g, x, y, w, h, enabled, selected, hover, false);
         float iconSize = compact ? 20 : 30;
         icon.draw(
                 g, x + pad, y + pad, iconSize, enabled ? mix(TEXT_SECONDARY, AMBER, hover) : MUTED);
@@ -527,8 +528,9 @@ public final class BfTheme {
             boolean enabled,
             boolean primary,
             boolean destructive,
-            float hover) {
-        selectSurface(g, x, y, w, h, enabled, false, hover, destructive);
+            float hover,
+            boolean selected) {
+        selectSurface(g, x, y, w, h, enabled, selected, hover, destructive);
         if (primary && enabled && !destructive)
             g.fill(x, y, x + w, y + h, mix(AMBER, AMBER_BRIGHT, hover));
         int ink = !enabled ? MUTED : destructive ? DANGER : primary ? BG : TEXT;
