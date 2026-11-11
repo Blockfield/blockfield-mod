@@ -164,6 +164,8 @@ public class HudRenderer {
                 blueTickets = blue;
                 shouldRenderMainHud = true;
             }
+            // Deathmatch sends no tickets: the FFA flag alone activates the top bar.
+            if (UiJson.bool(latestUIData, "ffa", false)) shouldRenderMainHud = true;
             if (latestUIData.has("pts")) {
                 PointMarkerRenderer.updatePoints(UiJson.arr(latestUIData, "pts"));
             }
@@ -180,6 +182,41 @@ public class HudRenderer {
         return left / 60 + ":" + String.format("%02d", left % 60);
     }
 
+    /**
+     * «Фраги 7/30» for FFA, or null when the server did not send the new fields yet (an old server
+     * still feeds the bottom line, so no top bar is drawn instead of a wrong one).
+     */
+    static String ffaScore(JsonObject ui) {
+        int frags = UiJson.integer(ui, "frags", -1);
+        int limit = UiJson.integer(ui, "killLimit", -1);
+        if (frags < 0 || limit <= 0) return null;
+        return frags + "/" + limit;
+    }
+
+    /**
+     * FFA right cell: «name kills», «лидеры: N по K», «лидера нет», or null without the new server
+     * fields.
+     */
+    static String ffaLeader(JsonObject ui) {
+        if (ui == null || !ui.has("leaderName")) return null;
+        int kills = UiJson.integer(ui, "leaderKills", 0);
+        if (kills <= 0) return "лидера нет";
+        int tied = UiJson.integer(ui, "leaderTied", 1);
+        if (tied > 1) return "лидеры: " + tied + " по " + kills;
+        String name = UiJson.str(ui, "leaderName", "");
+        return name.isEmpty() ? "лидера нет" : name + " " + kills;
+    }
+
+    /** Landing-protection seconds from the UI packet; 0 hides the shared chip. */
+    static int protectionSecs(JsonObject ui) {
+        return Math.max(0, UiJson.integer(ui, "protection", 0));
+    }
+
+    /** Unified landing-protection wording for every mode; the seconds carry the information. */
+    static String protectionText(int secs) {
+        return "Защита · " + secs + " с";
+    }
+
     private static void onRenderGui(GuiGraphics graphics, DeltaTracker deltaTracker) {
         Minecraft mc = Minecraft.getInstance();
         WeaponHud.render(graphics);
@@ -189,65 +226,90 @@ public class HudRenderer {
         if (!shouldRenderMainHud) return;
 
         int centerX = screenWidth / 2;
-        int yPos = 6;
-        int barHeight = 20;
+        int yPos = HudTopBar.Y;
 
-        // Calculate dynamic dimensions
-        String redStr = String.valueOf(redTickets);
-        String blueStr = String.valueOf(blueTickets);
-        int redWidth = mc.font.width(redStr);
-        int blueWidth = mc.font.width(blueStr);
+        int avail = HudTopBar.sideAvail(screenWidth);
+        String left;
+        int leftColor;
+        String center;
+        String right;
+        int rightColor;
+        int centerW = 0;
 
-        int count = 0;
-        int size = 11;
-        int gap = 6;
-        int pointsWidth = 0;
+        boolean ffa = UiJson.bool(latestUIData, "ffa", false);
         JsonArray ptsArray = null;
+        if (ffa) {
+            String score = latestUIData == null ? null : ffaScore(latestUIData);
+            String time = latestUIData == null ? null : matchTime(latestUIData);
+            String leader = latestUIData == null ? null : ffaLeader(latestUIData);
+            // An old server still feeds the bottom actionbar line: draw no top bar instead of a
+            // wrong one.
+            if (score == null || time == null || leader == null) return;
+            left = score;
+            leftColor = BfTheme.RED_TEAM;
+            center = time;
+            right = BfTheme.ellipsize(mc.font, leader, avail);
+            rightColor = BfTheme.AMBER;
+        } else {
+            // Calculate dynamic dimensions
+            String redStr = String.valueOf(redTickets);
+            String blueStr = String.valueOf(blueTickets);
+            int count = 0;
 
-        if (latestUIData != null && latestUIData.has("pts")) {
-            ptsArray = UiJson.arr(latestUIData, "pts");
-            count = ptsArray.size();
-            if (count > 0) {
-                pointsWidth = count * size + (count - 1) * gap;
+            if (latestUIData != null && latestUIData.has("pts")) {
+                ptsArray = UiJson.arr(latestUIData, "pts");
+                count = ptsArray.size();
+                if (count > 0) centerW = HudTopBar.pointsWidth(count);
             }
+
+            // Лимит времени есть только в режимах без точек (командный бой, снайперы): таймер
+            // занимает их место в центре.
+            String timeStr = count == 0 ? matchTime(latestUIData) : null;
+            if (timeStr != null) {
+                int limit = UiJson.integer(latestUIData, "killLimit", -1);
+                if (limit > 0) timeStr += " · до " + limit;
+                centerW = mc.font.width(timeStr);
+            }
+
+            left = BfTheme.ellipsize(mc.font, redStr, avail);
+            leftColor = BfTheme.RED_TEAM;
+            center = timeStr;
+            right = BfTheme.ellipsize(mc.font, blueStr, avail);
+            rightColor = BfTheme.BLUE_TEAM;
         }
 
-        // Лимит времени есть только в режимах без точек (командный бой, снайперы): таймер занимает
-        // их место в центре.
-        String timeStr = count == 0 ? matchTime(latestUIData) : null;
-        if (timeStr != null) pointsWidth = mc.font.width(timeStr);
+        var bar =
+                HudTopBar.layout(
+                        screenWidth,
+                        mc.font.width(left),
+                        center == null ? centerW : mc.font.width(center),
+                        mc.font.width(right));
+        HudTopBar.render(graphics, mc.font, bar, left, leftColor, center, right, rightColor);
+        barHalfWidth = bar.half();
+        topStackBottom = bar.bottom();
 
-        // Spacing: 10px edge padding, 15px gap to points
-        int maxTicketWidth = Math.max(redWidth, blueWidth);
-        int halfWidth = (pointsWidth / 2) + 15 + maxTicketWidth + 10;
-        barHalfWidth = halfWidth;
-        topStackBottom = yPos + 38;
+        int prot = latestUIData == null ? 0 : protectionSecs(latestUIData);
+        if (prot > 0)
+            topStackBottom =
+                    HudTopBar.renderChip(
+                            graphics,
+                            mc.font,
+                            centerX,
+                            HudTopBar.chipTop(bar.bottom()),
+                            protectionText(prot));
 
-        int barLeft = centerX - halfWidth;
-        int barRight = centerX + halfWidth;
-
-        // 1. Draw background
-        graphics.fill(barLeft, yPos, barRight, yPos + barHeight, BfTheme.alpha(BfTheme.BG, 0xCC));
-        BfTheme.outline(graphics, barLeft, yPos, barRight - barLeft, barHeight, BfTheme.BORDER);
-        BfTheme.ticks(graphics, barLeft, yPos, barRight - barLeft, barHeight, 4, BfTheme.AMBER);
-
-        // 2. Draw Red tickets (10px padding from left edge, vertically centered at yPos + 6)
-        graphics.drawString(mc.font, redStr, barLeft + 10, yPos + 6, BfTheme.RED_TEAM, true);
-
-        // 3. Draw Blue tickets (10px padding from right edge, vertically centered at yPos + 6)
-        int blueStrWidth = mc.font.width(blueStr);
-        graphics.drawString(
-                mc.font, blueStr, barRight - 10 - blueStrWidth, yPos + 6, BfTheme.BLUE_TEAM, true);
-
-        if (timeStr != null)
-            graphics.drawCenteredString(mc.font, timeStr, centerX, yPos + 6, BfTheme.TEXT);
+        JsonArray diamonds = ffa ? null : ptsArray;
+        int diamondCount = diamonds == null ? 0 : diamonds.size();
+        int size = HudTopBar.POINT;
+        int gap = HudTopBar.POINT_GAP;
+        int pointsWidth = HudTopBar.pointsWidth(diamondCount);
 
         // 5. Draw capture points
-        if (ptsArray != null && count > 0) {
+        if (diamondCount > 0) {
             int startX = -pointsWidth / 2 + size / 2;
 
-            for (int i = 0; i < count; i++) {
-                JsonObject ptObj = UiJson.asObject(ptsArray.get(i));
+            for (int i = 0; i < diamondCount; i++) {
+                JsonObject ptObj = UiJson.asObject(diamonds.get(i));
                 if (ptObj == null) continue;
                 String name = UiJson.str(ptObj, "n", "?");
                 String owner = UiJson.str(ptObj, "o", "NEUTRAL");
@@ -347,7 +409,7 @@ public class HudRenderer {
                 String statusMsg = status + " | " + progress + "%";
                 int zoneHalf =
                         Math.max(
-                                halfWidth,
+                                bar.half(),
                                 (mc.font.width(name.toUpperCase()) + mc.font.width(statusMsg) + 21)
                                         / 2);
                 BfTheme.panel(graphics, centerX - zoneHalf, startY, zoneHalf * 2, plateH, false);

@@ -354,6 +354,23 @@ public final class Tablet {
         if (dropDeployment()) requestClose(Minecraft.getInstance());
     }
 
+    /**
+     * Shared context-transition: exit without a deploy (range/hub/match change, round end,
+     * reconnect). Drops visible/hidden choice and leaves DEPLOY without marking a deploy, so the
+     * put-away guard stays honest. Keeps the tablet open for the next menu/result to adopt.
+     */
+    public static void cancelDeployment() {
+        closeAt = 0;
+        dropDeployment();
+        if (tab == Tab.DEPLOY) {
+            tab = Tab.MENU;
+            if (open) {
+                tabPosition.snap(slot(tab));
+                tabReveal.snap(1f);
+            }
+        }
+    }
+
     /** Test seam: record a deployment at an explicit monotonic time. */
     static void noteDeployment(long nowNs) {
         deployedAtNs = nowNs;
@@ -392,6 +409,7 @@ public final class Tablet {
         MapPings.clear();
         TabletResultTab.clear();
         open = false;
+        tab = Tab.MENU;
         menu = null;
         menuJson = null;
         menuId = "";
