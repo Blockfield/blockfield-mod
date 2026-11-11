@@ -17,12 +17,75 @@ public class TabMenuRenderer {
     private static boolean tabActive = false;
     private static boolean ffaMode = false;
 
+    /** Design width the absolute column offsets below were laid out for. */
+    static final int BASE_W = 400;
+
+    static final int HEADER = 16;
+    static final int ROW_H = 12;
+    static final int FOOTER = 14;
+
+    /** Fixed right-anchored numeric columns start this far left of the right edge. */
+    static final int RIGHT_ZONE = 175;
+
+    private static int tabPage = 0;
+
     public static boolean isTabActive() {
         return tabActive;
     }
 
     public static void setTabActive(boolean active) {
+        if (active != tabActive) tabPage = 0;
         tabActive = active;
+    }
+
+    /** Table width: full design width on wide screens, shrunk to fit narrow GUI areas. */
+    static int tabWidth(int screenWidth) {
+        return Math.max(160, Math.min(BASE_W, screenWidth - 16));
+    }
+
+    /** Table height follows the screen so tall windows show more rows without paging. */
+    static int tableHeight(int screenHeight) {
+        return Math.max(100, screenHeight - 32);
+    }
+
+    /** Rows per page with the header, column stripe and footer reserved. */
+    static int rowsPerPage(int height) {
+        return Math.max(1, (height - HEADER - 20 - 16 - FOOTER) / ROW_H + 1);
+    }
+
+    /** Pages for the current roster; 0 with no rows. */
+    static int pageCount(int screenWidth, int screenHeight) {
+        return pagesFor(statsCache.size(), rowsPerPage(tableHeight(screenHeight)));
+    }
+
+    static int pagesFor(int totalRows, int perPage) {
+        if (totalRows <= 0) return 0;
+        return (totalRows + perPage - 1) / perPage;
+    }
+
+    /**
+     * Wheel paging while TAB is held. Returns false with a single page so the wheel keeps its
+     * normal behavior (hotbar); the mixin cancels only consumed scrolls.
+     */
+    static boolean scrollPages(double y, int pages) {
+        if (pages <= 1 || y == 0) return false;
+        tabPage = Math.max(0, Math.min(pages - 1, tabPage + (y > 0 ? -1 : 1)));
+        return true;
+    }
+
+    static int currentPage(int pages) {
+        if (pages <= 0) return 0;
+        tabPage = Math.max(0, Math.min(pages - 1, tabPage));
+        return tabPage;
+    }
+
+    /**
+     * Left text-column offset: absolute at design width, squeezed into the space left of the fixed
+     * right numeric columns on narrow screens. Values are ellipsized into their slots, so long
+     * names can never reach the next column.
+     */
+    static int leftX(int base, int menuWidth) {
+        return base * (menuWidth - RIGHT_ZONE) / (BASE_W - RIGHT_ZONE);
     }
 
     /**
@@ -91,9 +154,8 @@ public class TabMenuRenderer {
         int width = mc.getWindow().getGuiScaledWidth();
         int height = mc.getWindow().getGuiScaledHeight();
 
-        int menuWidth = 400;
-        int headerExtra = 16;
-        int menuHeight = 200 + headerExtra;
+        int menuWidth = tabWidth(width);
+        int menuHeight = tableHeight(height);
         int x = (width - menuWidth) / 2;
         int y = (height - menuHeight) / 2;
 
@@ -111,23 +173,31 @@ public class TabMenuRenderer {
         boolean ffa = ffaMode;
         boolean objective = !ffa && HudRenderer.hasCapturePoints();
 
-        // Column header stripe
-        g.fill(x, y + headerExtra, x + menuWidth, y + headerExtra + 15, BfTheme.BG_ELEVATED);
+        // Column header stripe; numeric columns ride the right edge, text columns squeeze left.
+        int nameX = x + leftX(ffa ? 55 : 10, menuWidth);
+        int placeX = x + leftX(10, menuWidth);
+        int classX = x + leftX(95, menuWidth);
+        int scoreX = x + leftX(165, menuWidth);
+        int killsX = x + menuWidth - 175;
+        int deathsX = x + menuWidth - 135;
+        int extraX = x + menuWidth - 95;
+        int pingX = x + menuWidth - 45;
+        g.fill(x, y + HEADER, x + menuWidth, y + HEADER + 15, BfTheme.BG_ELEVATED);
         if (ffa) {
-            g.drawString(mc.font, "МЕСТО", x + 10, y + headerExtra + 4, BfTheme.MUTED, false);
-            g.drawString(mc.font, "ИГРОК", x + 55, y + headerExtra + 4, BfTheme.MUTED, false);
+            g.drawString(mc.font, "МЕСТО", placeX, y + HEADER + 4, BfTheme.MUTED, false);
+            g.drawString(mc.font, "ИГРОК", nameX, y + HEADER + 4, BfTheme.MUTED, false);
         } else {
-            g.drawString(mc.font, "ИГРОК", x + 10, y + headerExtra + 4, BfTheme.MUTED, false);
-            g.drawString(mc.font, "КЛАСС", x + 95, y + headerExtra + 4, BfTheme.MUTED, false);
-            g.drawString(mc.font, "ОЧКИ", x + 165, y + headerExtra + 4, BfTheme.MUTED, false);
+            g.drawString(mc.font, "ИГРОК", nameX, y + HEADER + 4, BfTheme.MUTED, false);
+            g.drawString(mc.font, "КЛАСС", classX, y + HEADER + 4, BfTheme.MUTED, false);
+            g.drawString(mc.font, "ОЧКИ", scoreX, y + HEADER + 4, BfTheme.MUTED, false);
         }
-        g.drawString(mc.font, "УБ.", x + 225, y + headerExtra + 4, BfTheme.MUTED, false);
-        g.drawString(mc.font, "СМ.", x + 265, y + headerExtra + 4, BfTheme.MUTED, false);
-        if (ffa) g.drawString(mc.font, "СЕРИЯ", x + 305, y + headerExtra + 4, BfTheme.MUTED, false);
+        g.drawString(mc.font, "УБ.", killsX, y + HEADER + 4, BfTheme.MUTED, false);
+        g.drawString(mc.font, "СМ.", deathsX, y + HEADER + 4, BfTheme.MUTED, false);
+        if (ffa) g.drawString(mc.font, "СЕРИЯ", extraX, y + HEADER + 4, BfTheme.MUTED, false);
         else if (objective)
-            g.drawString(mc.font, "ВРЕМЯ", x + 305, y + headerExtra + 4, BfTheme.MUTED, false);
-        g.drawString(mc.font, "ПИНГ", x + 355, y + headerExtra + 4, BfTheme.MUTED, false);
-        g.fill(x, y + headerExtra + 15, x + menuWidth, y + headerExtra + 16, BfTheme.BORDER_SOFT);
+            g.drawString(mc.font, "ВРЕМЯ", extraX, y + HEADER + 4, BfTheme.MUTED, false);
+        g.drawString(mc.font, "ПИНГ", pingX, y + HEADER + 4, BfTheme.MUTED, false);
+        g.fill(x, y + HEADER + 15, x + menuWidth, y + HEADER + 16, BfTheme.BORDER_SOFT);
 
         // FFA has no scoreboard teams to sort by, so rank by kills (ties broken by fewer deaths)
         // instead
@@ -145,10 +215,17 @@ public class TabMenuRenderer {
                             .thenComparingInt(e -> -e.getValue().kills));
         }
 
-        int rowY = y + headerExtra + 20;
-        int rowIndex = 0;
-        for (Map.Entry<UUID, PlayerStatsRow> entry : rows) {
-            if (rowY > y + menuHeight - 15) break;
+        int perPage = rowsPerPage(menuHeight);
+        int pages = pagesFor(rows.size(), perPage);
+        int page = currentPage(pages);
+        int lastRowY = y + menuHeight - 15 - (pages > 1 ? FOOTER : 0);
+
+        int rowY = y + HEADER + 20;
+        int rowIndex = page * perPage;
+        int end = Math.min(rows.size(), rowIndex + perPage);
+        for (int i = rowIndex; i < end; i++) {
+            if (rowY > lastRowY) break;
+            Map.Entry<UUID, PlayerStatsRow> entry = rows.get(i);
 
             PlayerStatsRow stats = entry.getValue();
             var networkInfo =
@@ -157,7 +234,7 @@ public class TabMenuRenderer {
                             : null;
             String name = networkInfo != null ? networkInfo.getProfile().getName() : "Offline/Left";
 
-            if (rowIndex % 2 == 1) {
+            if ((i - rowIndex) % 2 == 1) {
                 g.fill(
                         x + 1,
                         rowY - 2,
@@ -181,46 +258,69 @@ public class TabMenuRenderer {
             }
 
             if (ffa) {
-                g.drawString(mc.font, "#" + (rowIndex + 1), x + 10, rowY, BfTheme.AMBER, true);
-                g.drawString(mc.font, name, x + 55, rowY, nameColor, true);
+                g.drawString(mc.font, "#" + (i + 1), placeX, rowY, BfTheme.AMBER, true);
+                g.drawString(
+                        mc.font,
+                        BfTheme.ellipsize(mc.font, name, killsX - nameX - 4),
+                        nameX,
+                        rowY,
+                        nameColor,
+                        true);
             } else {
-                g.drawString(mc.font, name, x + 10, rowY, nameColor, true);
+                g.drawString(
+                        mc.font,
+                        BfTheme.ellipsize(mc.font, name, classX - nameX - 4),
+                        nameX,
+                        rowY,
+                        nameColor,
+                        true);
                 String classDisplayName = getLocalizedClassName(stats.classId);
-                g.drawString(mc.font, classDisplayName, x + 95, rowY, BfTheme.TEXT_SECONDARY, true);
+                g.drawString(
+                        mc.font,
+                        BfTheme.ellipsize(mc.font, classDisplayName, scoreX - classX - 4),
+                        classX,
+                        rowY,
+                        BfTheme.TEXT_SECONDARY,
+                        true);
                 String scoreStr =
                         (stats.score % 1.0 == 0.0)
                                 ? String.valueOf((int) stats.score)
                                 : String.format(java.util.Locale.US, "%.1f", stats.score);
-                g.drawString(mc.font, scoreStr, x + 165, rowY, BfTheme.AMBER, true);
+                g.drawString(
+                        mc.font,
+                        BfTheme.ellipsize(mc.font, scoreStr, killsX - scoreX - 4),
+                        scoreX,
+                        rowY,
+                        BfTheme.AMBER,
+                        true);
             }
 
-            g.drawString(mc.font, String.valueOf(stats.kills), x + 225, rowY, BfTheme.OK, true);
+            g.drawString(mc.font, String.valueOf(stats.kills), killsX, rowY, BfTheme.OK, true);
             g.drawString(
-                    mc.font, String.valueOf(stats.deaths), x + 265, rowY, BfTheme.DANGER, true);
+                    mc.font, String.valueOf(stats.deaths), deathsX, rowY, BfTheme.DANGER, true);
 
             if (ffa) {
                 g.drawString(
-                        mc.font, String.valueOf(stats.streak), x + 305, rowY, BfTheme.AMBER, true);
+                        mc.font, String.valueOf(stats.streak), extraX, rowY, BfTheme.AMBER, true);
             } else if (objective) {
                 String timeStr =
                         (stats.pointTime / 60)
                                 + ":"
                                 + String.format("%02d", (stats.pointTime % 60));
-                g.drawString(mc.font, timeStr, x + 305, rowY, BfTheme.MUTED, true);
+                g.drawString(mc.font, timeStr, extraX, rowY, BfTheme.MUTED, true);
             }
 
             if (networkInfo != null) {
                 g.drawString(
-                        mc.font,
-                        pingText(networkInfo),
-                        x + 355,
-                        rowY,
-                        pingColor(networkInfo),
-                        true);
+                        mc.font, pingText(networkInfo), pingX, rowY, pingColor(networkInfo), true);
             }
 
-            rowY += 12;
-            rowIndex++;
+            rowY += ROW_H;
+        }
+        if (pages > 1) {
+            String pager = "‹ стр. " + (page + 1) + "/" + pages + " · колесо ›";
+            g.drawCenteredString(
+                    mc.font, pager, x + menuWidth / 2, y + menuHeight - 11, BfTheme.MUTED);
         }
         return true;
     }

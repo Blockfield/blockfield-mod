@@ -69,6 +69,7 @@
     "TabletGlassMixin",
     "TabletHandRenderMixin",
     "TabletScissorMixin",
+    "TabScrollMixin",
     "WorkshopAiGrabMixin",
     "ThrowableUseMixin",
     "TitlePanoramaMixin",
