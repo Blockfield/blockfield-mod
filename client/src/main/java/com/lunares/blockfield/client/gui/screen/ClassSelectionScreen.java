@@ -189,15 +189,6 @@ public class ClassSelectionScreen extends Screen {
         return pageIds;
     }
 
-    /** Фокус по Tab среди доступных вариантов текущей страницы (+кнопки страниц). */
-    static String cycleFocus(List<String> order, String current, boolean forward) {
-        if (order.isEmpty()) return null;
-        int at = current == null ? -1 : order.indexOf(current);
-        if (at < 0) return forward ? order.get(0) : order.get(order.size() - 1);
-        int next = (at + (forward ? 1 : -1) + order.size()) % order.size();
-        return order.get(next);
-    }
-
     private Layout layout(double mouseX, double mouseY) {
         float scale =
                 Math.min(1.0f, Math.min(this.width / TARGET_WIDTH, this.height / TARGET_HEIGHT));
@@ -608,8 +599,7 @@ public class ClassSelectionScreen extends Screen {
                         canSelect,
                         varSelected);
                 if (focused) {
-                    BfTheme.outline(
-                            guiGraphics, v.x() - 1, v.y() - 1, v.w() + 2, v.h() + 2, BfTheme.TEXT);
+                    BfTheme.focusRing(guiGraphics, v.x(), v.y(), v.w(), v.h());
                 }
 
                 if (varHovered || focused) {
@@ -797,11 +787,11 @@ public class ClassSelectionScreen extends Screen {
         Layout l = layout(0, -1000);
         if (keyCode == GLFW.GLFW_KEY_TAB) {
             boolean forward = (modifiers & GLFW.GLFW_MOD_SHIFT) == 0;
-            focusedId = cycleFocus(focusOrder(l), focusedId, forward);
+            focusedId = MenuLayout.cycleFocus(focusOrder(l), focusedId, forward);
             return true;
         }
         if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
-            if (focusedId == null) focusedId = cycleFocus(focusOrder(l), null, true);
+            if (focusedId == null) focusedId = MenuLayout.cycleFocus(focusOrder(l), null, true);
             return activate(focusedId);
         }
         if (keyCode == GLFW.GLFW_KEY_PAGE_UP && l.pages() > 1 && page > 0) {

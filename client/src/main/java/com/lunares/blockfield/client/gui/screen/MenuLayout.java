@@ -276,4 +276,17 @@ public final class MenuLayout {
         int maxScroll = Math.max(0, contentHeight - viewportHeight);
         return Math.max(0, Math.min(offset, maxScroll));
     }
+
+    /**
+     * Keyboard focus step shared by class/kit and spawn/deploy selection (Tab / Shift+Tab): the
+     * next (or previous) id in {@code order}, wrapping around; {@code null} when the order is
+     * empty.
+     */
+    public static String cycleFocus(List<String> order, String current, boolean forward) {
+        if (order.isEmpty()) return null;
+        int at = current == null ? -1 : order.indexOf(current);
+        if (at < 0) return forward ? order.get(0) : order.get(order.size() - 1);
+        int next = (at + (forward ? 1 : -1) + order.size()) % order.size();
+        return order.get(next);
+    }
 }
