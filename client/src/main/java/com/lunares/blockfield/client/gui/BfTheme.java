@@ -410,7 +410,7 @@ public final class BfTheme {
     /** Tab-strip hit test: index of the tab under the cursor, or -1. Pure geometry. */
     public static int tabAt(int mouseX, int mouseY, int count, int x, int y, int tabW, int h) {
         if (mouseY < y || mouseY >= y + h) return -1;
-        int i = (mouseX - x) / tabW;
+        int i = Math.floorDiv(mouseX - x, tabW);
         return i >= 0 && i < count ? i : -1;
     }
 
