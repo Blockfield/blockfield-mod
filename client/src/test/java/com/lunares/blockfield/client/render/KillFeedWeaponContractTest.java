@@ -11,53 +11,24 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 /**
  * The weapon mixin must match the real fork targets: a wrong descriptor passes unit tests (mixins
  * are not applied there) and then kills every client at startup with {@code
- * InvalidInjectionException}. Same discipline as KillFeedMixinContractTest.
+ * InvalidInjectionException}. Same discipline as KillFeedMixinContractTest: pin our annotation
+ * strings and the loadable target shapes. SBW classes stay unloaded (their kotlinx dependency is
+ * not on the unit-test classpath) and {@code @Mixin} itself is CLASS-retention, so only
+ * method-level annotations are visible here.
  */
 class KillFeedWeaponContractTest {
-    @Test
-    void packetCarriesTheDeathEventWeapon() throws Exception {
-        var getter =
-                com.atsuishio.superbwarfare.network.message.receive.LivingGunKillMessage.class
-                        .getDeclaredMethod("getWeapon");
-        assertEquals(net.minecraft.resources.ResourceLocation.class, getter.getReturnType());
-    }
-
-    @Test
-    void handlerBuildsExactlyOneLivingRecord() throws Exception {
-        var handler =
-                com.atsuishio.superbwarfare.network.message.receive.LivingGunKillMessage.class
-                        .getDeclaredMethod("handler");
-        assertNotNull(handler);
-        var ctor =
-                Arrays.stream(
-                                com.atsuishio.superbwarfare.tools.LivingKillRecord.class
-                                        .getDeclaredConstructors())
-                        .filter(
-                                c ->
-                                        Arrays.equals(
-                                                c.getParameterTypes(),
-                                                new Class<?>[] {
-                                                    net.minecraft.world.entity.LivingEntity.class,
-                                                    net.minecraft.world.entity.Entity.class,
-                                                    net.minecraft.world.item.ItemStack.class,
-                                                    boolean.class,
-                                                    net.minecraft.resources.ResourceKey.class
-                                                }))
-                        .findFirst()
-                        .orElseThrow(
-                                () -> new AssertionError("LivingKillRecord ctor shape changed"));
-        assertNotNull(ctor);
-    }
-
     @Test
     void redirectReadsTheHandItemCallInsideHandler() throws Exception {
         var redirect =
                 com.lunares.blockfield.client.mixin.KillMessageWeaponMixin.class.getDeclaredMethod(
                         "blockfield$deathEventWeapon",
                         net.minecraft.world.entity.LivingEntity.class);
+        assertEquals(net.minecraft.world.item.ItemStack.class, redirect.getReturnType());
         var annotation = redirect.getAnnotation(Redirect.class);
         assertNotNull(annotation, "redirect must carry @Redirect");
-        assertEquals("handler", annotation.method());
+        assertTrue(
+                Arrays.asList(annotation.method()).contains("handler"),
+                "@Redirect must target handler");
         assertTrue(
                 Arrays.asList(annotation.at()).stream()
                         .anyMatch(
@@ -70,17 +41,23 @@ class KillFeedWeaponContractTest {
     }
 
     @Test
-    void killOverlayReplacementTargetsTheRealOverlay() {
-        var annotation =
-                com.lunares.blockfield.client.mixin.SbwKillOverlayMixin.class.getAnnotation(
-                        org.spongepowered.asm.mixin.Mixin.class);
-        assertNotNull(annotation);
+    void handItemReadExistsOnTheRealTarget() throws Exception {
+        var read =
+                net.minecraft.world.entity.LivingEntity.class.getDeclaredMethod("getMainHandItem");
+        assertEquals(net.minecraft.world.item.ItemStack.class, read.getReturnType());
+    }
+
+    @Test
+    void killOverlayReplacementTargetsShouldRender() throws Exception {
+        var handler =
+                com.lunares.blockfield.client.mixin.SbwKillOverlayMixin.class.getDeclaredMethod(
+                        "blockfield$replacedByKillfeedHud",
+                        org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable
+                                .class);
+        var inject = handler.getAnnotation(org.spongepowered.asm.mixin.injection.Inject.class);
+        assertNotNull(inject, "handler must carry @Inject");
         assertTrue(
-                Arrays.stream(annotation.targets())
-                        .anyMatch(
-                                t ->
-                                        t.equals(
-                                                "com.atsuishio.superbwarfare.client.overlay.KillMessageOverlay")),
-                "overlay replacement must target KillMessageOverlay");
+                Arrays.asList(inject.method()).contains("shouldRender"),
+                "@Inject must target shouldRender");
     }
 }

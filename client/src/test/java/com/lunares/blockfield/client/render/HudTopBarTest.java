@@ -50,7 +50,7 @@ class HudTopBarTest {
     @Test
     void hugeScoresDoNotPushTheBarOffScreen() {
         var bar = HudTopBar.layout(320, 700, 700, 700);
-        assertEquals(0, bar.left());
+        assertEquals(1, bar.left());
         assertEquals(159, bar.half());
     }
 
@@ -64,7 +64,7 @@ class HudTopBarTest {
     void longLeaderNameIsCutBeforeTheBarEdge() {
         int screenWidth = 854;
         int avail = HudTopBar.sideAvail(screenWidth);
-        String leader = "ОченьДлинныйНикнеймИгрокаСервера 15";
+        String leader = "ОченьДлинныйНикнеймИгрокаСервера_который_точно_не_влезет_15";
         String cut = BfTheme.ellipsize(METRICS, leader, avail);
         assertTrue(METRICS.width(cut) <= avail);
         assertTrue(cut.endsWith("…"));

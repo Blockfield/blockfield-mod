@@ -36,9 +36,9 @@ public final class HudTopBar {
      */
     public static Layout layout(int screenWidth, int leftW, int centerW, int rightW) {
         int centerX = screenWidth / 2;
-        int half = centerW / 2 + GAP + Math.max(leftW, rightW) + EDGE;
-        half = Math.min(half, Math.max(0, centerX - 1));
-        half = Math.max(half, centerW / 2 + EDGE);
+        int fit = Math.max(0, centerX - 1);
+        int half = Math.min(centerW / 2 + GAP + Math.max(leftW, rightW) + EDGE, fit);
+        half = Math.max(half, Math.min(centerW / 2 + EDGE, fit));
         return new Layout(centerX - half, half, centerX, Y + BAR_H);
     }
 
