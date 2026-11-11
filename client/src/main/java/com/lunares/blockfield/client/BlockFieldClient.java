@@ -340,6 +340,7 @@ public class BlockFieldClient implements ClientModInitializer {
         ClientEventHandler.init();
         com.lunares.blockfield.client.gui.KillFeedReset.init();
         com.lunares.blockfield.client.render.HudRenderer.init();
+        com.lunares.blockfield.client.render.KillfeedHud.init();
         com.lunares.blockfield.client.render.PointMarkerRenderer.init();
         // Раньше голосового HUD: он встаёт под прямоугольником миникарты этого же кадра.
         com.lunares.blockfield.client.render.MinimapHud.init();
