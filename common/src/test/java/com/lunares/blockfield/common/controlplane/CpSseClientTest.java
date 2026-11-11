@@ -384,6 +384,7 @@ class CpSseClientTest {
         String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort();
         List<String> infos = new CopyOnWriteArrayList<>();
         List<String> warns = new CopyOnWriteArrayList<>();
+        List<String> warnLines = new CopyOnWriteArrayList<>();
         CpSseClient.Reporter recording =
                 new CpSseClient.Reporter() {
                     @Override
@@ -399,6 +400,11 @@ class CpSseClientTest {
                                         + (error == null
                                                 ? "null"
                                                 : error.getClass().getSimpleName()));
+                    }
+
+                    @Override
+                    public void warn(String message) {
+                        warnLines.add(message);
                     }
                 };
         Clock fixed =
@@ -427,8 +433,9 @@ class CpSseClientTest {
         client.run(stop);
 
         assertEquals(3, sleeps.get(), "poison frame did not retry with backoff");
-        assertEquals(1, infos.size(), "rejected frame must log one line, not one per retry");
+        assertEquals(1, warnLines.size(), "rejected frame must log one line, not one per retry");
         assertTrue(warns.isEmpty(), "rejected frame must not log a stack trace per retry");
+        assertTrue(infos.isEmpty(), "rejected frame stays at WARN so a stuck cursor is visible");
         assertEquals(41, store.loadCursor().sequence());
     }
 

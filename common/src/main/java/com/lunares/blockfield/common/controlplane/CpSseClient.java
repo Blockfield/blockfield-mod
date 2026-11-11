@@ -31,6 +31,14 @@ public final class CpSseClient {
         void info(String message);
 
         void warn(String message, Throwable error);
+
+        /**
+         * One-line warning without a stack trace, for a stuck-but-routine state like a replaying
+         * poison frame. Defaults to info so older consumers keep compiling.
+         */
+        default void warn(String message) {
+            info(message);
+        }
     }
 
     /**
@@ -194,7 +202,8 @@ public final class CpSseClient {
     /**
      * One line per rejected frame, without a stack trace: repeats of the same rejection stay silent
      * for {@link #CONTRACT_WARN_SUPPRESS_MILLIS}. A poison frame replays every backoff, so an
-     * unthrottled warn would log a full stack ~120 times an hour.
+     * unthrottled warn would log a full stack ~120 times an hour. Stays at WARN level so a stuck
+     * cursor remains visible to WARN-level operators.
      */
     void warnContractOnce(String message) {
         long now = clock.millis();
@@ -204,7 +213,7 @@ public final class CpSseClient {
         }
         lastContractMessage = message;
         lastContractWarnMillis = now;
-        reporter.info(message);
+        reporter.warn(message);
     }
 
     private void resnapshot() throws IOException, InterruptedException {
