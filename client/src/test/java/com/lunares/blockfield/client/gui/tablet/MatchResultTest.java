@@ -75,16 +75,6 @@ class MatchResultTest {
     }
 
     @Test
-    void ownRowStaysVisibleWhenListIsCut() {
-        MatchResult r = result("BlueTeam", "u6");
-        var shown = r.visibleRoster(2);
-        assertEquals(2, shown.size());
-        assertEquals("p0", shown.get(0).name());
-        assertEquals("p6", shown.get(1).name());
-        assertEquals(4, r.visibleRoster(10).size());
-    }
-
-    @Test
     void freeForAllWinnerIsByUuid() {
         MatchResult r =
                 MatchResult.parse(

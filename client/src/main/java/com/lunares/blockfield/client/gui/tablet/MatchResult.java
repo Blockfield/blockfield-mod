@@ -126,16 +126,6 @@ public record MatchResult(
         return roster.isEmpty() ? null : roster.get(0);
     }
 
-    /** Строки списка, влезающие в max: своя строка всегда видна, даже если она ниже отреза. */
-    public List<Player> visibleRoster(int max) {
-        List<Player> roster = roster();
-        if (roster.size() <= max || max <= 0)
-            return roster.subList(0, Math.min(roster.size(), Math.max(0, max)));
-        List<Player> shown = new ArrayList<>(roster.subList(0, max));
-        if (me != null && roster.indexOf(me) >= max) shown.set(max - 1, me);
-        return shown;
-    }
-
     public static String clock(long seconds) {
         return seconds / 60 + ":" + String.format(Locale.ROOT, "%02d", seconds % 60);
     }

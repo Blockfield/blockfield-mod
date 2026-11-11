@@ -289,4 +289,33 @@ public final class MenuLayout {
         int next = (at + (forward ? 1 : -1) + order.size()) % order.size();
         return order.get(next);
     }
+
+    /**
+     * Pages for a roster table (TAB and the results roster share it): 0 with no rows. Pure; the
+     * screen keeps its own page index.
+     */
+    public static int pagesFor(int totalRows, int perPage) {
+        if (totalRows <= 0 || perPage <= 0) return 0;
+        return (totalRows + perPage - 1) / perPage;
+    }
+
+    /** Clamps a page index to [0, pages - 1]; 0 with no pages. */
+    public static int clampPage(int page, int pages) {
+        if (pages <= 0) return 0;
+        return Math.max(0, Math.min(pages - 1, page));
+    }
+
+    /**
+     * Wheel step for a roster table: up (y &gt; 0) goes back a page, down forward; unchanged with a
+     * single page or no wheel delta.
+     */
+    public static int scrollPage(int page, double y, int pages) {
+        if (pages <= 1 || y == 0) return page;
+        return clampPage(page + (y > 0 ? -1 : 1), pages);
+    }
+
+    /** Shared pager caption for roster tables (TAB and results): "‹ стр. 2/5 · колесо ›". */
+    public static String pageLabel(int page, int pages) {
+        return "‹ стр. " + (page + 1) + "/" + pages + " · колесо ›";
+    }
 }
