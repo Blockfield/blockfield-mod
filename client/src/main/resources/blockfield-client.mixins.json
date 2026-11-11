@@ -5,6 +5,8 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "KillFeedLevelMixin",
+    "KillMessageWeaponMixin",
+    "SbwKillOverlayMixin",
     "DamageEventPacketMixin",
     "MedkitPoseMixin",
     "MedkitPoseOffsetMixin",
@@ -67,6 +69,7 @@
     "TabletGlassMixin",
     "TabletHandRenderMixin",
     "TabletScissorMixin",
+    "TabScrollMixin",
     "WorkshopAiGrabMixin",
     "ThrowableUseMixin",
     "TitlePanoramaMixin",

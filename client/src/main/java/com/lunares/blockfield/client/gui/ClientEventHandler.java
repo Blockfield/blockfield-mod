@@ -15,6 +15,7 @@ import com.tacz.guns.api.item.IGun;
 import com.tacz.guns.client.input.ShootKey;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -56,6 +57,19 @@ public class ClientEventHandler {
         KeyBindingHelper.registerKeyBinding(RIG_KEY);
         KeyBindingHelper.registerKeyBinding(TABLET_KEY);
         ClientTickEvents.END_CLIENT_TICK.register(ClientEventHandler::onClientTick);
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> clearStaleContext());
+        // Proxy backend switch reconfigures without DISCONNECT: the old pending must not reopen.
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> clearStaleContext());
+    }
+
+    /**
+     * Shared context-transition lifecycle: exit without a deploy clears visible/hidden deployment,
+     * DEPLOY tab, deferred open and prior-context model, without marking a successful deploy.
+     */
+    public static void clearStaleContext() {
+        pendingScreen = null;
+        latestUiJson = null;
+        Tablet.cancelDeployment();
     }
 
     /**
@@ -227,7 +241,18 @@ public class ClientEventHandler {
         // внутри него. Протухший live-ответ для закрытого планшета или фоновой вкладки роняем:
         // возврат на вкладку меню запросит свежее.
         if (close) {
+            if ("vote".equals(id)) {
+                // Покидание матча/конец голосования: выбор прежнего контекста недействителен.
+                pendingScreen = null;
+                latestUiJson = null;
+                Tablet.cancelDeployment();
+            }
             Tablet.closeMenu();
+        } else if ("vote".equals(id)) {
+            // Голосование вытесняет выбор/высадку; отложенное открытие прежнего контекста отменяем.
+            pendingScreen = null;
+            latestUiJson = null;
+            Tablet.openMenu(json, id);
         } else if (Tablet.hasMenu(id)) {
             Tablet.updateMenu(json);
         } else if (!update || Tablet.adoptMenuUpdate(id)) {
@@ -242,6 +267,13 @@ public class ClientEventHandler {
                 pendingScreen = null;
                 latestUiJson = null;
                 Tablet.closeDeployment();
+                return;
+            }
+            if (data.has("showHud")
+                    && !com.lunares.blockfield.network.packet.UiJson.bool(data, "showHud", true)) {
+                // Смена контекста (хаб/полигон/матч, конец матча): скрытый/видимый выбор, вкладка
+                // высадки, отложенное открытие и модель прежнего контекста недействительны.
+                clearStaleContext();
                 return;
             }
         } catch (RuntimeException e) {
