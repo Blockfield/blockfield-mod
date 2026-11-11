@@ -278,6 +278,22 @@ public final class MenuLayout {
     }
 
     /**
+     * Visible numeric columns of a table row with {@code cells} cells in width {@code w}: narrow
+     * screens drop trailing-priority numbers first, keeping at least one beside a readable name.
+     * Pure geometry for {@link com.lunares.blockfield.client.gui.BfTheme#tableRow}.
+     */
+    public static int tableNumbers(int w, int cells, int numColW) {
+        int nums = Math.max(0, cells - 2);
+        while (nums > 1 && w - 30 - nums * numColW < 90) nums--;
+        return nums;
+    }
+
+    /** Name column width once {@code nums} numbers are shown. */
+    public static int tableNameWidth(int w, int nums, int numColW) {
+        return w - 30 - nums * numColW - 6;
+    }
+
+    /**
      * Keyboard focus step shared by class/kit and spawn/deploy selection (Tab / Shift+Tab): the
      * next (or previous) id in {@code order}, wrapping around; {@code null} when the order is
      * empty.
