@@ -156,6 +156,9 @@ public class BlockFieldClient implements ClientModInitializer {
                             // The server sends it when the player enters a room: the previous
                             // battle's result must not stay on the tablet of the new one.
                             com.lunares.blockfield.client.gui.tablet.TabletResultTab.clear();
+                            // Entering a room invalidates any pending/open choice from the
+                            // previous context; the fresh class/spawn menu arrives separately.
+                            ClientEventHandler.clearStaleContext();
                             return;
                         }
                         if (obj.has("removeScore")) {
@@ -170,6 +173,9 @@ public class BlockFieldClient implements ClientModInitializer {
                             return;
                         }
                         if (obj.has("matchResult")) {
+                            // Round over: an open class/spawn choice no longer belongs to a live
+                            // deployment, drop it as a context exit before showing the result.
+                            ClientEventHandler.clearStaleContext();
                             dispatchMatchResult(
                                     obj.get("matchResult"),
                                     com.lunares.blockfield.client.gui.tablet.TabletResultTab

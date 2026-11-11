@@ -117,7 +117,8 @@ final class MatchActions {
             boolean leave = action.equals("match:leave");
             if (leave && !DestructiveConfirm.confirm("leave", Util.getMillis())) return true;
             ClientPlayNetworking.send(new MenuActionC2SPacket(leave ? "leave" : "switch_team"));
-            if (leave) Tablet.closeDeployment();
+            // Выход без высадки: общий переход контекста, без отметки об успешном деплое.
+            if (leave) Tablet.cancelDeployment();
         }
         return true;
     }
@@ -137,8 +138,9 @@ final class MatchActions {
                     && minecraft.player != null
                     && DestructiveConfirm.confirm("leave", Util.getMillis())) {
                 ClientPlayNetworking.send(new MenuActionC2SPacket("leave"));
-                // Leaving to the hub sends no closeDeploymentMenu; the tablet drops the choice.
-                Tablet.closeDeployment();
+                // Leaving to the hub sends no closeDeploymentMenu; the tablet drops the choice
+                // as a context exit, without marking a successful deploy.
+                Tablet.cancelDeployment();
             }
             return true;
         }

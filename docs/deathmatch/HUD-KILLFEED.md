@@ -47,4 +47,44 @@ Additional acceptance:
 
 Different game rules retain their distinct data and meaningful columns. Third-party/vanilla integration boundaries are recorded; launcher and website implementations are outside this in-game refactor.
 
+## Surface map (round 1 plan, u-ui48a)
+
+Inventory of every in-game surface/state and the shared block it will consume. No new
+component library in this round; later rounds migrate callers to these blocks and delete
+the replaced copies.
+
+Shared blocks (existing helpers, no new toolkit): panel/heading (`BfTheme` panel,
+outline, header), text/number/icon (`BfTheme` font/ellipsize, `BfIcon`), buttons/tabs/
+selection/hints (`BfTheme.button`, `MenuScreen`, `Tablet` tabs, `TabletCanvas`,
+`MenuLayout`), table rows/cells with full-roster access (`TabMenuRenderer` +
+`BfTheme.ellipsize`/scissor), score/timer/limit/leader (`HudRenderer` upper panel),
+status/progress/protection/notifications (`HudRenderer` actionbar/protection,
+`DeploymentCountdown`, `WorkshopFeedback`, `CreditFeed`), killfeed entry with cause
+(`HudRenderer` killfeed + `WeaponHudSilhouettes`/`ItemSilhouette`).
+
+| Surface | States | Source | Target shared block |
+|---|---|---|---|
+| Match HUD upper (campaign, room, tdm, snipers, awp, deathmatch) | score/tickets/frags, time, limit, leader, points, autoSpawnTimer, ffa flag | server `CampaignMode`/`DeathmatchMode` sendUI + `HudRenderer` | score/timer/limit/leader widget in shared upper panel |
+| Match HUD lower/actionbar (tdm/sniper/awp duplicate, deathmatch old line, protection, countdown, voting timer) | team score, time, limit "do N", shield seconds, spawn protection, vote countdown | server `tdmLine`/`displayClientMessage`, `HudRenderer` | single upper widget; protection/countdown as shared status block; delete lower duplicate at source |
+| Killfeed | firearm/knife/explosive/suicide/environment/unknown, room isolation, timing, clear on match/session change | server kill events + `HudRenderer` killfeed, `KillMessageHandler` weapon id | killfeed entry with cause-resolved silhouette + neutral fallback |
+| Scoreboard TAB (team + FFA) | 1-14 rows today, 15+ overflow, narrow width, long names, ping, kills/deaths, FFA place/series | `TabMenuRenderer` | table with pagination/scroll, width clamp, ellipsize, full-roster access |
+| Tablet tabs (MENU/MATCHES/STATS/MAP/RESULT/DEPLOY) | open/closed, tab switch, vote replaces deployment, result auto-open, map pings/teleport/zoom | `Tablet`, `TabletScreen`, `TabletMapTab`, `TabletResultTab` | buttons/tabs/selection + panel/heading; shared bounds/transform for hit/scroll/clip |
+| Hub menu (hub, casual, rooms, leaderboard, playtest) | mode cards, room list (8 max), stats, arrival waiting, footer/hints | server `Hub.showMenu` family + `MenuScreen` | panel/heading + buttons/cards + corner actions |
+| Range menu (range, range_maps) | kit status line, class/refill buttons, PvP toggle, exit, loading arrival | server `FiringRange.showMenu` + `MenuScreen` | same menu blocks; loading as shared status block |
+| Match menu (match, arrival_waiting) | class/spawn buttons, kill/leave, PvP toggle, protected arrival | server `Hub.showMenu` match branch + `MenuScreen` | same menu blocks; protected arrival as shared status block |
+| Voting (map ballot) | options, counts, timer, change vote, leave | server `sendVoteMenu` + `MenuScreen` | buttons/selection + status/timer block |
+| Class selection | class list, variants, limits/counts, blocked reasons, credits, countdown, isCurrent | server `sendClassMenu` + `ClassSelectionScreen` | table rows/cells + status/countdown + shared lifecycle (this round) |
+| Spawn selection | points list, map, BASE fallback, dead/alive, death timer, fixed class | server `sendSpawnMenu` + `SpawnSelectionScreen` + `MatchActions` | table/map + status block + shared lifecycle (this round) |
+| Results | win/loss/draw, standings, reason, fresh-result auto-open | server `MatchResults` + `TabletResultTab`/`MatchResult` | panel/heading + table + status block |
+| Settings | keybinds, rig, tablet key, mod options | `ModSettingsScreen`, `KeyDefaults`, `SprintControl` | buttons/selection + panel (existing, no restyle this task) |
+| Workshop UI (radial, AI screen, tools, ghost, feedback, key help) | availability, build/ghost flags, progress, library, plan transfer | `WorkshopRadialScreen`, `WorkshopAiScreen`, `WorkshopToolsClient`, `WorkshopFeedback` | buttons/panel + progress/status blocks; 3D/world tools stay unique, note boundary |
+| Chest rig / tablet item | slot 8, carried-item sync, rig cells | server `giveMenuItem` + `ChestRigScreen` | existing item UI, boundary noted, no migration |
+| HUD widgets (weapon, minimap, compass/markers, voice, credits, equipment inspect, hitbox debug) | ammo/state, low-ammo, markers/pings, radio, credit gain, inspect | `WeaponHud`, `MinimapHud`, `PointMarkerRenderer`, `VoiceHudOverlay`, `CreditFeed`, `EquipmentInspect` | text/number/icon + status blocks; compass only with markers stays as-is unless owner approves universal compass |
+| Vanilla/third-party integration | ReceivingLevelScreen/DeathScreen defer, vanilla container close, TaCZ/SBW packets, Sodium/accessories | `ClientEventHandler.openOrDefer`, `BlockFieldServer.closeDeploymentMenu`, mixins | boundary noted: no rewrite of vanilla/third-party screens; shared lifecycle cancels stale deferred/model on transition |
+
+Context-transition lifecycle (this round, implemented): `Tablet.cancelDeployment` (no
+`noteDeployment`) + `ClientEventHandler.clearStaleContext` (pending/latest/tablet) on
+`showHud=false`, vote open/close, `resetScores`, `matchResult`, disconnect/join;
+`MatchActions` leave uses cancel. Later rounds reuse it for every surface above.
+
 The draft remains open for implementation and review. Publishing and deployment require the normal separate release authorization.
