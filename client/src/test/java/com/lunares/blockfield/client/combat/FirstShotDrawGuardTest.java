@@ -286,6 +286,24 @@ class FirstShotDrawGuardTest {
     }
 
     @Test
+    void confirmedTapRacingRedrawRebindsAndFiresOnce() {
+        // Fail-before for the FS1 1/12 loss: the tap lands during draw A after A's server draw
+        // was observed (confirmed press), then a different gun is drawn before the replay. The
+        // press must rebind to the new draw and fire once when it ends — never lost. An
+        // unconfirmed tap (draw never observed) still dies with its draw (see above).
+        FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gunA");
+        assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 400));
+        FirstShotDrawGuard.noteFireAttempt(150_000_000L);
+        // Racing redraw of a different gun: rebind, still holding while the new draw runs...
+        FirstShotDrawGuard.onDrawToGun(200_000_000L, DRAW_MS, "gunB");
+        assertFalse(FirstShotDrawGuard.pollPendingShot(300_000_000L, 600, false));
+        // ...fire once when the new draw ends...
+        assertTrue(FirstShotDrawGuard.pollPendingShot(1_500_000_000L, 0, false));
+        // ...and never again for the same tap.
+        assertFalse(FirstShotDrawGuard.pollPendingShot(1_550_000_000L, 0, false));
+    }
+
+    @Test
     void expiredBoundWithHeldTriggerDefersToTacz() {
         FirstShotDrawGuard.onDrawToGun(0, DRAW_MS, "gun");
         assertTrue(FirstShotDrawGuard.shouldBlockShoot(100_000_000L, 0));
