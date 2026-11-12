@@ -8,6 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Control-plane settings consumer: snapshot baseline plus ordered frame handling over the single
@@ -24,7 +25,24 @@ public final class CpConsumer {
     private static final Set<String> SETTINGS_NAMESPACES = Set.of("gameplay");
 
     /** Typed actions this consumer routes; anything else (console, OP) is rejected, never run. */
-    static final Set<String> ACTION_KINDS = Set.of("moderation.kick", "moderation.ban");
+    static final Set<String> ACTION_KINDS =
+            Set.of(
+                    "moderation.kick",
+                    "moderation.ban",
+                    "moderation.say",
+                    "moderation.pardon",
+                    "moderation.team-kick",
+                    "moderation.class-lock",
+                    "moderation.class-unlock",
+                    "moderation.range",
+                    "moderation.stop-room");
+
+    private static final Pattern NICKNAME = Pattern.compile("[A-Za-z0-9_]{3,16}");
+    private static final Pattern CLASS_ID = Pattern.compile("[a-z0-9_]{1,32}");
+    private static final Pattern ROOM_ID =
+            Pattern.compile("[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}");
+    private static final Set<String> RANGE_OPS = Set.of("open", "close", "reset");
+    private static final Set<String> STOP_OUTCOMES = Set.of("none", "draw", "RED", "BLUE");
 
     private final CpStore store;
     private final CpApplier applier;
@@ -285,9 +303,12 @@ public final class CpConsumer {
         }
         String kind = stringField(frame.envelopePayload, "kind");
         String target = stringField(frame.envelopePayload, "target");
-        String playerId = stringField(frame.envelopePayload, "playerId");
-        String reason = stringField(frame.envelopePayload, "reason");
-        if (!ACTION_KINDS.contains(kind) || target.isEmpty() || playerId.isEmpty()) {
+        if (!ACTION_KINDS.contains(kind) || target.isEmpty()) {
+            return terminal(
+                    frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
+        }
+        ActionArgs args = actionArgs(kind, frame.envelopePayload);
+        if (args == null) {
             return terminal(
                     frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
         }
@@ -305,7 +326,7 @@ public final class CpConsumer {
         store.markActionStarted(epochId, frame.operationId, kind);
         CpApplier.Outcome outcome;
         try {
-            outcome = actions.handleAction(kind, target, playerId, reason);
+            outcome = actions.handleAction(kind, target, args.playerId(), args.reason());
         } catch (RuntimeException e) {
             store.markActionOperatorNeeded(frame.operationId);
             return terminal(
@@ -323,6 +344,51 @@ public final class CpConsumer {
                     frame, CpAck.State.REJECTED, result, String.join("; ", outcome.errors()));
         }
         return effectiveChain(frame);
+    }
+
+    /**
+     * Handler-facing arguments per moderation kind (see {@link CpActionHandler} for the mapping).
+     * Null means the payload is malformed and the frame is rejected without a handler call.
+     */
+    private record ActionArgs(String playerId, String reason) {}
+
+    private static ActionArgs actionArgs(String kind, JsonObject payload) {
+        return switch (kind) {
+            case "moderation.kick", "moderation.ban" -> {
+                String playerId = stringField(payload, "playerId");
+                if (playerId.isEmpty()) {
+                    yield null;
+                }
+                yield new ActionArgs(playerId, stringField(payload, "reason"));
+            }
+            case "moderation.say" -> {
+                String text = stringField(payload, "text");
+                yield text.isEmpty() ? null : new ActionArgs("", text);
+            }
+            case "moderation.pardon", "moderation.team-kick" -> {
+                String player = stringField(payload, "player");
+                yield NICKNAME.matcher(player).matches() ? new ActionArgs(player, "") : null;
+            }
+            case "moderation.class-lock", "moderation.class-unlock" -> {
+                String classId = stringField(payload, "classId");
+                yield CLASS_ID.matcher(classId).matches() ? new ActionArgs(classId, "") : null;
+            }
+            case "moderation.range" -> {
+                String op = stringField(payload, "op");
+                yield RANGE_OPS.contains(op) ? new ActionArgs(op, "") : null;
+            }
+            case "moderation.stop-room" -> stopRoomArgs(payload);
+            default -> null;
+        };
+    }
+
+    private static ActionArgs stopRoomArgs(JsonObject payload) {
+        String roomId = stringField(payload, "roomId");
+        String outcome = stringField(payload, "outcome");
+        if (!ROOM_ID.matcher(roomId).matches() || !STOP_OUTCOMES.contains(outcome)) return null;
+        String reason = stringField(payload, "reason");
+        if (reason.length() > 500) return null;
+        return new ActionArgs(roomId, reason.isEmpty() ? outcome : outcome + " " + reason);
     }
 
     private static String namespaceOf(CpEnvelope frame) {
