@@ -1020,4 +1020,100 @@ class CombatSceneClockTest {
                 "adapted burst playback within 1.25x: " + maxAdaptedAdvance + " > " + cap);
         assertTrue(c.delay() >= 4, "servo absorbs burstiness, delay " + c.delay());
     }
+
+    /**
+     * Adaptive delay trace (coordination#19): 60 fps frames, arrivals stamped at the frame that
+     * handles them (main-thread receiver) after {@code late} ms of network delay beyond the tick
+     * grid, in order (reliable delivery holds successors). Checks every live frame for smooth
+     * playback: R advances within the servo's ±10 % of real time and never starves at H.
+     */
+    static CombatSceneClock adaptiveTrace(
+            double endMs,
+            java.util.function.IntToDoubleFunction late,
+            java.util.function.ObjDoubleConsumer<CombatSceneClock> check) {
+        var c = new CombatSceneClock();
+        double frameMs = 1000 / 60.0;
+        int n = 0;
+        double next = 0;
+        double previous = Double.NaN;
+        for (double now = 0; now < endMs; now += frameMs) {
+            while (next <= now) {
+                c.arrival(batch(1000 + n), now);
+                n++;
+                next = Math.max(next, n * 50 + late.applyAsDouble(n));
+            }
+            if (!c.frame(now)) continue;
+            if (!Double.isNaN(previous) && now >= 2000) {
+                double advance = c.time() - previous;
+                assertTrue(
+                        advance >= .9 * frameMs / 50 - 1e-4 && advance <= 1.1 * frameMs / 50 + 1e-4,
+                        "smooth playback at " + now + ": " + advance + " delay " + c.delay());
+                assertTrue(c.occupancy() > .5, "R starved at H at " + now);
+            }
+            previous = c.time();
+            check.accept(c, now);
+        }
+        assertEquals(0, c.recoverySnaps());
+        return c;
+    }
+
+    @Test
+    void steadyLinkSettlesAtTwoTicks() {
+        var random = new java.util.Random(19);
+        var c =
+                adaptiveTrace(
+                        15000,
+                        n -> random.nextDouble(0, 3),
+                        (clock, now) -> {
+                            if (now >= 6000) assertEquals(2, clock.delay(), "delay at " + now);
+                        });
+        assertTrue(c.jitter() > 0, "frame quantization is real jitter: " + c.jitter());
+    }
+
+    @Test
+    void jitteryLossyLinkHoldsThreeToFourTicks() {
+        // netem 80±30 ms with 2 % loss: a lost batch is resent one RTT later.
+        var random = new java.util.Random(30);
+        adaptiveTrace(
+                20000,
+                n -> random.nextDouble(0, 60) + (random.nextDouble() < .02 ? 80 : 0),
+                (clock, now) -> {
+                    if (now >= 5000)
+                        assertTrue(
+                                clock.delay() >= 3 && clock.delay() <= 4,
+                                "delay " + clock.delay() + " at " + now);
+                });
+    }
+
+    @Test
+    void delayGrowsFastAndShrinksSlowlyAfterJitterStops() {
+        var random = new java.util.Random(7);
+        double[] grownAt = {Double.NaN};
+        double[] shrunkAt = {Double.NaN};
+        adaptiveTrace(
+                30000,
+                n ->
+                        n * 50 < 6000 || n * 50 >= 12000
+                                ? random.nextDouble(0, 3)
+                                : random.nextDouble(0, 80),
+                (clock, now) -> {
+                    if (now >= 6000 && Double.isNaN(grownAt[0]) && clock.delay() >= 3)
+                        grownAt[0] = now;
+                    if (now >= 12000 && Double.isNaN(shrunkAt[0]) && clock.delay() == 2)
+                        shrunkAt[0] = now;
+                });
+        assertTrue(grownAt[0] - 6000 <= 1500, "grows within 1.5 s, at " + grownAt[0]);
+        assertTrue(
+                shrunkAt[0] - 12000 >= 3000, "shrinks no sooner than the hold, at " + shrunkAt[0]);
+        assertTrue(shrunkAt[0] - 12000 <= 10000, "recovers to 2 ticks, at " + shrunkAt[0]);
+    }
+
+    @Test
+    void stableBandHasHysteresis() {
+        assertEquals(2, CombatSceneClock.jitterDelay(9, 3));
+        assertEquals(3, CombatSceneClock.jitterDelay(12, 3));
+        assertEquals(2, CombatSceneClock.jitterDelay(12, 2));
+        assertEquals(3, CombatSceneClock.jitterDelay(17, 2));
+        assertEquals(4, CombatSceneClock.jitterDelay(40, 3));
+    }
 }
