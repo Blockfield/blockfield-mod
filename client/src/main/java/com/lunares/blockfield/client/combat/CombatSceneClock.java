@@ -82,8 +82,9 @@ public final class CombatSceneClock {
     static final double STABLE_JITTER_EXIT_MS = 16;
 
     /**
-     * Growth slews one tick per evaluation (500 ms); shrinking waits until a lower delay was wanted
-     * this long without interruption, so a calm spell inside a jittery link does not oscillate.
+     * Every step slews one tick per evaluation (500 ms), except the step into the 2-tick floor: it
+     * waits until 2 was wanted this long without interruption, so a calm spell inside a jittery
+     * link does not oscillate. Burst-absorbed delays above 3 still drain at the slew pace.
      */
     static final double SHRINK_HOLD_MS = 3000;
 
@@ -216,10 +217,10 @@ public final class CombatSceneClock {
             if (desired >= delay) shrinkSinceMs = Double.NaN;
             else if (Double.isNaN(shrinkSinceMs)) shrinkSinceMs = nowMs;
             // The servo then retargets R within ±dilation, so a step never snaps the drawn pose.
-            if (desired > delay || nowMs - shrinkSinceMs >= SHRINK_HOLD_MS) {
+            if (desired != delay
+                    && (delay > 3 || desired > delay || nowMs - shrinkSinceMs >= SHRINK_HOLD_MS)) {
                 delay += Integer.signum(desired - delay);
                 delayChanges++;
-                if (desired < delay) shrinkSinceMs = nowMs;
             }
             lastSlew = nowMs;
             burstSeen = false;

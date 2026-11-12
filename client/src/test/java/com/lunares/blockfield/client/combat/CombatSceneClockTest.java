@@ -1090,6 +1090,8 @@ class CombatSceneClockTest {
         var random = new java.util.Random(7);
         double[] grownAt = {Double.NaN};
         double[] shrunkAt = {Double.NaN};
+        double[] threeAt = {Double.NaN};
+        int[] peak = {0};
         adaptiveTrace(
                 30000,
                 n ->
@@ -1099,10 +1101,17 @@ class CombatSceneClockTest {
                 (clock, now) -> {
                     if (now >= 6000 && Double.isNaN(grownAt[0]) && clock.delay() >= 3)
                         grownAt[0] = now;
+                    if (now < 12000) peak[0] = Math.max(peak[0], clock.delay());
+                    if (now >= 12000 && Double.isNaN(threeAt[0]) && clock.delay() <= 3)
+                        threeAt[0] = now;
                     if (now >= 12000 && Double.isNaN(shrunkAt[0]) && clock.delay() == 2)
                         shrunkAt[0] = now;
                 });
         assertTrue(grownAt[0] - 6000 <= 1500, "grows within 1.5 s, at " + grownAt[0]);
+        // Above 3 ticks the delay drains at the slew pace; only the 2-tick floor waits out the
+        // hold.
+        assertTrue(
+                threeAt[0] - 12000 <= 500 * (peak[0] - 3) + 1500, "drains to 3 at " + threeAt[0]);
         assertTrue(
                 shrunkAt[0] - 12000 >= 3000, "shrinks no sooner than the hold, at " + shrunkAt[0]);
         assertTrue(shrunkAt[0] - 12000 <= 10000, "recovers to 2 ticks, at " + shrunkAt[0]);
