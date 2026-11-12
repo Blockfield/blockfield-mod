@@ -2,11 +2,13 @@ package com.lunares.blockfield.client.combat;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.lunares.blockfield.common.combat.AnimationEvent;
 import com.lunares.blockfield.common.combat.AnimationRecipe;
 import com.lunares.blockfield.common.combat.AnimationRecipe.SnapshotRecord;
 import com.lunares.blockfield.common.combat.AnimationResources;
 import com.lunares.blockfield.common.combat.AnimationSchema;
 import com.lunares.blockfield.common.combat.AnimationState;
+import com.lunares.blockfield.common.combat.AnimationTypes.LayerTag;
 import com.lunares.blockfield.common.combat.AnimationTypes.Time;
 import com.lunares.blockfield.network.packet.PlayerSnapshotS2CPacket;
 import java.util.ArrayList;
@@ -426,6 +428,56 @@ class ClientSnapshotBufferTest {
             assertEquals(102, decision.input().contentId());
         }
         assertEquals(0.28, at(b, 1, 102).x(), 1e-12);
+    }
+
+    @Test
+    void heldBoundaryCarriesOnlyTheParCoolMarkerNeverTheCoverStarts() {
+        var cover = withPaStart(ExactFixtures.checkpoint(id(1, 0, SUB, 7, 0, 0), 101, 0.28));
+        var held = ClientSnapshotBuffer.heldAt(cover, 102);
+        assertEquals(1, held.decisions().size(), "a skip contributes no new start");
+        var marker = held.decisions().get(0);
+        assertTrue(com.lunares.blockfield.common.combat.ParCoolCheckpoints.family(marker.layer()));
+        assertEquals(102, marker.id().serverTick());
+        assertEquals(102, marker.input().contentId());
+    }
+
+    /**
+     * {@code state} plus a PA start decision ahead of its ParCool marker (a cover that started).
+     */
+    static AnimationState withPaStart(AnimationState state) {
+        var marker = state.decisions().get(state.decisions().size() - 1);
+        var id = marker.id();
+        var start =
+                new AnimationEvent.Decision(
+                        new AnimationEvent.EventId(
+                                id.serverTick(), id.eventSequence() - 1, id.nativeStage()),
+                        LayerTag.PA_40,
+                        marker.startKind(),
+                        marker.outcome(),
+                        marker.predecessorEventSequence(),
+                        marker.predecessor(),
+                        marker.input(),
+                        marker.patch(),
+                        marker.transitionOrdinal());
+        var decisions = new ArrayList<AnimationEvent.Decision>();
+        decisions.add(start);
+        decisions.addAll(state.decisions());
+        return new AnimationState(
+                state.identity(),
+                state.serverTick(),
+                state.sampleRevision(),
+                state.eventWatermark(),
+                state.placement(),
+                state.vanilla(),
+                state.stance(),
+                state.equipment(),
+                state.tacz(),
+                state.lr(),
+                state.graph(),
+                state.parcool(),
+                state.create(),
+                state.sbw(),
+                decisions);
     }
 
     @Test
