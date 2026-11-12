@@ -1,6 +1,9 @@
 package com.lunares.blockfield.client.combat;
 
+import com.lunares.blockfield.common.combat.AnimationEvent;
 import com.lunares.blockfield.common.combat.AnimationRecipe;
+import com.lunares.blockfield.common.combat.AnimationResources;
+import com.lunares.blockfield.common.combat.AnimationState;
 import com.lunares.blockfield.network.packet.PlayerSnapshotS2CPacket;
 import com.lunares.blockfield.network.packet.SnapshotRestartC2SPacket;
 import com.lunares.blockfield.network.packet.SnapshotRestartC2SPacket.Reason;
@@ -22,6 +25,8 @@ public final class ClientSnapshotBuffer {
     public static final int HISTORY = 40;
     // One second at 20 tps caps retained payloads even with the maximum 2 s hold setting.
     public static final int MAX_HELD_BATCHES = 20;
+    // shortcut: assumes server far-rate farEvery <= 4 (default 2); raise with farEvery.
+    static final int MAX_RATE_SKIP = 4;
 
     private record Held(PlayerSnapshotS2CPacket batch, double deadlineMs) {}
 
@@ -252,10 +257,23 @@ public final class ClientSnapshotBuffer {
                 var value = decoded.get(i);
                 var track = tracks.computeIfAbsent(record.entityId(), id -> new Track());
                 var old = track.base;
-                // Every batch names all tracked eligible entities, so absence ended the run.
+                long last = track.lastTick;
+                // The server resends FULL after any gap but a pure far-rate skip: a DELTA closing
+                // a short absence continues the run over held boundaries (server heldBoundary).
+                boolean rateSkip =
+                        old != null
+                                && last >= 0
+                                && last < previous
+                                && tick - last <= MAX_RATE_SKIP
+                                && (record.flags()
+                                                & (AnimationRecipe.SnapshotRecord.FLAG_FULL
+                                                        | AnimationRecipe.SnapshotRecord
+                                                                .FLAG_RESET))
+                                        == 0;
+                // Every other absence ended the run.
                 boolean start =
                         old == null
-                                || track.lastTick != previous
+                                || last != previous && !rateSkip
                                 || (record.flags() & AnimationRecipe.SnapshotRecord.FLAG_RESET)
                                         != 0;
                 boolean boundary =
@@ -274,7 +292,10 @@ public final class ClientSnapshotBuffer {
                         track.frames.clear();
                         track.adoptable = true;
                     }
-                    if (track.adoptable) track.frames.put(tick, value);
+                    if (track.adoptable) {
+                        if (rateSkip && !boundary) holdSkipped(track, last, tick, value);
+                        track.frames.put(tick, value);
+                    }
                     continue;
                 }
                 if (value.kind() != track.nativeKind) {
@@ -299,7 +320,7 @@ public final class ClientSnapshotBuffer {
                     if (start) track.unclaimed = true;
                     if ((record.flags() & AnimationRecipe.SnapshotRecord.FLAG_SEAT) != 0)
                         track.seatCredit = true;
-                }
+                } else if (rateSkip) holdSkipped(track, last, tick, value);
                 track.frames.put(tick, value);
             }
             epoch = batch.observerStreamEpoch();
@@ -313,7 +334,8 @@ public final class ClientSnapshotBuffer {
             while (iterator.hasNext()) {
                 var entry = iterator.next();
                 var track = entry.getValue();
-                if (track.lastTick != tick && track.live) track.frames.clear();
+                // A short absence may be a far-rate skip the next DELTA certifies.
+                if (track.live && tick - track.lastTick >= MAX_RATE_SKIP) track.frames.clear();
                 boolean pending = !track.frames.isEmpty();
                 track.frames.headMap(high - HISTORY + 1, false).clear();
                 if (pending && track.frames.isEmpty()) expiredPending++;
@@ -464,6 +486,69 @@ public final class ClientSnapshotBuffer {
     public boolean hasLiveSamples(int id) {
         var track = tracks.get(id);
         return !broken && track != null && track.live && !track.frames.isEmpty();
+    }
+
+    /**
+     * Fills the certified far-rate skips {@code last+1 .. tick-1} with the last sent frame held at
+     * each tick, as the server replays them: a true skip contributes no new input.
+     */
+    private static void holdSkipped(Track track, long last, long tick, SnapshotTransform value) {
+        var cover = track.frames.get(last);
+        if (cover == null) return;
+        for (long n = last + 1; n < tick; n++)
+            track.frames.put(
+                    n,
+                    SnapshotTransform.exact(
+                            n,
+                            value.identity(),
+                            0,
+                            cover.placement(),
+                            cover.checkpoint() == null ? null : heldAt(cover.checkpoint(), n)));
+    }
+
+    /**
+     * Mirror of the server's {@code AnimSyncStream.heldAt}: the cover's pose re-stamped at the
+     * skipped tick, its decisions (and their input refs) re-stamped too, since the reducer requires
+     * every decision of boundary n to name n. Must stay byte-identical to the server's replay.
+     */
+    static AnimationState heldAt(AnimationState cover, long skipTick) {
+        var decisions = new ArrayList<AnimationEvent.Decision>(cover.decisions().size());
+        for (var decision : cover.decisions()) {
+            var id = decision.id();
+            var input = decision.input();
+            decisions.add(
+                    new AnimationEvent.Decision(
+                            new AnimationEvent.EventId(
+                                    skipTick, id.eventSequence(), id.nativeStage()),
+                            decision.layer(),
+                            decision.startKind(),
+                            decision.outcome(),
+                            decision.predecessorEventSequence(),
+                            decision.predecessor(),
+                            new AnimationResources.InputRef(
+                                    input.resourceGeneration(),
+                                    input.targetEpoch(),
+                                    skipTick,
+                                    input.dependencyDigest()),
+                            decision.patch(),
+                            decision.transitionOrdinal()));
+        }
+        return new AnimationState(
+                cover.identity(),
+                skipTick,
+                cover.sampleRevision(),
+                cover.eventWatermark(),
+                cover.placement(),
+                cover.vanilla(),
+                cover.stance(),
+                cover.equipment(),
+                cover.tacz(),
+                cover.lr(),
+                cover.graph(),
+                cover.parcool(),
+                cover.create(),
+                cover.sbw(),
+                decisions);
     }
 
     /** Live decoded frames of one entity by tick (read-only), or an empty map. */
