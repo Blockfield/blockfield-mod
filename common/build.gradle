@@ -5,16 +5,38 @@ dependencies {
     modCompileOnly files(pinnedMod('parcool'))
     // Shared PlayerAnimator graph freeze/materialize for remote presentation and server rewind.
     modCompileOnly files(pinnedMod('playerAnimator'))
+    // SBW seat/parachute layouts resolved reflectively by tests (SbwLayouts); remapped
+    // via the mod configuration like other fork jars, never bundled (server does the same).
+    modCompileOnly files(pinnedMod('superbwarfare'))
     modCompileOnly "maven.modrinth:tacz-refabricated:${tacz_version}"
     // Read the equipped rig on both logical sides. Optional at runtime; never bundled.
     modCompileOnly "io.wispforest:accessories-fabric:${accessories_version}"
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // SBW is Kotlin: its classes need the stdlib at test runtime (server carries it
+    // via compileOnly on the main classpath, inherited by tests there).
+    testRuntimeOnly 'org.jetbrains.kotlin:kotlin-stdlib:2.1.20'
+    // SBW seat data (@Serializable SeatInfo) needs the serialization runtime its static init
+    // touches; the pinned SBW jar ships without its transitives on the files() classpath.
+    testRuntimeOnly 'org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.9.0'
 }
 
 test {
+    classpath += sourceSets.main.compileClasspath
     useJUnitPlatform()
     maxHeapSize = '256m'
+}
+
+// Native pins under test (AnimationNativeRegistryTest): same provider/doFirst shape as client.
+def parcoolTestJar = providers.provider { pinnedMod('parcool') }
+def playerAnimatorTestJar = providers.provider { pinnedMod('playerAnimator') }
+test {
+    inputs.file(parcoolTestJar)
+    inputs.file(playerAnimatorTestJar)
+    doFirst {
+        systemProperty 'blockfield.test.parcoolJar', parcoolTestJar.get().absolutePath
+        systemProperty 'blockfield.test.playerAnimatorJar', playerAnimatorTestJar.get().absolutePath
+    }
 }
 
 // Общий код едет внутрь client- и server-jar (см. их jar{from ...}), отдельным модом не является:
