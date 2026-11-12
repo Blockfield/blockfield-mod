@@ -407,14 +407,49 @@ class ClientSnapshotBufferTest {
     }
 
     @Test
+    void farRateSkipClosedByDeltaHoldsTheLastSentBoundary() {
+        var b = new ClientSnapshotBuffer();
+        b.add(1, 0);
+        apply(b, batch(100, full(1, 0, FULL_RESET, 0, 7, 0, 0, 100)));
+        apply(b, batch(101, cont(1, 0.28, 101)));
+        apply(b, empty(102));
+        assertTrue(b.hasLiveSamples(1), "a skip may still be certified by the next DELTA");
+        assertTrue(apply(b, batch(103, cont(1, 0.84, 103))));
+        var frames = b.frames(1);
+        assertEquals(List.of(100L, 101L, 102L, 103L), List.copyOf(frames.keySet()));
+        var held = frames.get(102L);
+        assertEquals(frames.get(101L).placement(), held.placement());
+        assertEquals(102, held.checkpoint().serverTick());
+        assertFalse(held.checkpoint().decisions().isEmpty());
+        for (var decision : held.checkpoint().decisions()) {
+            assertEquals(102, decision.id().serverTick());
+            assertEquals(102, decision.input().contentId());
+        }
+        assertEquals(0.28, at(b, 1, 102).x(), 1e-12);
+    }
+
+    @Test
+    void fullAfterAShortAbsenceStillStartsAFreshRun() {
+        var b = new ClientSnapshotBuffer();
+        b.add(1, 0);
+        apply(b, batch(100, full(1, 0, FULL_RESET, 0, 7, 0, 0, 100)));
+        apply(b, batch(101, cont(1, 0.28, 101)));
+        apply(b, empty(102));
+        assertTrue(apply(b, batch(103, full(1, 0, SnapshotRecord.FLAG_FULL, 0.84, 7, 0, 0, 103))));
+        assertEquals(List.of(103L), List.copyOf(b.frames(1).keySet()));
+    }
+
+    @Test
     void absenceStopsDrivingAndResumedDeltaStartsAFreshRunOnTheKeptBaseline() {
         var b = new ClientSnapshotBuffer();
         b.add(5, 1);
         apply(b, batch(100, full(5, 1, FULL_RESET, 0, 2, 0, 0, 100)));
         apply(b, batch(101, cartCont(5, 0.28, 101)));
-        apply(b, empty(102));
+        for (int t = 102; t <= 104; t++) apply(b, empty(t));
+        assertTrue(b.hasLiveSamples(5), "shorter than the longest far-rate skip");
+        apply(b, empty(105));
         assertFalse(b.hasLiveSamples(5));
-        for (int t = 103; t <= 151; t++) apply(b, empty(t));
+        for (int t = 106; t <= 151; t++) apply(b, empty(t));
         assertTrue(apply(b, batch(152, full(5, 1, 0, 1.28, 2, 0, 0, 152))));
         var s = SnapshotResolver.exact(b.frames(5), Time.whole(151));
         assertEquals("snap", s.mode());
