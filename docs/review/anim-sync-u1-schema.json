@@ -1,0 +1,3975 @@
+{
+  "schema": 5,
+  "layoutDigest": "87caf7ae970cdb9b0dddb9156125a3212766c4ce044db9571be0bc3b24091549",
+  "contract": "ADR4.1",
+  "records": [
+    {
+      "tag": 1,
+      "name": "AnimationTypes.Time",
+      "section": "3.1",
+      "fields": [
+        {
+          "name": "tick",
+          "type": "long"
+        },
+        {
+          "name": "alpha",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 2,
+      "name": "AnimationResources.Digest",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "a",
+          "type": "long"
+        },
+        {
+          "name": "b",
+          "type": "long"
+        },
+        {
+          "name": "c",
+          "type": "long"
+        },
+        {
+          "name": "d",
+          "type": "long"
+        }
+      ]
+    },
+    {
+      "tag": 3,
+      "name": "AnimationResources.EquipmentRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 4,
+      "name": "AnimationResources.ItemRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 5,
+      "name": "AnimationResources.ClipRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 6,
+      "name": "AnimationResources.ConfigRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 7,
+      "name": "AnimationResources.DefinitionRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 8,
+      "name": "AnimationResources.AttachmentRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 9,
+      "name": "AnimationResources.FirstPersonRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 10,
+      "name": "AnimationResources.MetadataRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 11,
+      "name": "AnimationResources.InputRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 12,
+      "name": "AnimationResources.VehicleRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 13,
+      "name": "AnimationResources.FunctionRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 14,
+      "name": "AnimationResources.SeedRef",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "contentId",
+          "type": "long"
+        },
+        {
+          "name": "dependencyDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 15,
+      "name": "AnimationResources.Definition",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "ref",
+          "type": "ResourceRef"
+        },
+        {
+          "name": "value",
+          "type": "Bytes"
+        },
+        {
+          "name": "dependencies",
+          "type": "List<ResourceRef>"
+        }
+      ]
+    },
+    {
+      "tag": 16,
+      "name": "AnimationState",
+      "section": "4",
+      "fields": [
+        {
+          "name": "identity",
+          "type": "Identity"
+        },
+        {
+          "name": "serverTick",
+          "type": "long"
+        },
+        {
+          "name": "sampleRevision",
+          "type": "long"
+        },
+        {
+          "name": "eventWatermark",
+          "type": "long"
+        },
+        {
+          "name": "placement",
+          "type": "Placement"
+        },
+        {
+          "name": "vanilla",
+          "type": "Vanilla"
+        },
+        {
+          "name": "stance",
+          "type": "Stance"
+        },
+        {
+          "name": "equipment",
+          "type": "Equipment"
+        },
+        {
+          "name": "tacz",
+          "type": "@Nullable Tacz"
+        },
+        {
+          "name": "lr",
+          "type": "Lr"
+        },
+        {
+          "name": "graph",
+          "type": "AnimationGraphState"
+        },
+        {
+          "name": "parcool",
+          "type": "ParCool"
+        },
+        {
+          "name": "create",
+          "type": "Create"
+        },
+        {
+          "name": "sbw",
+          "type": "Sbw"
+        },
+        {
+          "name": "decisions",
+          "type": "List<AnimationEvent.Decision>"
+        }
+      ]
+    },
+    {
+      "tag": 17,
+      "name": "AnimationState.Identity",
+      "section": "2.1",
+      "fields": [
+        {
+          "name": "connectionId",
+          "type": "long"
+        },
+        {
+          "name": "observerStreamEpoch",
+          "type": "long"
+        },
+        {
+          "name": "sceneGeneration",
+          "type": "long"
+        },
+        {
+          "name": "entityId",
+          "type": "int"
+        },
+        {
+          "name": "kind",
+          "type": "int"
+        },
+        {
+          "name": "subscriptionGeneration",
+          "type": "long"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "seatGeneration",
+          "type": "long"
+        },
+        {
+          "name": "teleportGeneration",
+          "type": "long"
+        },
+        {
+          "name": "resourceGeneration",
+          "type": "long"
+        },
+        {
+          "name": "policyGeneration",
+          "type": "long"
+        },
+        {
+          "name": "compatibilityDigest",
+          "type": "Digest"
+        },
+        {
+          "name": "manifestDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 18,
+      "name": "AnimationState.Vec3",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "x",
+          "type": "double"
+        },
+        {
+          "name": "y",
+          "type": "double"
+        },
+        {
+          "name": "z",
+          "type": "double"
+        }
+      ]
+    },
+    {
+      "tag": 19,
+      "name": "AnimationState.Vec3f",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "x",
+          "type": "float"
+        },
+        {
+          "name": "y",
+          "type": "float"
+        },
+        {
+          "name": "z",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 20,
+      "name": "AnimationState.Angles",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "yRotO",
+          "type": "float"
+        },
+        {
+          "name": "yRot",
+          "type": "float"
+        },
+        {
+          "name": "xRotO",
+          "type": "float"
+        },
+        {
+          "name": "xRot",
+          "type": "float"
+        },
+        {
+          "name": "yBodyRotO",
+          "type": "float"
+        },
+        {
+          "name": "yBodyRot",
+          "type": "float"
+        },
+        {
+          "name": "yHeadRotO",
+          "type": "float"
+        },
+        {
+          "name": "yHeadRot",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 21,
+      "name": "AnimationState.Walk",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "position",
+          "type": "float"
+        },
+        {
+          "name": "speedOld",
+          "type": "float"
+        },
+        {
+          "name": "speed",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 22,
+      "name": "AnimationState.VehicleAngles",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "prevRoll",
+          "type": "float"
+        },
+        {
+          "name": "roll",
+          "type": "float"
+        },
+        {
+          "name": "turretYRotO",
+          "type": "float"
+        },
+        {
+          "name": "turretYRot",
+          "type": "float"
+        },
+        {
+          "name": "turretXRotO",
+          "type": "float"
+        },
+        {
+          "name": "turretXRot",
+          "type": "float"
+        },
+        {
+          "name": "gunYRotO",
+          "type": "float"
+        },
+        {
+          "name": "gunYRot",
+          "type": "float"
+        },
+        {
+          "name": "gunXRotO",
+          "type": "float"
+        },
+        {
+          "name": "gunXRot",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 23,
+      "name": "AnimationState.Placement",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "previousOrigin",
+          "type": "Vec3"
+        },
+        {
+          "name": "origin",
+          "type": "Vec3"
+        },
+        {
+          "name": "angles",
+          "type": "Angles"
+        },
+        {
+          "name": "walk",
+          "type": "Walk"
+        },
+        {
+          "name": "deltaMovementOnPreviousTick",
+          "type": "Vec3"
+        },
+        {
+          "name": "deltaMovement",
+          "type": "Vec3"
+        },
+        {
+          "name": "vehicleAngles",
+          "type": "VehicleAngles"
+        },
+        {
+          "name": "reads",
+          "type": "List<VehicleRead>"
+        }
+      ]
+    },
+    {
+      "tag": 24,
+      "name": "AnimationState.Attack",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "oAttackAnim",
+          "type": "float"
+        },
+        {
+          "name": "attackAnim",
+          "type": "float"
+        },
+        {
+          "name": "swinging",
+          "type": "boolean"
+        },
+        {
+          "name": "swingTime",
+          "type": "int"
+        },
+        {
+          "name": "swingingArm",
+          "type": "@Nullable Hand"
+        }
+      ]
+    },
+    {
+      "tag": 25,
+      "name": "AnimationState.Vital",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "tickCount",
+          "type": "int"
+        },
+        {
+          "name": "deathTime",
+          "type": "int"
+        },
+        {
+          "name": "hurtTime",
+          "type": "int"
+        },
+        {
+          "name": "hurtDuration",
+          "type": "int"
+        },
+        {
+          "name": "fallFlyTicks",
+          "type": "int"
+        },
+        {
+          "name": "ticksFrozen",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 26,
+      "name": "AnimationState.Flags",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "alive",
+          "type": "boolean"
+        },
+        {
+          "name": "spectator",
+          "type": "boolean"
+        },
+        {
+          "name": "baby",
+          "type": "boolean"
+        },
+        {
+          "name": "crouching",
+          "type": "boolean"
+        },
+        {
+          "name": "visuallySwimming",
+          "type": "boolean"
+        },
+        {
+          "name": "swimming",
+          "type": "boolean"
+        },
+        {
+          "name": "fallFlying",
+          "type": "boolean"
+        },
+        {
+          "name": "autoSpinAttack",
+          "type": "boolean"
+        },
+        {
+          "name": "onGround",
+          "type": "boolean"
+        },
+        {
+          "name": "inWater",
+          "type": "boolean"
+        },
+        {
+          "name": "inBubbleColumn",
+          "type": "boolean"
+        },
+        {
+          "name": "fullyFrozen",
+          "type": "boolean"
+        },
+        {
+          "name": "passenger",
+          "type": "boolean"
+        },
+        {
+          "name": "sprinting",
+          "type": "boolean"
+        },
+        {
+          "name": "creativeFlying",
+          "type": "boolean"
+        },
+        {
+          "name": "climbing",
+          "type": "boolean"
+        },
+        {
+          "name": "upsideDown",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 27,
+      "name": "AnimationState.Size",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "scale",
+          "type": "float"
+        },
+        {
+          "name": "bbHeight",
+          "type": "float"
+        },
+        {
+          "name": "bbWidth",
+          "type": "float"
+        },
+        {
+          "name": "standingEyeHeight",
+          "type": "float"
+        },
+        {
+          "name": "eyeHeight",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 28,
+      "name": "AnimationState.ItemUse",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "usingItem",
+          "type": "boolean"
+        },
+        {
+          "name": "usedItemHand",
+          "type": "Hand"
+        },
+        {
+          "name": "useItemRemaining",
+          "type": "int"
+        },
+        {
+          "name": "ticksUsingItem",
+          "type": "int"
+        },
+        {
+          "name": "mainArmPose",
+          "type": "ArmPose"
+        },
+        {
+          "name": "offArmPose",
+          "type": "ArmPose"
+        },
+        {
+          "name": "useAnimation",
+          "type": "UseAnimation"
+        },
+        {
+          "name": "useDuration",
+          "type": "int"
+        },
+        {
+          "name": "crossbowChargeDuration",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 29,
+      "name": "AnimationState.Vanilla",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "attack",
+          "type": "Attack"
+        },
+        {
+          "name": "swimAmountO",
+          "type": "float"
+        },
+        {
+          "name": "swimAmount",
+          "type": "float"
+        },
+        {
+          "name": "oBob",
+          "type": "float"
+        },
+        {
+          "name": "bob",
+          "type": "float"
+        },
+        {
+          "name": "vital",
+          "type": "Vital"
+        },
+        {
+          "name": "pose",
+          "type": "Pose"
+        },
+        {
+          "name": "flags",
+          "type": "Flags"
+        },
+        {
+          "name": "fallDistance",
+          "type": "float"
+        },
+        {
+          "name": "mainArm",
+          "type": "Arm"
+        },
+        {
+          "name": "bedOrientation",
+          "type": "@Nullable Direction"
+        },
+        {
+          "name": "size",
+          "type": "Size"
+        },
+        {
+          "name": "gravity",
+          "type": "double"
+        },
+        {
+          "name": "itemUse",
+          "type": "ItemUse"
+        },
+        {
+          "name": "medkitActive",
+          "type": "boolean"
+        },
+        {
+          "name": "medkitHand",
+          "type": "@Nullable Hand"
+        }
+      ]
+    },
+    {
+      "tag": 30,
+      "name": "AnimationState.DimensionsValue",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "width",
+          "type": "float"
+        },
+        {
+          "name": "height",
+          "type": "float"
+        },
+        {
+          "name": "eyeHeight",
+          "type": "float"
+        },
+        {
+          "name": "fixed",
+          "type": "boolean"
+        },
+        {
+          "name": "attachments",
+          "type": "AttachmentRef"
+        }
+      ]
+    },
+    {
+      "tag": 31,
+      "name": "AnimationState.Stance",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "age",
+          "type": "int"
+        },
+        {
+          "name": "eased",
+          "type": "boolean"
+        },
+        {
+          "name": "fromFlat",
+          "type": "float"
+        },
+        {
+          "name": "toFlat",
+          "type": "float"
+        },
+        {
+          "name": "flat",
+          "type": "float"
+        },
+        {
+          "name": "fromCrouch",
+          "type": "float"
+        },
+        {
+          "name": "toCrouch",
+          "type": "float"
+        },
+        {
+          "name": "crouch",
+          "type": "float"
+        },
+        {
+          "name": "from",
+          "type": "DimensionsValue"
+        },
+        {
+          "name": "to",
+          "type": "DimensionsValue"
+        },
+        {
+          "name": "current",
+          "type": "DimensionsValue"
+        }
+      ]
+    },
+    {
+      "tag": 32,
+      "name": "AnimationState.Equipment",
+      "section": "4.2",
+      "fields": [
+        {
+          "name": "equipmentRef",
+          "type": "EquipmentRef"
+        },
+        {
+          "name": "mainHandRef",
+          "type": "ItemRef"
+        },
+        {
+          "name": "offHandRef",
+          "type": "ItemRef"
+        },
+        {
+          "name": "useItemRef",
+          "type": "ItemRef"
+        }
+      ]
+    },
+    {
+      "tag": 33,
+      "name": "AnimationState.Tacz",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "evaluatorKind",
+          "type": "EvaluatorKind"
+        },
+        {
+          "name": "gunId",
+          "type": "DefinitionRef"
+        },
+        {
+          "name": "displayOverrideId",
+          "type": "@Nullable DefinitionRef"
+        },
+        {
+          "name": "resolvedDisplayId",
+          "type": "DefinitionRef"
+        },
+        {
+          "name": "fixedHand",
+          "type": "boolean"
+        },
+        {
+          "name": "aimProgress",
+          "type": "float"
+        },
+        {
+          "name": "lowerClip",
+          "type": "@Nullable ClipRef"
+        },
+        {
+          "name": "upperClip",
+          "type": "@Nullable ClipRef"
+        },
+        {
+          "name": "actionClip",
+          "type": "@Nullable ClipRef"
+        },
+        {
+          "name": "lowerStart",
+          "type": "@Nullable AnimationStartReport.StartKey"
+        },
+        {
+          "name": "upperStart",
+          "type": "@Nullable AnimationStartReport.StartKey"
+        },
+        {
+          "name": "actionStart",
+          "type": "@Nullable AnimationStartReport.StartKey"
+        },
+        {
+          "name": "exhausted",
+          "type": "boolean"
+        },
+        {
+          "name": "proneAtEvent",
+          "type": "boolean"
+        },
+        {
+          "name": "meleeVariant",
+          "type": "@Nullable DefinitionRef"
+        },
+        {
+          "name": "outcome",
+          "type": "Outcome"
+        }
+      ]
+    },
+    {
+      "tag": 34,
+      "name": "AnimationState.Lr",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "config",
+          "type": "@Nullable ConfigRef"
+        },
+        {
+          "name": "display",
+          "type": "@Nullable DefinitionRef"
+        },
+        {
+          "name": "upperSelection",
+          "type": "@Nullable ClipRef"
+        },
+        {
+          "name": "lowerSelection",
+          "type": "@Nullable ClipRef"
+        },
+        {
+          "name": "attackAction",
+          "type": "@Nullable String"
+        },
+        {
+          "name": "actionCount",
+          "type": "int"
+        },
+        {
+          "name": "attackDisplay",
+          "type": "@Nullable DefinitionRef"
+        },
+        {
+          "name": "attackActive",
+          "type": "boolean"
+        },
+        {
+          "name": "rotationEnabled",
+          "type": "boolean"
+        },
+        {
+          "name": "rotationFade",
+          "type": "int"
+        },
+        {
+          "name": "fixedHand",
+          "type": "boolean"
+        },
+        {
+          "name": "passenger",
+          "type": "boolean"
+        },
+        {
+          "name": "pending",
+          "type": "List<PendingOperation>"
+        }
+      ]
+    },
+    {
+      "tag": 35,
+      "name": "AnimationState.PendingOperation",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "serverTick",
+          "type": "long"
+        },
+        {
+          "name": "sequence",
+          "type": "long"
+        },
+        {
+          "name": "action",
+          "type": "String"
+        },
+        {
+          "name": "count",
+          "type": "int"
+        },
+        {
+          "name": "display",
+          "type": "DefinitionRef"
+        }
+      ]
+    },
+    {
+      "tag": 36,
+      "name": "AnimationState.Option",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "animationCanceled",
+          "type": "boolean"
+        },
+        {
+          "name": "allowedParts",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 37,
+      "name": "AnimationState.Passive",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "fallingAnimationTick",
+          "type": "int"
+        },
+        {
+          "name": "flyingAnimationLevelOld",
+          "type": "int"
+        },
+        {
+          "name": "flyingAnimationLevel",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 38,
+      "name": "AnimationState.Grid4",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "baseIndex",
+          "type": "long"
+        },
+        {
+          "name": "previous",
+          "type": "float"
+        },
+        {
+          "name": "start",
+          "type": "float"
+        },
+        {
+          "name": "first",
+          "type": "float"
+        },
+        {
+          "name": "second",
+          "type": "float"
+        },
+        {
+          "name": "third",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 39,
+      "name": "AnimationState.HangGrid",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "yaw",
+          "type": "Grid4"
+        },
+        {
+          "name": "constructorYaw",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 40,
+      "name": "AnimationState.DiveGrid",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "factor",
+          "type": "Grid4"
+        }
+      ]
+    },
+    {
+      "tag": 41,
+      "name": "AnimationState.ParCool",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "animator",
+          "type": "@Nullable AnimationGraphState.NodeRef"
+        },
+        {
+          "name": "passiveStart",
+          "type": "AnimationStartReport.StartKey"
+        },
+        {
+          "name": "option",
+          "type": "Option"
+        },
+        {
+          "name": "passive",
+          "type": "Passive"
+        },
+        {
+          "name": "actions",
+          "type": "List<ActionState>"
+        },
+        {
+          "name": "hangGrid",
+          "type": "HangGrid"
+        },
+        {
+          "name": "diveGrid",
+          "type": "DiveGrid"
+        }
+      ]
+    },
+    {
+      "tag": 42,
+      "name": "AnimationState.ActionState",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "action",
+          "type": "ActionTag"
+        },
+        {
+          "name": "doing",
+          "type": "boolean"
+        },
+        {
+          "name": "doingTick",
+          "type": "int"
+        },
+        {
+          "name": "notDoingTick",
+          "type": "int"
+        },
+        {
+          "name": "tickFromStarted",
+          "type": "int"
+        },
+        {
+          "name": "inputs",
+          "type": "List<ActionInput>"
+        }
+      ]
+    },
+    {
+      "tag": 43,
+      "name": "AnimationState.AcceptedStart",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "action",
+          "type": "ActionTag"
+        },
+        {
+          "name": "variant",
+          "type": "int"
+        },
+        {
+          "name": "flag",
+          "type": "boolean"
+        },
+        {
+          "name": "direction",
+          "type": "@Nullable Vec3"
+        },
+        {
+          "name": "run",
+          "type": "@Nullable Vec3"
+        },
+        {
+          "name": "scalar",
+          "type": "double"
+        },
+        {
+          "name": "valid",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 44,
+      "name": "AnimationState.DurationInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "duration",
+          "type": "int"
+        },
+        {
+          "name": "configuredDuration",
+          "type": "ConfigRef"
+        }
+      ]
+    },
+    {
+      "tag": 45,
+      "name": "AnimationState.SlideInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "slidingVec",
+          "type": "@Nullable Vec3"
+        }
+      ]
+    },
+    {
+      "tag": 46,
+      "name": "AnimationState.HorizontalWallRunInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "bodyYaw",
+          "type": "float"
+        },
+        {
+          "name": "wallIsRightward",
+          "type": "boolean"
+        },
+        {
+          "name": "runningWallDirection",
+          "type": "@Nullable Vec3"
+        },
+        {
+          "name": "runningDirection",
+          "type": "@Nullable Vec3"
+        }
+      ]
+    },
+    {
+      "tag": 47,
+      "name": "AnimationState.VerticalWallRunInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "playerYSpeed",
+          "type": "double"
+        },
+        {
+          "name": "wallDirection",
+          "type": "@Nullable Vec3"
+        }
+      ]
+    },
+    {
+      "tag": 48,
+      "name": "AnimationState.WallSlideInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "leanedWallDirection",
+          "type": "@Nullable Vec3"
+        }
+      ]
+    },
+    {
+      "tag": 49,
+      "name": "AnimationState.HangInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "bodySwingAngleFactor",
+          "type": "double"
+        },
+        {
+          "name": "armSwingAmount",
+          "type": "float"
+        },
+        {
+          "name": "orthogonalToBar",
+          "type": "boolean"
+        },
+        {
+          "name": "barAxis",
+          "type": "@Nullable BarAxis"
+        },
+        {
+          "name": "yawSeed",
+          "type": "float"
+        },
+        {
+          "name": "valid",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 50,
+      "name": "AnimationState.ClingInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "armSwingAmount",
+          "type": "float"
+        },
+        {
+          "name": "facingDirection",
+          "type": "@Nullable FacingDirection"
+        },
+        {
+          "name": "clingWallDirection",
+          "type": "@Nullable Vec3"
+        }
+      ]
+    },
+    {
+      "tag": 51,
+      "name": "AnimationState.DiveInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "justJumped",
+          "type": "boolean"
+        },
+        {
+          "name": "initialYVelocityOfLastJump",
+          "type": "double"
+        },
+        {
+          "name": "playerYSpeedOld",
+          "type": "double"
+        },
+        {
+          "name": "playerYSpeed",
+          "type": "double"
+        },
+        {
+          "name": "fallingTick",
+          "type": "int"
+        },
+        {
+          "name": "fromSkyDive",
+          "type": "boolean"
+        },
+        {
+          "name": "notLandingTick",
+          "type": "int"
+        },
+        {
+          "name": "waterEntry",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 52,
+      "name": "AnimationState.ChargeInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "chargeTick",
+          "type": "int"
+        },
+        {
+          "name": "lastChargeTick",
+          "type": "int"
+        },
+        {
+          "name": "notChargeTick",
+          "type": "int"
+        },
+        {
+          "name": "started",
+          "type": "boolean"
+        },
+        {
+          "name": "syncTick",
+          "type": "int"
+        },
+        {
+          "name": "syncValid",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 53,
+      "name": "AnimationState.ZiplineInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "endOffsetFromStart",
+          "type": "@Nullable Vec3"
+        },
+        {
+          "name": "acceleration",
+          "type": "double"
+        },
+        {
+          "name": "slope",
+          "type": "double"
+        },
+        {
+          "name": "gravity",
+          "type": "double"
+        },
+        {
+          "name": "valid",
+          "type": "boolean"
+        },
+        {
+          "name": "rope",
+          "type": "@Nullable VehicleRef"
+        }
+      ]
+    },
+    {
+      "tag": 54,
+      "name": "AnimationState.HideInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "lookDirection",
+          "type": "@Nullable Vec3"
+        },
+        {
+          "name": "startedFromDiving",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 55,
+      "name": "AnimationState.IntentInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "forward",
+          "type": "boolean"
+        },
+        {
+          "name": "back",
+          "type": "boolean"
+        },
+        {
+          "name": "left",
+          "type": "boolean"
+        },
+        {
+          "name": "right",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 56,
+      "name": "AnimationState.PassiveInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "notLandingTick",
+          "type": "int"
+        },
+        {
+          "name": "ground",
+          "type": "boolean"
+        },
+        {
+          "name": "fall",
+          "type": "boolean"
+        },
+        {
+          "name": "flying",
+          "type": "boolean"
+        },
+        {
+          "name": "cling",
+          "type": "boolean"
+        },
+        {
+          "name": "fallDistance",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 57,
+      "name": "AnimationState.CompatibilityInput",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "heldEquipment",
+          "type": "EquipmentRef"
+        },
+        {
+          "name": "animator",
+          "type": "AnimatorTag"
+        },
+        {
+          "name": "policyGeneration",
+          "type": "long"
+        },
+        {
+          "name": "option",
+          "type": "Option"
+        }
+      ]
+    },
+    {
+      "tag": 58,
+      "name": "AnimationState.NoInput",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 59,
+      "name": "AnimationState.Create",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "hanging",
+          "type": "boolean"
+        },
+        {
+          "name": "membershipStart",
+          "type": "@Nullable AnimationStartReport.StartKey"
+        },
+        {
+          "name": "phaseAnchor",
+          "type": "long"
+        },
+        {
+          "name": "u0",
+          "type": "int"
+        },
+        {
+          "name": "anchorClass",
+          "type": "AnchorClass"
+        }
+      ]
+    },
+    {
+      "tag": 60,
+      "name": "AnimationState.Sbw",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "parachuteOpen",
+          "type": "boolean"
+        },
+        {
+          "name": "gun",
+          "type": "boolean"
+        },
+        {
+          "name": "seatPose",
+          "type": "@Nullable String"
+        },
+        {
+          "name": "directVehicleEntityId",
+          "type": "int"
+        },
+        {
+          "name": "rootVehicleEntityId",
+          "type": "int"
+        },
+        {
+          "name": "directSeatIndex",
+          "type": "int"
+        },
+        {
+          "name": "rootSeatIndex",
+          "type": "int"
+        },
+        {
+          "name": "directTargetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "directSeatGeneration",
+          "type": "long"
+        },
+        {
+          "name": "directTeleportGeneration",
+          "type": "long"
+        },
+        {
+          "name": "rootTargetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "rootSeatGeneration",
+          "type": "long"
+        },
+        {
+          "name": "rootTeleportGeneration",
+          "type": "long"
+        },
+        {
+          "name": "directSeatDefinition",
+          "type": "@Nullable DefinitionRef"
+        },
+        {
+          "name": "rootSeatDefinition",
+          "type": "@Nullable DefinitionRef"
+        },
+        {
+          "name": "transformName",
+          "type": "@Nullable DefinitionRef"
+        },
+        {
+          "name": "scale",
+          "type": "float"
+        },
+        {
+          "name": "visibility",
+          "type": "Visibility"
+        }
+      ]
+    },
+    {
+      "tag": 61,
+      "name": "AnimationState.ReadSlot",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "declaringClass",
+          "type": "String"
+        },
+        {
+          "name": "memberId",
+          "type": "String"
+        },
+        {
+          "name": "descriptor",
+          "type": "String"
+        },
+        {
+          "name": "role",
+          "type": "Role"
+        }
+      ]
+    },
+    {
+      "tag": 62,
+      "name": "AnimationState.BooleanValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "value",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 63,
+      "name": "AnimationState.IntValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "value",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 64,
+      "name": "AnimationState.LongValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "value",
+          "type": "long"
+        }
+      ]
+    },
+    {
+      "tag": 65,
+      "name": "AnimationState.FloatValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "value",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 66,
+      "name": "AnimationState.DoubleValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "value",
+          "type": "double"
+        }
+      ]
+    },
+    {
+      "tag": 67,
+      "name": "AnimationState.EnumValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "schema",
+          "type": "DefinitionRef"
+        },
+        {
+          "name": "tag",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 68,
+      "name": "AnimationState.RefValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "value",
+          "type": "ResourceRef"
+        }
+      ]
+    },
+    {
+      "tag": 69,
+      "name": "AnimationState.VectorValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "value",
+          "type": "Vec3"
+        }
+      ]
+    },
+    {
+      "tag": 70,
+      "name": "AnimationState.QuaternionValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "x",
+          "type": "float"
+        },
+        {
+          "name": "y",
+          "type": "float"
+        },
+        {
+          "name": "z",
+          "type": "float"
+        },
+        {
+          "name": "w",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 71,
+      "name": "AnimationState.MatrixValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "m00",
+          "type": "float"
+        },
+        {
+          "name": "m01",
+          "type": "float"
+        },
+        {
+          "name": "m02",
+          "type": "float"
+        },
+        {
+          "name": "m03",
+          "type": "float"
+        },
+        {
+          "name": "m10",
+          "type": "float"
+        },
+        {
+          "name": "m11",
+          "type": "float"
+        },
+        {
+          "name": "m12",
+          "type": "float"
+        },
+        {
+          "name": "m13",
+          "type": "float"
+        },
+        {
+          "name": "m20",
+          "type": "float"
+        },
+        {
+          "name": "m21",
+          "type": "float"
+        },
+        {
+          "name": "m22",
+          "type": "float"
+        },
+        {
+          "name": "m23",
+          "type": "float"
+        },
+        {
+          "name": "m30",
+          "type": "float"
+        },
+        {
+          "name": "m31",
+          "type": "float"
+        },
+        {
+          "name": "m32",
+          "type": "float"
+        },
+        {
+          "name": "m33",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 72,
+      "name": "AnimationState.DoubleQuaternionValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "x",
+          "type": "double"
+        },
+        {
+          "name": "y",
+          "type": "double"
+        },
+        {
+          "name": "z",
+          "type": "double"
+        },
+        {
+          "name": "w",
+          "type": "double"
+        }
+      ]
+    },
+    {
+      "tag": 73,
+      "name": "AnimationState.DoubleMatrixValue",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "m00",
+          "type": "double"
+        },
+        {
+          "name": "m01",
+          "type": "double"
+        },
+        {
+          "name": "m02",
+          "type": "double"
+        },
+        {
+          "name": "m03",
+          "type": "double"
+        },
+        {
+          "name": "m10",
+          "type": "double"
+        },
+        {
+          "name": "m11",
+          "type": "double"
+        },
+        {
+          "name": "m12",
+          "type": "double"
+        },
+        {
+          "name": "m13",
+          "type": "double"
+        },
+        {
+          "name": "m20",
+          "type": "double"
+        },
+        {
+          "name": "m21",
+          "type": "double"
+        },
+        {
+          "name": "m22",
+          "type": "double"
+        },
+        {
+          "name": "m23",
+          "type": "double"
+        },
+        {
+          "name": "m30",
+          "type": "double"
+        },
+        {
+          "name": "m31",
+          "type": "double"
+        },
+        {
+          "name": "m32",
+          "type": "double"
+        },
+        {
+          "name": "m33",
+          "type": "double"
+        }
+      ]
+    },
+    {
+      "tag": 74,
+      "name": "AnimationState.VehicleRead",
+      "section": "4.5",
+      "fields": [
+        {
+          "name": "slot",
+          "type": "ReadSlot"
+        },
+        {
+          "name": "value",
+          "type": "ReadValue"
+        }
+      ]
+    },
+    {
+      "tag": 75,
+      "name": "AnimationGraphState",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "roots",
+          "type": "List<Root>"
+        },
+        {
+          "name": "nodes",
+          "type": "List<Node>"
+        },
+        {
+          "name": "aliases",
+          "type": "List<Alias>"
+        }
+      ]
+    },
+    {
+      "tag": 76,
+      "name": "AnimationGraphState.NodeRef",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 77,
+      "name": "AnimationGraphState.Root",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "priority",
+          "type": "int"
+        },
+        {
+          "name": "layer",
+          "type": "LayerTag"
+        },
+        {
+          "name": "node",
+          "type": "@Nullable NodeRef"
+        }
+      ]
+    },
+    {
+      "tag": 78,
+      "name": "AnimationGraphState.Node",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int"
+        },
+        {
+          "name": "domain",
+          "type": "PhaseDomain"
+        },
+        {
+          "name": "start",
+          "type": "@Nullable AnimationStartReport.StartKey"
+        },
+        {
+          "name": "data",
+          "type": "NodeData"
+        }
+      ]
+    },
+    {
+      "tag": 79,
+      "name": "AnimationGraphState.Stack",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "layers",
+          "type": "List<Root>"
+        }
+      ]
+    },
+    {
+      "tag": 80,
+      "name": "AnimationGraphState.Container",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "child",
+          "type": "@Nullable NodeRef"
+        }
+      ]
+    },
+    {
+      "tag": 81,
+      "name": "AnimationGraphState.ModifierLayer",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "animation",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "modifiers",
+          "type": "List<NodeRef>"
+        }
+      ]
+    },
+    {
+      "tag": 82,
+      "name": "AnimationGraphState.Modifier",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "host",
+          "type": "NodeRef"
+        },
+        {
+          "name": "anim",
+          "type": "@Nullable NodeRef"
+        }
+      ]
+    },
+    {
+      "tag": 83,
+      "name": "AnimationGraphState.KeyframePlayer",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "data",
+          "type": "ClipRef"
+        },
+        {
+          "name": "isRunning",
+          "type": "boolean"
+        },
+        {
+          "name": "currentTick",
+          "type": "int"
+        },
+        {
+          "name": "isLoopStarted",
+          "type": "boolean"
+        },
+        {
+          "name": "tickDelta",
+          "type": "float"
+        },
+        {
+          "name": "perspective",
+          "type": "int"
+        },
+        {
+          "name": "firstPersonConfiguration",
+          "type": "FirstPersonRef"
+        },
+        {
+          "name": "firstPersonMode",
+          "type": "FirstPersonMode"
+        },
+        {
+          "name": "actorMetadata",
+          "type": "MetadataRef"
+        },
+        {
+          "name": "metadata",
+          "type": "MetadataOverlay"
+        },
+        {
+          "name": "bodyParts",
+          "type": "List<PartState>"
+        }
+      ]
+    },
+    {
+      "tag": 84,
+      "name": "AnimationGraphState.Fade",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "host",
+          "type": "NodeRef"
+        },
+        {
+          "name": "anim",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "time",
+          "type": "int"
+        },
+        {
+          "name": "length",
+          "type": "int"
+        },
+        {
+          "name": "beginAnimation",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "ease",
+          "type": "Ease"
+        },
+        {
+          "name": "subtype",
+          "type": "FadeType"
+        },
+        {
+          "name": "function",
+          "type": "@Nullable FunctionRef"
+        }
+      ]
+    },
+    {
+      "tag": 85,
+      "name": "AnimationGraphState.Adjustment",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "host",
+          "type": "NodeRef"
+        },
+        {
+          "name": "anim",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "enabled",
+          "type": "boolean"
+        },
+        {
+          "name": "instructedFadeout",
+          "type": "int"
+        },
+        {
+          "name": "remainingFadeout",
+          "type": "int"
+        },
+        {
+          "name": "source",
+          "type": "AdjustmentSource"
+        },
+        {
+          "name": "parts",
+          "type": "List<PartModifier>"
+        }
+      ]
+    },
+    {
+      "tag": 86,
+      "name": "AnimationGraphState.Speed",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "host",
+          "type": "NodeRef"
+        },
+        {
+          "name": "anim",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "speed",
+          "type": "float"
+        },
+        {
+          "name": "delta",
+          "type": "float"
+        },
+        {
+          "name": "shiftedDelta",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 87,
+      "name": "AnimationGraphState.LrFrozen",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "source",
+          "type": "NodeRef"
+        }
+      ]
+    },
+    {
+      "tag": 88,
+      "name": "AnimationGraphState.LrForcedFade",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "host",
+          "type": "NodeRef"
+        },
+        {
+          "name": "anim",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "time",
+          "type": "int"
+        },
+        {
+          "name": "length",
+          "type": "int"
+        },
+        {
+          "name": "beginAnimation",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "ease",
+          "type": "Ease"
+        }
+      ]
+    },
+    {
+      "tag": 89,
+      "name": "AnimationGraphState.Animator",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "tag",
+          "type": "AnimatorTag"
+        },
+        {
+          "name": "tick",
+          "type": "int"
+        },
+        {
+          "name": "state",
+          "type": "AnimatorData"
+        }
+      ]
+    },
+    {
+      "tag": 90,
+      "name": "AnimationGraphState.PartState",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "name": "part",
+          "type": "DefinitionRef"
+        },
+        {
+          "name": "keyframes",
+          "type": "DefinitionRef"
+        },
+        {
+          "name": "axes",
+          "type": "DefinitionRef"
+        }
+      ]
+    },
+    {
+      "tag": 91,
+      "name": "AnimationGraphState.PartModifier",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "part",
+          "type": "String"
+        },
+        {
+          "name": "rotation",
+          "type": "AnimationState.Vec3f"
+        },
+        {
+          "name": "scale",
+          "type": "AnimationState.Vec3f"
+        },
+        {
+          "name": "offset",
+          "type": "AnimationState.Vec3f"
+        }
+      ]
+    },
+    {
+      "tag": 92,
+      "name": "AnimationGraphState.BackwardWallJump",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "maxTick",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 93,
+      "name": "AnimationGraphState.CatLeap",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 94,
+      "name": "AnimationGraphState.ChargeJump",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 95,
+      "name": "AnimationGraphState.ClimbUp",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 96,
+      "name": "AnimationGraphState.ClingToCliff",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "leanAngle",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 97,
+      "name": "AnimationGraphState.Crawl",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 98,
+      "name": "AnimationGraphState.DiveHost",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "diveAnimator",
+          "type": "NodeRef"
+        },
+        {
+          "name": "skyDiveAnimator",
+          "type": "@Nullable NodeRef"
+        },
+        {
+          "name": "fromInAir",
+          "type": "boolean"
+        },
+        {
+          "name": "oldSkyDiveDoing",
+          "type": "boolean"
+        },
+        {
+          "name": "transitioning",
+          "type": "boolean"
+        },
+        {
+          "name": "transitionTick",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 99,
+      "name": "AnimationGraphState.DiveIntoWater",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "fromSkyDive",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 100,
+      "name": "AnimationGraphState.Dodge",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "direction",
+          "type": "DodgeDirection"
+        }
+      ]
+    },
+    {
+      "tag": 101,
+      "name": "AnimationGraphState.FastRunning",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "limbSwing",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 102,
+      "name": "AnimationGraphState.FastSwim",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 103,
+      "name": "AnimationGraphState.Flipping",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "direction",
+          "type": "FlipDirection"
+        }
+      ]
+    },
+    {
+      "tag": 104,
+      "name": "AnimationGraphState.HideInBlock",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "standing",
+          "type": "boolean"
+        },
+        {
+          "name": "startFromDiving",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 105,
+      "name": "AnimationGraphState.HorizontalWallRun",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "wallIsRightSide",
+          "type": "boolean"
+        },
+        {
+          "name": "limbSwing",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 106,
+      "name": "AnimationGraphState.JumpCharging",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 107,
+      "name": "AnimationGraphState.JumpFromBar",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 108,
+      "name": "AnimationGraphState.Hang",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 109,
+      "name": "AnimationGraphState.KongVault",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "yRotDifference",
+          "type": "float"
+        },
+        {
+          "name": "yRotDifferenceOld",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 110,
+      "name": "AnimationGraphState.RideZipline",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "oldAngleRadian",
+          "type": "double"
+        },
+        {
+          "name": "currentAngleRadian",
+          "type": "double"
+        }
+      ]
+    },
+    {
+      "tag": 111,
+      "name": "AnimationGraphState.Roll",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "direction",
+          "type": "RollDirection"
+        }
+      ]
+    },
+    {
+      "tag": 112,
+      "name": "AnimationGraphState.Sliding",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 113,
+      "name": "AnimationGraphState.SpeedVault",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "type",
+          "type": "VaultType"
+        }
+      ]
+    },
+    {
+      "tag": 114,
+      "name": "AnimationGraphState.Tap",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 115,
+      "name": "AnimationGraphState.VerticalWallRun",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 116,
+      "name": "AnimationGraphState.WallJump",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "wallRightSide",
+          "type": "boolean"
+        },
+        {
+          "name": "maxTick",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 117,
+      "name": "AnimationGraphState.WallSlide",
+      "section": "4.4",
+      "fields": []
+    },
+    {
+      "tag": 118,
+      "name": "AnimationGraphState.DiveChild",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "initialYSpeed",
+          "type": "double"
+        },
+        {
+          "name": "pitchAngle",
+          "type": "float"
+        },
+        {
+          "name": "oldFactor",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 119,
+      "name": "AnimationGraphState.SkyDiveChild",
+      "section": "4.4",
+      "fields": [
+        {
+          "name": "forwardAngleCount",
+          "type": "int"
+        },
+        {
+          "name": "forwardAngleCountOld",
+          "type": "int"
+        },
+        {
+          "name": "rightAngleCount",
+          "type": "int"
+        },
+        {
+          "name": "rightAngleCountOld",
+          "type": "int"
+        },
+        {
+          "name": "startPitchAngle",
+          "type": "float"
+        },
+        {
+          "name": "pitchAngle",
+          "type": "float"
+        }
+      ]
+    },
+    {
+      "tag": 120,
+      "name": "AnimationEvent",
+      "section": "2.2",
+      "fields": [
+        {
+          "name": "identity",
+          "type": "AnimationState.Identity"
+        },
+        {
+          "name": "id",
+          "type": "EventId"
+        },
+        {
+          "name": "predecessorEventSequence",
+          "type": "long"
+        },
+        {
+          "name": "family",
+          "type": "NativeFamily"
+        },
+        {
+          "name": "kind",
+          "type": "EventKind"
+        },
+        {
+          "name": "broadcastStage",
+          "type": "NativeStage"
+        },
+        {
+          "name": "acceptedNs",
+          "type": "long"
+        },
+        {
+          "name": "broadcastNs",
+          "type": "long"
+        },
+        {
+          "name": "seed",
+          "type": "SeedRef"
+        },
+        {
+          "name": "patch",
+          "type": "Patch"
+        },
+        {
+          "name": "dependencies",
+          "type": "List<Definition>"
+        },
+        {
+          "name": "nativePayload",
+          "type": "NativePayload"
+        }
+      ]
+    },
+    {
+      "tag": 121,
+      "name": "AnimationEvent.EventId",
+      "section": "2.3",
+      "fields": [
+        {
+          "name": "serverTick",
+          "type": "long"
+        },
+        {
+          "name": "eventSequence",
+          "type": "long"
+        },
+        {
+          "name": "nativeStage",
+          "type": "NativeStage"
+        }
+      ]
+    },
+    {
+      "tag": 122,
+      "name": "AnimationEvent.NativePayload",
+      "section": "2.2",
+      "fields": [
+        {
+          "name": "payloadType",
+          "type": "DefinitionRef"
+        },
+        {
+          "name": "value",
+          "type": "Bytes"
+        }
+      ]
+    },
+    {
+      "tag": 123,
+      "name": "AnimationEvent.Patch",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "layer",
+          "type": "LayerTag"
+        },
+        {
+          "name": "startKind",
+          "type": "StartKind"
+        },
+        {
+          "name": "outcome",
+          "type": "Outcome"
+        },
+        {
+          "name": "replacement",
+          "type": "AnimationGraphState"
+        },
+        {
+          "name": "actionInputs",
+          "type": "List<AnimationState.ActionState>"
+        },
+        {
+          "name": "equipment",
+          "type": "@Nullable AnimationState.Equipment"
+        },
+        {
+          "name": "options",
+          "type": "@Nullable AnimationState.Option"
+        },
+        {
+          "name": "tacz",
+          "type": "@Nullable AnimationState.Tacz"
+        },
+        {
+          "name": "lr",
+          "type": "@Nullable AnimationState.Lr"
+        },
+        {
+          "name": "create",
+          "type": "@Nullable AnimationState.Create"
+        },
+        {
+          "name": "sbw",
+          "type": "@Nullable AnimationState.Sbw"
+        },
+        {
+          "name": "vanilla",
+          "type": "@Nullable AnimationState.Vanilla"
+        },
+        {
+          "name": "stance",
+          "type": "@Nullable AnimationState.Stance"
+        }
+      ]
+    },
+    {
+      "tag": 124,
+      "name": "AnimationEvent.Decision",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "id",
+          "type": "EventId"
+        },
+        {
+          "name": "layer",
+          "type": "LayerTag"
+        },
+        {
+          "name": "startKind",
+          "type": "StartKind"
+        },
+        {
+          "name": "outcome",
+          "type": "Outcome"
+        },
+        {
+          "name": "predecessorEventSequence",
+          "type": "long"
+        },
+        {
+          "name": "predecessor",
+          "type": "@Nullable AnimationGraphState.NodeRef"
+        },
+        {
+          "name": "input",
+          "type": "InputRef"
+        },
+        {
+          "name": "patch",
+          "type": "Patch"
+        },
+        {
+          "name": "transitionOrdinal",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 125,
+      "name": "AnimationEvent.ObserverSeed",
+      "section": "3.6",
+      "fields": [
+        {
+          "name": "identity",
+          "type": "AnimationState.Identity"
+        },
+        {
+          "name": "ref",
+          "type": "SeedRef"
+        },
+        {
+          "name": "predecessor",
+          "type": "@Nullable SeedRef"
+        },
+        {
+          "name": "checkpoint",
+          "type": "AnimationState"
+        },
+        {
+          "name": "graph",
+          "type": "AnimationGraphState"
+        },
+        {
+          "name": "inputPrefix",
+          "type": "long"
+        },
+        {
+          "name": "eventPrefix",
+          "type": "long"
+        },
+        {
+          "name": "decisionPrefix",
+          "type": "long"
+        },
+        {
+          "name": "starts",
+          "type": "List<AnimationStartReport.Start>"
+        },
+        {
+          "name": "dependencies",
+          "type": "List<Definition>"
+        },
+        {
+          "name": "reducerDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 126,
+      "name": "AnimationStartReport",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "victims",
+          "type": "List<Victim>"
+        }
+      ]
+    },
+    {
+      "tag": 127,
+      "name": "AnimationStartReport.StartKey",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "eventSequence",
+          "type": "long"
+        },
+        {
+          "name": "nodeId",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 128,
+      "name": "AnimationStartReport.Victim",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "entityId",
+          "type": "int"
+        },
+        {
+          "name": "targetEpoch",
+          "type": "long"
+        },
+        {
+          "name": "seatGeneration",
+          "type": "long"
+        },
+        {
+          "name": "teleportGeneration",
+          "type": "long"
+        },
+        {
+          "name": "subscriptionGeneration",
+          "type": "long"
+        },
+        {
+          "name": "seedRef",
+          "type": "long"
+        },
+        {
+          "name": "appliedEventSequence",
+          "type": "long"
+        },
+        {
+          "name": "eventPrefixDigest",
+          "type": "Digest"
+        },
+        {
+          "name": "starts",
+          "type": "List<Start>"
+        },
+        {
+          "name": "applications",
+          "type": "List<Application>"
+        },
+        {
+          "name": "presentationDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 129,
+      "name": "AnimationStartReport.Start",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "eventSequence",
+          "type": "long"
+        },
+        {
+          "name": "nodeId",
+          "type": "int"
+        },
+        {
+          "name": "layerTag",
+          "type": "LayerTag"
+        },
+        {
+          "name": "startKind",
+          "type": "StartKind"
+        },
+        {
+          "name": "anchorClass",
+          "type": "AnchorClass"
+        },
+        {
+          "name": "phaseDomain",
+          "type": "PhaseDomain"
+        },
+        {
+          "name": "phaseAnchor",
+          "type": "long"
+        },
+        {
+          "name": "u0",
+          "type": "int"
+        },
+        {
+          "name": "predecessorNodeId",
+          "type": "int"
+        },
+        {
+          "name": "proof",
+          "type": "Proof"
+        }
+      ]
+    },
+    {
+      "tag": 130,
+      "name": "AnimationStartReport.ObserverApply",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "applyFrameId",
+          "type": "long"
+        },
+        {
+          "name": "applyRevision",
+          "type": "long"
+        },
+        {
+          "name": "mappingId",
+          "type": "long"
+        },
+        {
+          "name": "sW",
+          "type": "Time"
+        },
+        {
+          "name": "applyR",
+          "type": "Time"
+        },
+        {
+          "name": "applyA",
+          "type": "Time"
+        },
+        {
+          "name": "applyH",
+          "type": "long"
+        },
+        {
+          "name": "applyEventPrefix",
+          "type": "long"
+        }
+      ]
+    },
+    {
+      "tag": 131,
+      "name": "AnimationStartReport.CanonicalTick",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "decisionTick",
+          "type": "long"
+        },
+        {
+          "name": "decisionStage",
+          "type": "NativeStage"
+        }
+      ]
+    },
+    {
+      "tag": 132,
+      "name": "AnimationStartReport.ProjectedSuccessor",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "decisionTick",
+          "type": "long"
+        },
+        {
+          "name": "decisionStage",
+          "type": "NativeStage"
+        },
+        {
+          "name": "inputRef",
+          "type": "long"
+        },
+        {
+          "name": "transitionOrdinal",
+          "type": "int"
+        }
+      ]
+    },
+    {
+      "tag": 133,
+      "name": "AnimationPolicy",
+      "section": "6",
+      "fields": [
+        {
+          "name": "generation",
+          "type": "long"
+        },
+        {
+          "name": "lowerBodyDomain",
+          "type": "PhaseDomain"
+        },
+        {
+          "name": "enableAnimation",
+          "type": "boolean"
+        },
+        {
+          "name": "enableFallingAnimation",
+          "type": "boolean"
+        },
+        {
+          "name": "enableFastRunLean",
+          "type": "boolean"
+        },
+        {
+          "name": "smootherCrawlAnimation",
+          "type": "boolean"
+        },
+        {
+          "name": "registeredAnimators",
+          "type": "List<AnimatorTag>"
+        }
+      ]
+    },
+    {
+      "tag": 134,
+      "name": "AnimationRecipe",
+      "section": "8.1",
+      "fields": [
+        {
+          "name": "identity",
+          "type": "AnimationState.Identity"
+        },
+        {
+          "name": "high",
+          "type": "long"
+        },
+        {
+          "name": "r",
+          "type": "Time"
+        },
+        {
+          "name": "a",
+          "type": "Time"
+        },
+        {
+          "name": "placementTick",
+          "type": "long"
+        },
+        {
+          "name": "placementPartial",
+          "type": "float"
+        },
+        {
+          "name": "animationTick",
+          "type": "long"
+        },
+        {
+          "name": "animationPartial",
+          "type": "float"
+        },
+        {
+          "name": "placement",
+          "type": "AnimationState.Placement"
+        },
+        {
+          "name": "checkpoint",
+          "type": "AnimationState"
+        },
+        {
+          "name": "seed",
+          "type": "AnimationEvent.ObserverSeed"
+        },
+        {
+          "name": "graph",
+          "type": "AnimationGraphState"
+        },
+        {
+          "name": "starts",
+          "type": "AnimationStartReport.Victim"
+        },
+        {
+          "name": "decodedDigest",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 135,
+      "name": "AnimationRecipe.SnapshotRecord",
+      "section": "4.2/4.5",
+      "fields": [
+        {
+          "name": "identity",
+          "type": "AnimationState.Identity"
+        },
+        {
+          "name": "flags",
+          "type": "int"
+        },
+        {
+          "name": "placement",
+          "type": "AnimationState.Placement"
+        },
+        {
+          "name": "checkpoint",
+          "type": "@AnimationSchema.Nullable AnimationState"
+        }
+      ]
+    },
+    {
+      "tag": 136,
+      "name": "AnimationRecipe.Batch",
+      "section": "4.1",
+      "fields": [
+        {
+          "name": "connectionId",
+          "type": "long"
+        },
+        {
+          "name": "sceneGeneration",
+          "type": "long"
+        },
+        {
+          "name": "records",
+          "type": "List<SnapshotRecord>"
+        },
+        {
+          "name": "definitions",
+          "type": "List<Definition>"
+        },
+        {
+          "name": "seeds",
+          "type": "List<AnimationEvent.ObserverSeed>"
+        }
+      ]
+    },
+    {
+      "tag": 137,
+      "name": "AnimationResolver.ResolvedInputs",
+      "section": "8.1",
+      "fields": [
+        {
+          "name": "placement",
+          "type": "AnimationState"
+        },
+        {
+          "name": "animation",
+          "type": "AnimationState"
+        },
+        {
+          "name": "seed",
+          "type": "AnimationEvent.ObserverSeed"
+        },
+        {
+          "name": "graph",
+          "type": "AnimationGraphState"
+        },
+        {
+          "name": "starts",
+          "type": "AnimationStartReport.Victim"
+        }
+      ]
+    },
+    {
+      "tag": 138,
+      "name": "AnimationGraphState.Alias",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "associatedKey",
+          "type": "String"
+        },
+        {
+          "name": "winner",
+          "type": "NodeRef"
+        }
+      ]
+    },
+    {
+      "tag": 139,
+      "name": "AnimationGraphState.MetadataOverlay",
+      "section": "4.3",
+      "fields": [
+        {
+          "name": "name",
+          "type": "String"
+        },
+        {
+          "name": "lrAttackAction",
+          "type": "boolean"
+        }
+      ]
+    },
+    {
+      "tag": 140,
+      "name": "AnimationResolver.RecipeIdentity",
+      "section": "8.1",
+      "fields": [
+        {
+          "name": "identity",
+          "type": "AnimationState.Identity"
+        },
+        {
+          "name": "r",
+          "type": "Time"
+        },
+        {
+          "name": "a",
+          "type": "Time"
+        },
+        {
+          "name": "high",
+          "type": "long"
+        },
+        {
+          "name": "placementTick",
+          "type": "long"
+        },
+        {
+          "name": "animationTick",
+          "type": "long"
+        },
+        {
+          "name": "placementState",
+          "type": "Digest"
+        },
+        {
+          "name": "animationState",
+          "type": "Digest"
+        },
+        {
+          "name": "seed",
+          "type": "Digest"
+        },
+        {
+          "name": "graph",
+          "type": "Digest"
+        },
+        {
+          "name": "report",
+          "type": "Digest"
+        }
+      ]
+    },
+    {
+      "tag": 141,
+      "name": "AnimationResolver.PresentationClosure",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "seed",
+          "type": "SeedRef"
+        },
+        {
+          "name": "appliedSequence",
+          "type": "long"
+        },
+        {
+          "name": "eventPrefixDigest",
+          "type": "Digest"
+        },
+        {
+          "name": "graph",
+          "type": "AnimationGraphState"
+        },
+        {
+          "name": "starts",
+          "type": "List<AnimationStartReport.Start>"
+        }
+      ]
+    },
+    {
+      "tag": 142,
+      "name": "AnimationStartReport.Application",
+      "section": "3.4",
+      "fields": [
+        {
+          "name": "eventSequence",
+          "type": "long"
+        },
+        {
+          "name": "proof",
+          "type": "ObserverApply"
+        }
+      ]
+    }
+  ],
+  "enums": [
+    {
+      "name": "NativeStage",
+      "values": {
+        "INTER_TICK_ACCEPT": 0,
+        "PRE_NATIVE_TICK": 1,
+        "NATIVE_TICK": 2,
+        "POST_NATIVE_TICK": 3,
+        "END_COMMIT": 4
+      }
+    },
+    {
+      "name": "StartKind",
+      "values": {
+        "NEW": 0,
+        "REPLACE": 1,
+        "STOP_FADE": 2,
+        "RESUME": 3,
+        "INPUT_UPDATE": 4,
+        "SEED_CONTINUE": 5
+      }
+    },
+    {
+      "name": "AnchorClass",
+      "values": {
+        "OBSERVER_APPLY": 0,
+        "CANONICAL_TICK": 1,
+        "PROJECTED_SUCCESSOR": 2
+      }
+    },
+    {
+      "name": "PhaseDomain",
+      "values": {
+        "A": 0,
+        "R": 1
+      }
+    },
+    {
+      "name": "LayerTag",
+      "values": {
+        "PA_40": 0,
+        "PA_41": 1,
+        "PA_42": 2,
+        "PA_93": 3,
+        "PA_94": 4,
+        "PA_95": 5,
+        "PA_96": 6,
+        "PARCOOL_ACTIVE": 7,
+        "PARCOOL_PASSIVE": 8,
+        "VANILLA_ATTACK": 9,
+        "VANILLA_USE": 10,
+        "VANILLA_SWIM": 11,
+        "VANILLA_DEATH": 12,
+        "VANILLA_AUTO_SPIN": 13,
+        "BLOCKFIELD_STANCE": 14,
+        "CREATE_HANGING": 15,
+        "SBW_POSE": 16
+      }
+    },
+    {
+      "name": "Hand",
+      "values": {
+        "MAIN_HAND": 0,
+        "OFF_HAND": 1
+      }
+    },
+    {
+      "name": "Arm",
+      "values": {
+        "LEFT": 0,
+        "RIGHT": 1
+      }
+    },
+    {
+      "name": "Direction",
+      "values": {
+        "DOWN": 0,
+        "UP": 1,
+        "NORTH": 2,
+        "SOUTH": 3,
+        "WEST": 4,
+        "EAST": 5
+      }
+    },
+    {
+      "name": "Pose",
+      "values": {
+        "STANDING": 0,
+        "FALL_FLYING": 1,
+        "SLEEPING": 2,
+        "SWIMMING": 3,
+        "SPIN_ATTACK": 4,
+        "CROUCHING": 5,
+        "LONG_JUMPING": 6,
+        "DYING": 7,
+        "CROAKING": 8,
+        "USING_TONGUE": 9,
+        "SITTING": 10,
+        "ROARING": 11,
+        "SNIFFING": 12,
+        "EMERGING": 13,
+        "DIGGING": 14,
+        "SLIDING": 15,
+        "SHOOTING": 16,
+        "INHALING": 17
+      }
+    },
+    {
+      "name": "ArmPose",
+      "values": {
+        "EMPTY": 0,
+        "ITEM": 1,
+        "BLOCK": 2,
+        "BOW_AND_ARROW": 3,
+        "THROW_SPEAR": 4,
+        "CROSSBOW_CHARGE": 5,
+        "CROSSBOW_HOLD": 6,
+        "SPYGLASS": 7,
+        "TOOT_HORN": 8,
+        "BRUSH": 9
+      }
+    },
+    {
+      "name": "UseAnimation",
+      "values": {
+        "NONE": 0,
+        "EAT": 1,
+        "DRINK": 2,
+        "BLOCK": 3,
+        "BOW": 4,
+        "SPEAR": 5,
+        "CROSSBOW": 6,
+        "SPYGLASS": 7,
+        "TOOT_HORN": 8,
+        "BRUSH": 9
+      }
+    },
+    {
+      "name": "FirstPersonMode",
+      "values": {
+        "NONE": 0,
+        "VANILLA": 1,
+        "DISABLED": 2,
+        "THIRD_PERSON_MODEL": 3
+      }
+    },
+    {
+      "name": "EvaluatorKind",
+      "values": {
+        "PA": 0,
+        "NATIVE_FALLBACK": 1
+      }
+    },
+    {
+      "name": "Outcome",
+      "values": {
+        "SELECTED": 0,
+        "NO_CHANGE": 1,
+        "STOPPED": 2,
+        "ACTIVE_ONCE_IGNORED": 3,
+        "MISSING_CLIP": 4,
+        "MISSING_CONFIG": 5
+      }
+    },
+    {
+      "name": "FadeType",
+      "values": {
+        "STANDARD": 0,
+        "FUNCTIONAL": 1,
+        "LR_FORCED": 2
+      }
+    },
+    {
+      "name": "Ease",
+      "values": {
+        "LINEAR": 0,
+        "CONSTANT": 1,
+        "INSINE": 6,
+        "OUTSINE": 7,
+        "INOUTSINE": 8,
+        "INCUBIC": 9,
+        "OUTCUBIC": 10,
+        "INOUTCUBIC": 11,
+        "INQUAD": 12,
+        "OUTQUAD": 13,
+        "INOUTQUAD": 14,
+        "INQUART": 15,
+        "OUTQUART": 16,
+        "INOUTQUART": 17,
+        "INQUINT": 18,
+        "OUTQUINT": 19,
+        "INOUTQUINT": 20,
+        "INEXPO": 21,
+        "OUTEXPO": 22,
+        "INOUTEXPO": 23,
+        "INCIRC": 24,
+        "OUTCIRC": 25,
+        "INOUTCIRC": 26,
+        "INBACK": 27,
+        "OUTBACK": 28,
+        "INOUTBACK": 29,
+        "INELASTIC": 30,
+        "OUTELASTIC": 31,
+        "INOUTELASTIC": 32,
+        "INBOUNCE": 33,
+        "OUTBOUNCE": 34,
+        "INOUTBOUNCE": 35,
+        "CATMULLROM": 36,
+        "STEP": 37
+      }
+    },
+    {
+      "name": "AdjustmentSource",
+      "values": {
+        "HELD_WEAPON_POSE": 0,
+        "LR_BODY_POSE": 1
+      }
+    },
+    {
+      "name": "DodgeDirection",
+      "values": {
+        "FRONT": 0,
+        "BACK": 1,
+        "LEFT": 2,
+        "RIGHT": 3
+      }
+    },
+    {
+      "name": "RollDirection",
+      "values": {
+        "FRONT": 0,
+        "BACK": 1,
+        "LEFT": 2,
+        "RIGHT": 3
+      }
+    },
+    {
+      "name": "FlipDirection",
+      "values": {
+        "FRONT": 0,
+        "BACK": 1
+      }
+    },
+    {
+      "name": "VaultType",
+      "values": {
+        "RIGHT": 0,
+        "LEFT": 1
+      }
+    },
+    {
+      "name": "BarAxis",
+      "values": {
+        "X": 0,
+        "Z": 1
+      }
+    },
+    {
+      "name": "FacingDirection",
+      "values": {
+        "TO_WALL": 0,
+        "RIGHT_AGAINST_WALL": 1,
+        "LEFT_AGAINST_WALL": 2
+      }
+    },
+    {
+      "name": "Visibility",
+      "values": {
+        "VISIBLE": 0,
+        "HIDDEN": 1,
+        "CULLED": 2,
+        "NOT_RENDERED": 3
+      }
+    },
+    {
+      "name": "Role",
+      "values": {
+        "OLD": 0,
+        "CURRENT": 1,
+        "CONSTANT": 2
+      }
+    },
+    {
+      "name": "EventKind",
+      "values": {
+        "TACZ_FIRE": 0,
+        "TACZ_RELOAD": 1,
+        "TACZ_MELEE": 2,
+        "TACZ_DRAW": 3,
+        "TACZ_SELECTION": 4,
+        "LR_ATTACK": 5,
+        "LR_SELECTION": 6,
+        "PARCOOL_START": 7,
+        "PARCOOL_NORMAL": 8,
+        "PARCOOL_STOP": 9,
+        "INPUT": 10,
+        "EQUIPMENT": 11,
+        "OPTIONS": 12,
+        "CREATE_ENTER": 13,
+        "CREATE_EXIT": 14,
+        "CREATE_REFRESH": 15,
+        "STANCE": 16,
+        "VANILLA_ATTACK": 17,
+        "VANILLA_USE": 18,
+        "SBW_MEMBERSHIP": 19,
+        "NO_CHANGE": 20
+      }
+    },
+    {
+      "name": "NativeFamily",
+      "values": {
+        "VANILLA": 0,
+        "BLOCKFIELD": 1,
+        "TACZ": 2,
+        "LR": 3,
+        "PARCOOL": 4,
+        "CREATE": 5,
+        "SBW": 6
+      }
+    },
+    {
+      "name": "AnimationPart",
+      "values": {
+        "HEAD": 0,
+        "RIGHT_ARM": 1,
+        "LEFT_ARM": 2,
+        "RIGHT_LEG": 3,
+        "LEFT_LEG": 4,
+        "ROTATION": 5,
+        "CAMERA": 6
+      }
+    },
+    {
+      "name": "ActionTag",
+      "values": {
+        "BREAKFALL_READY": 0,
+        "CAT_LEAP": 1,
+        "CHARGE_JUMP": 2,
+        "CLIMB_POLES": 3,
+        "CLIMB_UP": 4,
+        "CLING_TO_CLIFF": 5,
+        "HIDE_IN_BLOCK": 6,
+        "CRAWL": 7,
+        "DIVE": 8,
+        "DODGE": 9,
+        "FAST_RUN": 10,
+        "FAST_SWIM": 11,
+        "FLIPPING": 12,
+        "HANG_DOWN": 13,
+        "HORIZONTAL_WALL_RUN": 14,
+        "JUMP_FROM_BAR": 15,
+        "QUICK_TURN": 16,
+        "RIDE_ZIPLINE": 17,
+        "ROLL": 18,
+        "SKY_DIVE": 19,
+        "SLIDE": 20,
+        "TAP": 21,
+        "VAULT": 22,
+        "VERTICAL_WALL_RUN": 23,
+        "WALL_JUMP": 24,
+        "WALL_SLIDE": 25,
+        "START_SWIM_BY_CRAWL": 26
+      }
+    },
+    {
+      "name": "AnimatorTag",
+      "values": {
+        "BACKWARD_WALL_JUMP": 0,
+        "CAT_LEAP": 1,
+        "CHARGE_JUMP": 2,
+        "CLIMB_UP": 3,
+        "CLING_TO_CLIFF": 4,
+        "CRAWL": 5,
+        "DIVE_HOST": 6,
+        "DIVE_INTO_WATER": 7,
+        "DODGE": 8,
+        "FAST_RUNNING": 9,
+        "FAST_SWIM": 10,
+        "FLIPPING": 11,
+        "HIDE_IN_BLOCK": 12,
+        "HORIZONTAL_WALL_RUN": 13,
+        "JUMP_CHARGING": 14,
+        "JUMP_FROM_BAR": 15,
+        "HANG": 16,
+        "KONG_VAULT": 17,
+        "RIDE_ZIPLINE": 18,
+        "ROLL": 19,
+        "SLIDING": 20,
+        "SPEED_VAULT": 21,
+        "TAP": 22,
+        "VERTICAL_WALL_RUN": 23,
+        "WALL_JUMP": 24,
+        "WALL_SLIDE": 25,
+        "DIVE_CHILD": 26,
+        "SKY_DIVE_CHILD": 27
+      }
+    }
+  ],
+  "derived": [
+    {
+      "section": "4.2",
+      "name": "look",
+      "source": "R look angles, exact native method; native differential fixture owned by U2"
+    },
+    {
+      "section": "4.3",
+      "name": "keyframe axis immutable final data",
+      "source": "PartState part/keyframes/axes definition references; native materialization owned by U3"
+    },
+    {
+      "section": "4.5",
+      "name": "vehicle subclass read layout",
+      "source": "ReadSlot plus sealed ReadValue; concrete production layout/read-coverage owned by U6. SbwLayouts.baseSlots (data, not a layout record): four float constants plus getRotateOffsetHeight()D, hasTurret()Z and getTurretPos() Vec3 present exactly when hasTurret; continuation 3 adds native getBarrelPosition/getPassengerWeaponStationPosition/getPassengerWeaponStationBarrelPosition ()Lnet/minecraft/class_243; VectorValue and three derived <getter>$present ()Z BooleanValue slots, vector present exactly when true. All CONSTANT, captured together at END tick; 13 slots, no record/layout/tag change (FX-SEAT, manifest 4)"
+    }
+  ]
+}
