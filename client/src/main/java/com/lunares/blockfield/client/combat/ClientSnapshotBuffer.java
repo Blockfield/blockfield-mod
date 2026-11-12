@@ -4,6 +4,7 @@ import com.lunares.blockfield.common.combat.AnimationEvent;
 import com.lunares.blockfield.common.combat.AnimationRecipe;
 import com.lunares.blockfield.common.combat.AnimationResources;
 import com.lunares.blockfield.common.combat.AnimationState;
+import com.lunares.blockfield.common.combat.ParCoolCheckpoints;
 import com.lunares.blockfield.network.packet.PlayerSnapshotS2CPacket;
 import com.lunares.blockfield.network.packet.SnapshotRestartC2SPacket;
 import com.lunares.blockfield.network.packet.SnapshotRestartC2SPacket.Reason;
@@ -508,12 +509,15 @@ public final class ClientSnapshotBuffer {
 
     /**
      * Mirror of the server's {@code AnimSyncStream.heldAt}: the cover's pose re-stamped at the
-     * skipped tick, its decisions (and their input refs) re-stamped too, since the reducer requires
-     * every decision of boundary n to name n. Must stay byte-identical to the server's replay.
+     * skipped tick. A skip contributes no new input, so only the mandatory ParCool boundary marker
+     * is carried (re-stamped: the reducer requires every decision of boundary n to name n); the
+     * cover's PA starts already ran at the cover and would start their node twice (graph cycle).
+     * Must stay byte-identical to the server's replay.
      */
     static AnimationState heldAt(AnimationState cover, long skipTick) {
         var decisions = new ArrayList<AnimationEvent.Decision>(cover.decisions().size());
         for (var decision : cover.decisions()) {
+            if (!ParCoolCheckpoints.family(decision.layer())) continue;
             var id = decision.id();
             var input = decision.input();
             decisions.add(
