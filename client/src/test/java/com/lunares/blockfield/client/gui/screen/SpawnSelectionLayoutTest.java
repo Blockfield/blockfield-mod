@@ -87,10 +87,10 @@ class SpawnSelectionLayoutTest {
     @Test
     void tabCyclesAndSkipsNothingWhenLockedOut() {
         List<String> order = List.of("spawn:BASE", "spawn:A", "action:deploy", "action:class");
-        assertEquals("spawn:BASE", SpawnSelectionScreen.cycleFocus(order, null, true));
-        assertEquals("action:class", SpawnSelectionScreen.cycleFocus(order, null, false));
-        assertEquals("spawn:A", SpawnSelectionScreen.cycleFocus(order, "spawn:BASE", true));
-        assertEquals("spawn:BASE", SpawnSelectionScreen.cycleFocus(order, "spawn:A", false));
+        assertEquals("spawn:BASE", MenuLayout.cycleFocus(order, null, true));
+        assertEquals("action:class", MenuLayout.cycleFocus(order, null, false));
+        assertEquals("spawn:A", MenuLayout.cycleFocus(order, "spawn:BASE", true));
+        assertEquals("spawn:BASE", MenuLayout.cycleFocus(order, "spawn:A", false));
     }
 
     @Test

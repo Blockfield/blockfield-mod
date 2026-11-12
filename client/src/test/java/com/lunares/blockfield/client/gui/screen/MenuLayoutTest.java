@@ -250,4 +250,21 @@ class MenuLayoutTest {
         }
         assertEquals(1, MenuLayout.buttonColumns(100, 2, width));
     }
+
+    @Test
+    void rosterPagingCountsClampsStepsAndLabels() {
+        // Shared by TAB and the results roster: 15 rows never fit one TAB page (13 rows).
+        assertEquals(2, MenuLayout.pagesFor(15, 13));
+        assertEquals(1, MenuLayout.pagesFor(13, 13));
+        assertEquals(0, MenuLayout.pagesFor(0, 13));
+        assertEquals(0, MenuLayout.pagesFor(10, 0));
+        assertEquals(0, MenuLayout.clampPage(5, 0));
+        assertEquals(0, MenuLayout.clampPage(-1, 3));
+        assertEquals(2, MenuLayout.clampPage(9, 3));
+        assertEquals(1, MenuLayout.scrollPage(0, -1, 3));
+        assertEquals(0, MenuLayout.scrollPage(0, 1, 3));
+        assertEquals(0, MenuLayout.scrollPage(0, 0, 3));
+        assertEquals(2, MenuLayout.scrollPage(2, -1, 3));
+        assertEquals("‹ стр. 2/3 · колесо ›", MenuLayout.pageLabel(1, 3));
+    }
 }

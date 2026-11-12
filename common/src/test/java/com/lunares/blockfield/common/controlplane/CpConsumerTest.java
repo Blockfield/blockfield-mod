@@ -435,6 +435,140 @@ class CpConsumerTest {
     }
 
     @Test
+    void sayRoutesTextAsReason() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks = withActions.onFrame(actionFrame(42, "moderation.say", "text", "hello"));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(List.of("moderation.say/arena//hello"), actions.calls);
+    }
+
+    @Test
+    void nicknameKindsRoutePlayer() {
+        assertNicknameKindRoutes("moderation.pardon", "op-pardon");
+        assertNicknameKindRoutes("moderation.team-kick", "op-team-kick");
+    }
+
+    private void assertNicknameKindRoutes(String kind, String operationId) {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks =
+                withActions.onFrame(actionFrameOp(42, operationId, kind, "player", "Steve_99"));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(List.of(kind + "/arena/Steve_99/"), actions.calls);
+    }
+
+    @Test
+    void classKindsRouteClassId() {
+        assertClassKindRoutes("moderation.class-lock", "op-lock");
+        assertClassKindRoutes("moderation.class-unlock", "op-unlock");
+    }
+
+    private void assertClassKindRoutes(String kind, String operationId) {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks =
+                withActions.onFrame(actionFrameOp(42, operationId, kind, "classId", "assault"));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(List.of(kind + "/arena/assault/"), actions.calls);
+    }
+
+    @Test
+    void rangeRoutesOp() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks = withActions.onFrame(actionFrame(42, "moderation.range", "op", "reset"));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(List.of("moderation.range/arena/reset/"), actions.calls);
+    }
+
+    @Test
+    void stopRoomEncodesOutcomeAndReason() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String room = "123e4567-e89b-12d3-a456-426614174002";
+
+        List<CpAck> acks = withActions.onFrame(stopRoomFrame(42, room, "RED", "final"));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(List.of("moderation.stop-room/arena/" + room + "/RED final"), actions.calls);
+    }
+
+    @Test
+    void stopRoomWithoutReasonEncodesOutcomeOnly() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String room = "123e4567-e89b-12d3-a456-426614174002";
+
+        List<CpAck> acks = withActions.onFrame(stopRoomFrame(42, room, "none", ""));
+
+        assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
+        assertEquals(List.of("moderation.stop-room/arena/" + room + "/none"), actions.calls);
+    }
+
+    @Test
+    void malformedModerationPayloadsRejectedWithoutHandlerCall() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        // Same cursor sequence, distinct operation ids: every frame is decided on its own.
+        List<String> frames =
+                List.of(
+                        actionFrameOp(42, "op-bad-1", "moderation.say", "text", ""),
+                        actionFrameOp(42, "op-bad-2", "moderation.pardon", "player", "ab"),
+                        actionFrameOp(42, "op-bad-3", "moderation.team-kick", "player", "x y"),
+                        actionFrameOp(
+                                42, "op-bad-4", "moderation.class-lock", "classId", "Assault"),
+                        actionFrameOp(42, "op-bad-5", "moderation.range", "op", "explode"),
+                        stopRoomFrameOp(42, "op-bad-6", "not-a-room", "RED", "final"),
+                        stopRoomFrameOp(
+                                42,
+                                "op-bad-7",
+                                "123e4567-e89b-12d3-a456-426614174002",
+                                "GREEN",
+                                ""));
+        for (String frame : frames) {
+            List<CpAck> acks = withActions.onFrame(frame);
+
+            assertEquals(CpAck.State.REJECTED, acks.get(acks.size() - 1).state);
+            assertEquals(CpAck.Result.INVALID_SCHEMA, acks.get(acks.size() - 1).result);
+        }
+        assertTrue(actions.calls.isEmpty());
+    }
+
+    @Test
+    void decidedModerationActionRepostsWithoutRerun() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String frame = actionFrame(42, "moderation.say", "text", "hello");
+
+        List<CpAck> first = withActions.onFrame(frame);
+        List<CpAck> second = withActions.onFrame(frame);
+
+        assertEquals(1, actions.calls.size());
+        assertEquals(
+                first.stream().map(ack -> ack.state).toList(),
+                second.stream().map(ack -> ack.state).toList());
+        assertEquals(CpAck.State.EFFECTIVE, second.get(second.size() - 1).state);
+    }
+
+    @Test
     void startedActionNeverRerunsAndReportsUnknown() {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
@@ -731,9 +865,81 @@ class CpConsumerTest {
         return settingsFrame(sequence, 42, gameplayValue(false), false);
     }
 
+    private String actionFrame(long sequence, String kind, String key, String value) {
+        return actionFrameOp(sequence, "op-" + sequence, kind, key, value);
+    }
+
+    private String actionFrameOp(
+            long sequence, String operationId, String kind, String key, String value) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", kind);
+        payload.addProperty("target", "arena");
+        payload.addProperty(key, value);
+        return frameWithOp(
+                EPOCH,
+                sequence,
+                operationId,
+                payload,
+                null,
+                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                true,
+                null,
+                GENERATION,
+                AUDIENCE);
+    }
+
+    private String stopRoomFrame(long sequence, String roomId, String outcome, String reason) {
+        return stopRoomFrameOp(sequence, "op-" + sequence, roomId, outcome, reason);
+    }
+
+    private String stopRoomFrameOp(
+            long sequence, String operationId, String roomId, String outcome, String reason) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", "moderation.stop-room");
+        payload.addProperty("target", "arena");
+        payload.addProperty("roomId", roomId);
+        payload.addProperty("outcome", outcome);
+        payload.addProperty("reason", reason);
+        return frameWithOp(
+                EPOCH,
+                sequence,
+                operationId,
+                payload,
+                null,
+                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                true,
+                null,
+                GENERATION,
+                AUDIENCE);
+    }
+
     private String frame(
             String epoch,
             long sequence,
+            JsonObject payload,
+            Long revision,
+            OffsetDateTime expiresAt,
+            boolean executable,
+            String reason,
+            String generation,
+            String audience) {
+        return frameWithOp(
+                epoch,
+                sequence,
+                "op-" + sequence,
+                payload,
+                revision,
+                expiresAt,
+                executable,
+                reason,
+                generation,
+                audience);
+    }
+
+    private String frameWithOp(
+            String epoch,
+            long sequence,
+            String operationId,
             JsonObject payload,
             Long revision,
             OffsetDateTime expiresAt,
@@ -745,7 +951,7 @@ class CpConsumerTest {
         frame.addProperty("schema", 2);
         frame.addProperty("epoch", epoch);
         frame.addProperty("sequence", sequence);
-        frame.addProperty("operationId", "op-" + sequence);
+        frame.addProperty("operationId", operationId);
         frame.addProperty("audience", audience);
         frame.addProperty("generation", generation);
         if (revision == null) frame.add("revision", null);
@@ -819,7 +1025,7 @@ class CpConsumerTest {
         @Override
         public CpApplier.Outcome handleAction(
                 String kind, String target, String playerId, String reason) {
-            calls.add(kind + "/" + target + "/" + playerId);
+            calls.add(kind + "/" + target + "/" + playerId + "/" + reason);
             if (throwOnHandle) throw new RuntimeException("boom");
             return CpApplier.Outcome.ok();
         }
