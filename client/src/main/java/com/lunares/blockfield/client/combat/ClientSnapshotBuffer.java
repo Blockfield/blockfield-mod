@@ -12,6 +12,7 @@ import com.mojang.logging.LogUtils;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
@@ -493,18 +494,37 @@ public final class ClientSnapshotBuffer {
      * Fills the certified far-rate skips {@code last+1 .. tick-1} with the last sent frame held at
      * each tick, as the server replays them: a true skip contributes no new input.
      */
-    private static void holdSkipped(Track track, long last, long tick, SnapshotTransform value) {
+    private void holdSkipped(Track track, long last, long tick, SnapshotTransform value) {
         var cover = track.frames.get(last);
         if (cover == null) return;
-        for (long n = last + 1; n < tick; n++)
+        for (long n = last + 1; n < tick; n++) {
+            var checkpoint = cover.checkpoint();
+            AnimationState held = null;
+            if (checkpoint != null) {
+                held = heldAt(checkpoint, n);
+                // The re-stamped marker inputs name a tick nothing was sent under: install the
+                // cover's bytes under them, as the server does, else stepping misses the input.
+                // They retire with the frames that reference them.
+                var heldDecisions = held.decisions().iterator();
+                for (var decision : checkpoint.decisions()) {
+                    if (!ParCoolCheckpoints.family(decision.layer())) continue;
+                    var input = heldDecisions.next().input();
+                    try {
+                        var definition = resources.get(decision.input());
+                        installResources(
+                                List.of(
+                                        new AnimationResources.Definition(
+                                                input,
+                                                definition.value(),
+                                                definition.dependencies())));
+                    } catch (IllegalArgumentException missing) {
+                        // Never sent: stepping this boundary fails as it would without the hold.
+                    }
+                }
+            }
             track.frames.put(
-                    n,
-                    SnapshotTransform.exact(
-                            n,
-                            value.identity(),
-                            0,
-                            cover.placement(),
-                            cover.checkpoint() == null ? null : heldAt(cover.checkpoint(), n)));
+                    n, SnapshotTransform.exact(n, value.identity(), 0, cover.placement(), held));
+        }
     }
 
     /**
