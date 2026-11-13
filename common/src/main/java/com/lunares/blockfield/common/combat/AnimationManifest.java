@@ -68,7 +68,7 @@ public record AnimationManifest(
                     new TreeMap<>(
                             Map.of(
                                     "tacz",
-                                    "b95cd70bae2f5bec56a7bdc14822d3afc63e5ec3102a5b42403376be374ced3d",
+                                    "5732bf28067b5cc06de0d75818eb0899378b3b36844d2a856dedfcd1ecb590c6",
                                     "lrtactical",
                                     "e4d43b10ba590d0f7b21b19c9aae9c814921ca31295bbeb210f5819903ed7f60",
                                     "parcool",
