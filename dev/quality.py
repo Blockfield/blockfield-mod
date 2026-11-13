@@ -537,8 +537,15 @@ def main(argv=None):
             "java-check": ["spotlessCheck", "lintJava", "build"],
             "java-format": ["spotlessApply"],
         }
-        # Oracle and test JVMs must not overlap within java-check's 2 GiB build budget.
-        workers = 1 if args.command == "java-check" else 2
+        # Oracle and test JVMs must not overlap within java-check's 2 GiB
+        # local build budget. Free public runners have 4 vCPU / 16 GiB, so CI
+        # overlaps the :client/:common builds and their test JVMs instead.
+        if args.command == "java-check" and (
+            os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("CI") == "true"
+        ):
+            workers = 4
+        else:
+            workers = 1 if args.command == "java-check" else 2
         gradle(f"--max-workers={workers}", *tasks[args.command], *args.args)
         return
     if args.command == "gradle":
