@@ -655,15 +655,32 @@ class CpConsumerTest {
     }
 
     @Test
-    void longOutputIsCappedByBytesWithoutSplittingASurrogatePair() {
+    void longOutputIsCappedByCharactersWithoutSplittingASurrogatePair() {
         RecordingActions actions = new RecordingActions();
-        actions.output = "a".repeat(CpConsumer.MAX_OUTPUT_BYTES - 1) + "\uD83D\uDE00tail";
+        actions.output = "a".repeat(CpConsumer.MAX_OUTPUT_CHARS - 1) + "\uD83D\uDE00tail";
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
 
         String output = last(withActions.onFrame(consoleFrame("op-o1", "list", true))).output;
 
-        assertEquals("a".repeat(CpConsumer.MAX_OUTPUT_BYTES - 1), output);
+        assertEquals("a".repeat(CpConsumer.MAX_OUTPUT_CHARS - 1), output);
+    }
+
+    @Test
+    void nonLatinOutputKeepsEveryCharacterThatFitsTheRequest() {
+        RecordingActions actions = new RecordingActions();
+        actions.output = "界".repeat(8_000);
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        assertEquals(
+                actions.output,
+                last(withActions.onFrame(consoleFrame("op-o3", "list", true))).output);
+
+        actions.output = "界".repeat(12_000) + "\"".repeat(10);
+        CpAck capped = last(withActions.onFrame(consoleFrame("op-o4", "list", true)));
+        assertEquals("界".repeat(CpConsumer.MAX_OUTPUT_JSON_BYTES / 3), capped.output);
+        assertTrue(capped.toJson().getBytes(StandardCharsets.UTF_8).length < 32_768);
     }
 
     @Test

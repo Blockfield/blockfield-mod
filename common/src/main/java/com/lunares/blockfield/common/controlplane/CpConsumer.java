@@ -50,11 +50,13 @@ public final class CpConsumer {
     private static final Set<String> OUTPUT_KINDS =
             Set.of("moderation.list", "moderation.maintenance", "console.run");
 
+    /** Output cap per ack in characters: the control plane's Ack.output limit. */
+    static final int MAX_OUTPUT_CHARS = 16_384;
+
     /**
-     * Output budget per ack in UTF-8 bytes: JSON escaping at most doubles it, so the whole ack
-     * stays under the control plane's 32 KiB request cap.
+     * Output cap per ack as JSON-encoded bytes: the whole ack stays under CP's 32 KiB request cap.
      */
-    static final int MAX_OUTPUT_BYTES = 12_288;
+    static final int MAX_OUTPUT_JSON_BYTES = 30_000;
 
     private static final int MAX_COMMAND = 1000;
 
@@ -533,15 +535,25 @@ public final class CpConsumer {
                         StandardCharsets.UTF_8);
         int end = 0;
         int bytes = 0;
-        // Cut on a code point boundary, never inside a surrogate pair.
+        // Cut on a code point boundary at whichever cap comes first.
         while (end < text.length()) {
             int codePoint = text.codePointAt(end);
-            int size = codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
-            if (bytes + size > MAX_OUTPUT_BYTES) break;
+            int chars = Character.charCount(codePoint);
+            int size = jsonBytes(codePoint);
+            if (end + chars > MAX_OUTPUT_CHARS || bytes + size > MAX_OUTPUT_JSON_BYTES) break;
             bytes += size;
-            end += Character.charCount(codePoint);
+            end += chars;
         }
         return text.substring(0, end);
+    }
+
+    /** Bytes one code point takes in the ack JSON (Gson escaping, UTF-8). */
+    private static int jsonBytes(int codePoint) {
+        if (codePoint == '"' || codePoint == '\\' || codePoint == '\n' || codePoint == '\t') {
+            return 2;
+        }
+        if (codePoint == 0x2028 || codePoint == 0x2029) return 6;
+        return codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
     }
 
     private List<CpAck> repost(CpEnvelope frame, CpStore.Terminal prior) {
