@@ -3,6 +3,7 @@ package com.lunares.blockfield.common.controlplane;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -49,8 +50,11 @@ public final class CpConsumer {
     private static final Set<String> OUTPUT_KINDS =
             Set.of("moderation.list", "moderation.maintenance", "console.run");
 
-    /** Output cap per ack; the control plane accepts up to 64 KiB. */
-    static final int MAX_OUTPUT = 16_384;
+    /**
+     * Output budget per ack in UTF-8 bytes: JSON escaping at most doubles it, so the whole ack
+     * stays under the control plane's 32 KiB request cap.
+     */
+    static final int MAX_OUTPUT_BYTES = 12_288;
 
     private static final int MAX_COMMAND = 1000;
 
@@ -516,13 +520,25 @@ public final class CpConsumer {
     }
 
     private static String capped(String output) {
-        if (output == null || output.length() <= MAX_OUTPUT) return output;
-        // Never split a surrogate pair: the control plane refuses lone surrogates.
-        int end =
-                Character.isHighSurrogate(output.charAt(MAX_OUTPUT - 1))
-                        ? MAX_OUTPUT - 1
-                        : MAX_OUTPUT;
-        return output.substring(0, end);
+        if (output == null) return null;
+        // Other control characters would become \\uXXXX escapes; the UTF-8 round trip turns a
+        // lone surrogate (which the control plane refuses) into '?'.
+        String text =
+                new String(
+                        output.replaceAll("[\\p{Cntrl}&&[^\\n\\t]]", " ")
+                                .getBytes(StandardCharsets.UTF_8),
+                        StandardCharsets.UTF_8);
+        int end = 0;
+        int bytes = 0;
+        // Cut on a code point boundary, never inside a surrogate pair.
+        while (end < text.length()) {
+            int codePoint = text.codePointAt(end);
+            int size = codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+            if (bytes + size > MAX_OUTPUT_BYTES) break;
+            bytes += size;
+            end += Character.charCount(codePoint);
+        }
+        return text.substring(0, end);
     }
 
     private List<CpAck> repost(CpEnvelope frame, CpStore.Terminal prior) {

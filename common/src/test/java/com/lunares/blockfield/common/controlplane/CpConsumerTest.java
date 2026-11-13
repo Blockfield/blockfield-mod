@@ -655,16 +655,27 @@ class CpConsumerTest {
     }
 
     @Test
-    void longOutputIsCappedWithoutSplittingASurrogatePair() {
+    void longOutputIsCappedByBytesWithoutSplittingASurrogatePair() {
         RecordingActions actions = new RecordingActions();
-        actions.output = "a".repeat(CpConsumer.MAX_OUTPUT - 1) + "\uD83D\uDE00tail";
+        actions.output = "a".repeat(CpConsumer.MAX_OUTPUT_BYTES - 1) + "\uD83D\uDE00tail";
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
 
         String output = last(withActions.onFrame(consoleFrame("op-o1", "list", true))).output;
 
-        assertEquals(CpConsumer.MAX_OUTPUT - 1, output.length());
-        assertFalse(Character.isHighSurrogate(output.charAt(output.length() - 1)));
+        assertEquals("a".repeat(CpConsumer.MAX_OUTPUT_BYTES - 1), output);
+    }
+
+    @Test
+    void outputDropsControlCharactersAndLoneSurrogates() {
+        RecordingActions actions = new RecordingActions();
+        actions.output = "a\u0001b\nc\td\uD83D";
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        assertEquals(
+                "a b\nc\td?",
+                last(withActions.onFrame(consoleFrame("op-o2", "list", true))).output);
     }
 
     private static CpAck last(List<CpAck> acks) {
