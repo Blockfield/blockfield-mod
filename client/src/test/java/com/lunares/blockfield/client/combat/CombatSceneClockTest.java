@@ -1020,4 +1020,289 @@ class CombatSceneClockTest {
                 "adapted burst playback within 1.25x: " + maxAdaptedAdvance + " > " + cap);
         assertTrue(c.delay() >= 4, "servo absorbs burstiness, delay " + c.delay());
     }
+
+    /**
+     * Adaptive delay trace (coordination#19): 60 fps frames, arrivals stamped at the frame that
+     * handles them (main-thread receiver) after {@code late} ms of network delay beyond the tick
+     * grid, in order (reliable delivery holds successors). Checks every live frame for smooth
+     * playback: R advances within the servo's ±10 % of real time and never starves at H.
+     */
+    static CombatSceneClock adaptiveTrace(
+            double endMs,
+            java.util.function.IntToDoubleFunction late,
+            java.util.function.ObjDoubleConsumer<CombatSceneClock> check) {
+        var c = new CombatSceneClock();
+        double frameMs = 1000 / 60.0;
+        int n = 0;
+        double next = 0;
+        double previous = Double.NaN;
+        for (double now = 0; now < endMs; now += frameMs) {
+            while (next <= now) {
+                c.arrival(batch(1000 + n), now);
+                n++;
+                next = Math.max(next, n * 50 + late.applyAsDouble(n));
+            }
+            if (!c.frame(now)) continue;
+            if (!Double.isNaN(previous) && now >= 2000) {
+                double advance = c.time() - previous;
+                assertTrue(
+                        advance >= .9 * frameMs / 50 - 1e-4 && advance <= 1.1 * frameMs / 50 + 1e-4,
+                        "smooth playback at " + now + ": " + advance + " delay " + c.delay());
+                assertTrue(c.occupancy() > .5, "R starved at H at " + now);
+            }
+            previous = c.time();
+            check.accept(c, now);
+        }
+        assertEquals(0, c.recoverySnaps());
+        return c;
+    }
+
+    @Test
+    void steadyLinkSettlesAtTwoTicks() {
+        var random = new java.util.Random(19);
+        var c =
+                adaptiveTrace(
+                        15000,
+                        n -> random.nextDouble(0, 3),
+                        (clock, now) -> {
+                            if (now >= 6000) assertEquals(2, clock.delay(), "delay at " + now);
+                        });
+        assertTrue(c.jitter() > 0, "frame quantization is real jitter: " + c.jitter());
+    }
+
+    @Test
+    void jitteryLossyLinkHoldsThreeToFourTicks() {
+        // netem 80±30 ms with 2 % loss: a lost batch is resent one RTT later.
+        var random = new java.util.Random(30);
+        adaptiveTrace(
+                20000,
+                n -> random.nextDouble(0, 60) + (random.nextDouble() < .02 ? 80 : 0),
+                (clock, now) -> {
+                    if (now >= 5000)
+                        assertTrue(
+                                clock.delay() >= 3 && clock.delay() <= 4,
+                                "delay " + clock.delay() + " at " + now);
+                });
+    }
+
+    @Test
+    void delayGrowsFastAndShrinksSlowlyAfterJitterStops() {
+        var random = new java.util.Random(7);
+        double[] grownAt = {Double.NaN};
+        double[] shrunkAt = {Double.NaN};
+        double[] threeAt = {Double.NaN};
+        int[] peak = {0};
+        adaptiveTrace(
+                30000,
+                n ->
+                        n * 50 < 6000 || n * 50 >= 12000
+                                ? random.nextDouble(0, 3)
+                                : random.nextDouble(0, 80),
+                (clock, now) -> {
+                    if (now >= 6000 && Double.isNaN(grownAt[0]) && clock.delay() >= 3)
+                        grownAt[0] = now;
+                    if (now < 12000) peak[0] = Math.max(peak[0], clock.delay());
+                    if (now >= 12000 && Double.isNaN(threeAt[0]) && clock.delay() <= 3)
+                        threeAt[0] = now;
+                    if (now >= 12000 && Double.isNaN(shrunkAt[0]) && clock.delay() == 2)
+                        shrunkAt[0] = now;
+                });
+        assertTrue(grownAt[0] - 6000 <= 1500, "grows within 1.5 s, at " + grownAt[0]);
+        // Above 3 ticks the delay drains at the slew pace; only the 2-tick floor waits out the
+        // hold.
+        assertTrue(
+                threeAt[0] - 12000 <= 500 * (peak[0] - 3) + 1500, "drains to 3 at " + threeAt[0]);
+        assertTrue(
+                shrunkAt[0] - 12000 >= 3000, "shrinks no sooner than the hold, at " + shrunkAt[0]);
+        assertTrue(shrunkAt[0] - 12000 <= 10000, "recovers to 2 ticks, at " + shrunkAt[0]);
+    }
+
+    @Test
+    void stableBandHasHysteresis() {
+        assertEquals(2, CombatSceneClock.jitterDelay(9, 3));
+        assertEquals(3, CombatSceneClock.jitterDelay(12, 3));
+        assertEquals(2, CombatSceneClock.jitterDelay(12, 2));
+        assertEquals(3, CombatSceneClock.jitterDelay(17, 2));
+        assertEquals(4, CombatSceneClock.jitterDelay(40, 3));
+    }
+
+    @Test
+    void sixToThreeDoesNotStartTwoTickShrinkTimer() {
+        var c = new CombatSceneClock();
+        int n = 0;
+        boolean reachedSix = false;
+        boolean reachedThree = false;
+        double lowJitterAt = Double.NaN;
+        double shrunkAt = Double.NaN;
+        double lastBurstAt = Double.NEGATIVE_INFINITY;
+        for (double now = 0; now < 20000; now += 10) {
+            if (!reachedSix) {
+                if (now < 1500) {
+                    while (n * 50 <= now) c.arrival(batch(1000 + n++), now);
+                } else if (now < 3000) {
+                    while (n * 50 + (n % 2 == 0 ? 40 : 0) <= now) {
+                        c.arrival(batch(1000 + n), now);
+                        n++;
+                    }
+                    lastBurstAt = now;
+                } else if (now - lastBurstAt >= 450) {
+                    while (n * 50 <= now) c.arrival(batch(1000 + n++), now);
+                    lastBurstAt = now;
+                }
+            } else if (!reachedThree) {
+                while (n * 50 + (n % 2 == 0 ? 40 : 0) <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            } else {
+                while (n * 50 + 20 <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            }
+            if (!c.frame(now)) continue;
+            if (!reachedSix && c.delay() == 6) {
+                reachedSix = true;
+            } else if (reachedSix && !reachedThree) {
+                assertTrue(
+                        c.jitter() >= CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                        "jitter stays in desired=3 band during 6->3 drain: " + c.jitter());
+                if (c.delay() == 3) reachedThree = true;
+            } else if (reachedThree) {
+                if (Double.isNaN(lowJitterAt)
+                        && c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS) {
+                    lowJitterAt = now;
+                }
+                if (!Double.isNaN(lowJitterAt) && c.delay() == 2 && Double.isNaN(shrunkAt)) {
+                    shrunkAt = now;
+                }
+            }
+        }
+        assertTrue(reachedSix, "delay reached 6");
+        assertTrue(reachedThree, "delay drained 6 -> 3");
+        assertFalse(Double.isNaN(lowJitterAt), "jitter dropped below 10 ms");
+        assertFalse(Double.isNaN(shrunkAt), "delay eventually shrunk to 2");
+        assertTrue(
+                shrunkAt - lowJitterAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "3->2 waited >= 3 s after desired became 2, waited " + (shrunkAt - lowJitterAt));
+    }
+
+    @Test
+    void interruptingDesiredTwoResetsShrinkHold() {
+        var c = new CombatSceneClock();
+        int n = 0;
+        boolean bumped = false;
+        double resumedLowJitterAt = Double.NaN;
+        double shrunkAt = Double.NaN;
+        for (double now = 0; now < 10000; now += 10) {
+            if (now >= 3000 && now < 3400) {
+                while (n * 50 + (n % 2 == 1 ? 80 : 0) <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            } else {
+                double offset = now >= 3400 ? 55 : 0;
+                while (n * 50 + offset <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            }
+            if (!c.frame(now)) continue;
+            if (now >= 3000 && c.jitter() >= CombatSceneClock.STABLE_JITTER_ENTER_MS) bumped = true;
+            if (bumped
+                    && now >= 3500
+                    && Double.isNaN(resumedLowJitterAt)
+                    && c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS) {
+                resumedLowJitterAt = now;
+            }
+            if (!Double.isNaN(resumedLowJitterAt) && c.delay() == 2 && Double.isNaN(shrunkAt)) {
+                shrunkAt = now;
+            }
+            if (now < 3500) assertEquals(3, c.delay(), "stays at 3 before bump at " + now);
+        }
+        assertTrue(bumped, "brief spike raised jitter above 10 ms");
+        assertFalse(Double.isNaN(resumedLowJitterAt), "jitter recovered below 10 ms");
+        assertFalse(Double.isNaN(shrunkAt), "delay eventually shrunk to 2");
+        assertTrue(
+                shrunkAt - resumedLowJitterAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "timer reset on desired != 2, waited " + (shrunkAt - resumedLowJitterAt));
+    }
+
+    @Test
+    void midWindowJitterSpikeResetsTwoTickShrinkHold() {
+        var c = new CombatSceneClock();
+        // Pre-warm with alternating 0/16 ms arrival phase (jitter ~8 ms < 10 ms) so the 3 s hold
+        // starts at t = 1000 while delay is 3.
+        for (int n = 0; n <= 50; n++) {
+            double at = n * 50 + (n % 2 == 0 ? 0 : 16);
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+        }
+        assertEquals(3, c.delay());
+        assertTrue(
+                c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                "pre-spike jitter below 10 ms: " + c.jitter());
+
+        // Between the 2500 ms and 3000 ms evaluations, one packet arrives +45 ms late so jitter
+        // exceeds 10 ms, then on-time packets decay jitter back below 10 ms before t = 3000.
+        double spikeAt = 2595;
+        c.arrival(batch(1051), spikeAt);
+        assertTrue(
+                c.jitter() >= CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                "spike pushed jitter above 10 ms: " + c.jitter());
+        c.frame(spikeAt);
+
+        double shrunkAt = Double.NaN;
+        for (int n = 52; n <= 160; n++) {
+            double at = n * 50 + 8;
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+            if (n == 60) {
+                assertTrue(
+                        c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                        "jitter low again by 3000 ms eval: " + c.jitter());
+            }
+            if (c.delay() == 2 && Double.isNaN(shrunkAt)) shrunkAt = at;
+            if (at < spikeAt + CombatSceneClock.SHRINK_HOLD_MS) {
+                assertEquals(3, c.delay(), "no shrink to 2 ticks before 3 s after spike at " + at);
+            }
+        }
+        assertFalse(Double.isNaN(shrunkAt), "eventually shrunk to 2 ticks");
+        assertTrue(
+                shrunkAt - spikeAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "shrunk " + (shrunkAt - spikeAt) + " ms after spike");
+    }
+
+    @Test
+    void midWindowBacklogSpikeResetsTwoTickShrinkHold() {
+        var c = new CombatSceneClock();
+        for (int n = 0; n <= 50; n++) {
+            double at = n * 50;
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+        }
+        assertEquals(3, c.delay());
+
+        // A 200 ms stall (< holdMs/2 = 250 ms so burstSeen stays false) arrives in one burst at
+        // 2700 ms: backlog triggers on tick 1051 and clears by 1054 before the 3000 ms eval.
+        double stallAt = 2700;
+        for (int n = 51; n <= 54; n++) c.arrival(batch(1000 + n), stallAt);
+        c.frame(stallAt);
+
+        double shrunkAt = Double.NaN;
+        for (int n = 55; n <= 160; n++) {
+            double at = n * 50;
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+            if (c.delay() == 2 && Double.isNaN(shrunkAt)) shrunkAt = at;
+            if (at < stallAt + CombatSceneClock.SHRINK_HOLD_MS) {
+                assertEquals(
+                        3, c.delay(), "no shrink to 2 ticks before 3 s after backlog at " + at);
+            }
+        }
+        assertFalse(Double.isNaN(shrunkAt), "eventually shrunk to 2 ticks");
+        assertTrue(
+                shrunkAt - stallAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "shrunk " + (shrunkAt - stallAt) + " ms after backlog");
+    }
 }

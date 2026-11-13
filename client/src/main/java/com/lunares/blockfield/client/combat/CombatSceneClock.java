@@ -71,6 +71,23 @@ public final class CombatSceneClock {
      */
     static final int SERVO_CAP_LAG_TICKS = 8;
 
+    /**
+     * Adaptive delay (coordination#19): the 2-tick floor is used while the jitter EMA stays under
+     * these bounds — entering below 10 ms, leaving above 16 ms (hysteresis) — otherwise the delay
+     * follows 2 + ⌈1.5·jitter/50⌉ (3 ticks up to 33 ms, then 4). Main-thread arrival stamps carry
+     * frame quantization (~4 ms MAD at 60 fps), so the plain law never reached 2 in play.
+     */
+    static final double STABLE_JITTER_ENTER_MS = 10;
+
+    static final double STABLE_JITTER_EXIT_MS = 16;
+
+    /**
+     * Every step slews one tick per evaluation (500 ms), except the step into the 2-tick floor: it
+     * waits until 2 was wanted this long without interruption, so a calm spell inside a jittery
+     * link does not oscillate. Burst-absorbed delays above 3 still drain at the slew pace.
+     */
+    static final double SHRINK_HOLD_MS = 3000;
+
     private final NavigableSet<Long> ticks = new TreeSet<>();
     private long high = -1;
     private double lastArrival = Double.NaN;
@@ -106,6 +123,7 @@ public final class CombatSceneClock {
     private long recoveryStart;
     private long recoverySnaps;
     private long delayChanges;
+    private double shrinkSinceMs = Double.NaN;
     private AnimationTiming.ClockState animation = AnimationTiming.ClockState.cold();
     private AnimationTiming.ClockReason animationReason = AnimationTiming.ClockReason.WARMUP;
     private final java.util.Map<AnimationTiming.ClockReason, Long> animationCounts =
@@ -172,6 +190,7 @@ public final class CombatSceneClock {
         // spell marks the window, and the peak occupancy since the last slew sizes the absorption.
         if (!Double.isNaN(time)) occPeak = Math.max(occPeak, high - time);
         if (gap || silence >= holdMs / 2) burstSeen = true;
+        if (backlog || gap) shrinkSinceMs = Double.NaN;
         // Ordered backlog remains valid decode history, but is not a network timing sample.
         if (backlog) return;
         if (batches++ == 0) {
@@ -188,15 +207,14 @@ public final class CombatSceneClock {
         // Unsampled, the last rate holds and R walks away from H without bound.
         servoMissed = batches > 1 && nextServoMs != Double.POSITIVE_INFINITY;
         nextServoMs = smooth + (high + .5) * 50;
+        int desired = desiredDelay();
+        if (desired != 2) shrinkSinceMs = Double.NaN;
+        else if (Double.isNaN(shrinkSinceMs)) shrinkSinceMs = nowMs;
         if (nowMs - lastSlew >= 500
                 && (Math.abs(rate - 1) <= .05000001 || (catchUp && catchUpBurst))) {
-            int desired = batches < 20 ? 3 : 2 + (int) Math.ceil(jitter / 50 * 1.5);
-            // A marked window absorbs its peak occupancy into a higher delay; an unmarked one
-            // follows the jitter term, so the delay also slews back down after bursts stop.
-            if (burstSeen)
-                desired = Math.max(desired, Math.clamp((int) Math.ceil(occPeak) - 1, min, max));
-            desired = Math.clamp(desired, min, max);
-            if (delay != desired) {
+            // The servo then retargets R within ±dilation, so a step never snaps the drawn pose.
+            if (desired != delay
+                    && (delay > 3 || desired > delay || nowMs - shrinkSinceMs >= SHRINK_HOLD_MS)) {
                 delay += Integer.signum(desired - delay);
                 delayChanges++;
             }
@@ -204,6 +222,15 @@ public final class CombatSceneClock {
             burstSeen = false;
             occPeak = 0;
         }
+    }
+
+    private int desiredDelay() {
+        int desired = batches < 20 ? 3 : jitterDelay(jitter, delay);
+        // A marked window absorbs its peak occupancy into a higher delay; an unmarked one
+        // follows the jitter term, so the delay also slews back down after bursts stop.
+        if (burstSeen)
+            desired = Math.max(desired, Math.clamp((int) Math.ceil(occPeak) - 1, min, max));
+        return Math.clamp(desired, min, max);
     }
 
     /**
@@ -347,6 +374,12 @@ public final class CombatSceneClock {
             }
         }
         return true;
+    }
+
+    /** Jitter-driven delay before burst absorption and the server's interpMin/interpMax clamp. */
+    static int jitterDelay(double jitter, int delay) {
+        double stable = delay <= 2 ? STABLE_JITTER_EXIT_MS : STABLE_JITTER_ENTER_MS;
+        return jitter < stable ? 2 : 2 + (int) Math.ceil(jitter / 50 * 1.5);
     }
 
     public static double servo(double occupancy, int delay, double dilation) {

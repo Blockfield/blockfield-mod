@@ -1823,6 +1823,7 @@ animation sync raises PROTOCOL to 7 (mod 1.52.0 released 6): снапшоты S2
 применяется между тиками, `-Dblockfield.animSync.workers=N` переопределяет). После поключевых клампов `interpMaxTicks = max(interpMaxTicks, interpMinTicks)`
 до использования/отправки в заголовке; кросс-коррекция пишется в `errors`/`applied.json`.
 Частота снапшотов не настраивается (каждый тик), кольцо истории — 40 тиков, клиентских ручек нет.
+Задержку интерполяции клиент выбирает сам в этих границах (`CombatSceneClock`): 2 тика, пока jitter прихода < 10 мс (выход из полосы > 16 мс), иначе 2 + ⌈1,5·jitter/50⌉, плюс поглощение пачек; шаг — раз в 500 мс, но переход на 2 тика — только после 3 с без перерыва; смену задержки servo отыгрывает темпом ±`dilationPercent`, без snap. Сервер перематывает к R из билета клиента, фиксированной задержки не предполагает.
 Команды `bf bodypose` есть только в development-окружении или при старте с
 `-Dblockfield.poseDebug=true`, уровень прав 4. `bf bodypose status` дополнительно показывает
 агрегированные `COUNTERS`: `snapshotsSent`, `snapshotBytes` (full/delta), `viewsAccepted`,
