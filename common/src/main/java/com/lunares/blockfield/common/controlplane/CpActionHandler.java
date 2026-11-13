@@ -14,7 +14,10 @@ package com.lunares.blockfield.common.controlplane;
  * text in {@code reason}; say carries the broadcast text in {@code reason} ({@code playerId}
  * empty); pardon/team-kick carry the nickname in {@code playerId}; class-lock/unlock carry the
  * class id in {@code playerId}; range carries the op in {@code playerId}; stop-room carries the
- * room id in {@code playerId} and {@code "<OUTCOME>[ <reason>]"} in {@code reason}.
+ * room id in {@code playerId} and {@code "<OUTCOME>[ <reason>]"} in {@code reason}; list and
+ * announce carry nothing; maintenance carries the op ({@code status|drain|resume|interrupt}) in
+ * {@code playerId} and the interrupt reason in {@code reason}. Console lines go to {@link
+ * #handleConsole}.
  */
 public interface CpActionHandler {
     /**
@@ -22,4 +25,13 @@ public interface CpActionHandler {
      * untouched; throwing means the effect is uncertain and needs operator reconciliation.
      */
     CpApplier.Outcome handleAction(String kind, String target, String playerId, String reason);
+
+    /**
+     * One owner console line ({@code console.run}). {@code readOnly} is the control plane's
+     * allowlist verdict; the handler re-checks it against its own allowlist before running. The
+     * outcome's output is the command's text. Without an override, consoles are not supported.
+     */
+    default CpApplier.Outcome handleConsole(String target, String command, boolean readOnly) {
+        return CpApplier.Outcome.rejected(CpAck.Result.INVALID_SCHEMA, "console not supported");
+    }
 }

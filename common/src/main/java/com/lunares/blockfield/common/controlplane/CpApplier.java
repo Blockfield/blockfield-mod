@@ -9,9 +9,18 @@ import java.util.List;
  * this package never interprets settings semantics itself.
  */
 public interface CpApplier {
-    record Outcome(boolean applied, CpAck.Result result, List<String> errors) {
+    /** {@code output}: command text returned to the control plane in the terminal ack, or null. */
+    record Outcome(boolean applied, CpAck.Result result, List<String> errors, String output) {
+        public Outcome(boolean applied, CpAck.Result result, List<String> errors) {
+            this(applied, result, errors, null);
+        }
+
         public static Outcome ok() {
-            return new Outcome(true, CpAck.Result.OK, List.of());
+            return ok(null);
+        }
+
+        public static Outcome ok(String output) {
+            return new Outcome(true, CpAck.Result.OK, List.of(), output);
         }
 
         public static Outcome rejected(CpAck.Result result, String... errors) {

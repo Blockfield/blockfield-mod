@@ -29,8 +29,17 @@ public final class CpStore {
 
     public record Lkg(long revision, String sha256, String payloadJson) {}
 
+    /** {@code output}: the final ack's text, kept only until the cursor passes the frame. */
     public record Terminal(
-            String operationId, long sequence, CpAck.State state, CpAck.Result result) {}
+            String operationId,
+            long sequence,
+            CpAck.State state,
+            CpAck.Result result,
+            String output) {
+        public Terminal(String operationId, long sequence, CpAck.State state, CpAck.Result result) {
+            this(operationId, sequence, state, result, null);
+        }
+    }
 
     private static final String FILE = "state.json";
 
@@ -59,6 +68,16 @@ public final class CpStore {
             state.remove("terminal");
             state.remove("started");
             state.remove("operator");
+        } else {
+            // Frames at or below the cursor are acknowledged, output included: drop the copy so
+            // the state file stays bounded by the in-flight window.
+            JsonObject all = objectField(state, "terminal");
+            if (all != null) {
+                for (String key : all.keySet()) {
+                    JsonObject entry = all.getAsJsonObject(key);
+                    if (longField(entry, "sequence", 0) <= sequence) entry.remove("output");
+                }
+            }
         }
         state.addProperty("epoch", epoch);
         state.addProperty("cursor", sequence);
@@ -138,7 +157,8 @@ public final class CpStore {
                     stringField(entry, "operationId", operationId),
                     longField(entry, "sequence", 0),
                     CpAck.State.valueOf(stringField(entry, "state", "")),
-                    CpAck.Result.valueOf(stringField(entry, "result", "")));
+                    CpAck.Result.valueOf(stringField(entry, "result", "")),
+                    entry.has("output") ? entry.get("output").getAsString() : null);
         } catch (IllegalArgumentException e) {
             return null;
         }
@@ -151,12 +171,22 @@ public final class CpStore {
             long sequence,
             CpAck.State state,
             CpAck.Result result) {
+        recordTerminal(epoch, operationId, sequence, state, result, null);
+    }
+
+    /** Same, keeping the final ack's output so a repost after a crash still carries it. */
+    public synchronized void recordTerminal(
+            String epoch,
+            String operationId,
+            long sequence,
+            CpAck.State state,
+            CpAck.Result result,
+            String output) {
         if (!state.terminal()) throw new IllegalArgumentException("terminal states only");
         JsonObject stateJson = load();
-        terminal(stateJson)
-                .add(
-                        terminalKey(epoch, operationId),
-                        terminalEntry(operationId, sequence, state, result));
+        JsonObject entry = terminalEntry(operationId, sequence, state, result);
+        if (output != null) entry.addProperty("output", output);
+        terminal(stateJson).add(terminalKey(epoch, operationId), entry);
         save(stateJson);
     }
 
