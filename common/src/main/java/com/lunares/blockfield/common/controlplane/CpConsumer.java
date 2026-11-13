@@ -383,6 +383,12 @@ public final class CpConsumer {
             String why = String.join("; ", outcome.errors());
             return terminal(frame, CpAck.State.REJECTED, result, why, withOutput ? why : null);
         }
+        if (suggest && !fitsCap(outcome.output())) {
+            // A long suggestion list would truncate mid-document into invalid JSON: refuse
+            // outright so the ack never carries a broken suggest answer.
+            String why = "suggest output exceeds the ack output cap, refused";
+            return terminal(frame, CpAck.State.REJECTED, CpAck.Result.APPLY_FAILED, why, why);
+        }
         return effectiveChain(frame, withOutput ? outcome.output() : null);
     }
 
@@ -545,13 +551,7 @@ public final class CpConsumer {
 
     private static String capped(String output) {
         if (output == null) return null;
-        // Other control characters would become \\uXXXX escapes; the UTF-8 round trip turns a
-        // lone surrogate (which the control plane refuses) into '?'.
-        String text =
-                new String(
-                        output.replaceAll("[\\p{Cntrl}&&[^\\n\\t]]", " ")
-                                .getBytes(StandardCharsets.UTF_8),
-                        StandardCharsets.UTF_8);
+        String text = sanitize(output);
         int end = 0;
         int bytes = 0;
         // Cut on a code point boundary at whichever cap comes first.
@@ -564,6 +564,19 @@ public final class CpConsumer {
             end += chars;
         }
         return text.substring(0, end);
+    }
+
+    private static String sanitize(String output) {
+        // Other control characters would become \\uXXXX escapes; the UTF-8 round trip turns a
+        // lone surrogate (which the control plane refuses) into '?'.
+        return new String(
+                output.replaceAll("[\\p{Cntrl}&&[^\\n\\t]]", " ").getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
+    }
+
+    /** True when a suggest answer survives the ack output cap byte-for-byte. */
+    private static boolean fitsCap(String output) {
+        return output == null || capped(output).equals(sanitize(output));
     }
 
     /** Bytes one code point takes in the ack JSON (Gson escaping, UTF-8). */

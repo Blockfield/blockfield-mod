@@ -761,6 +761,30 @@ class CpConsumerTest {
         assertTrue(actions.calls.isEmpty());
     }
 
+    @Test
+    void oversizedSuggestListRefusedInsteadOfTruncatedJson() {
+        RecordingActions actions = new RecordingActions();
+        JsonArray suggestions = new JsonArray();
+        for (int i = 0; i < 2000; i++) {
+            JsonObject suggestion = new JsonObject();
+            suggestion.addProperty("text", "command-" + i);
+            suggestions.add(suggestion);
+        }
+        JsonObject answer = new JsonObject();
+        answer.addProperty("from", 5);
+        answer.add("suggestions", suggestions);
+        actions.suggestOutput = answer.toString();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        CpAck ack = last(withActions.onFrame(suggestFrame("op-s2", "time ")));
+
+        assertEquals(CpAck.State.REJECTED, ack.state);
+        assertEquals(CpAck.Result.APPLY_FAILED, ack.result);
+        assertEquals("suggest output exceeds the ack output cap, refused", ack.output);
+        assertEquals(1, actions.calls.size());
+    }
+
     private String suggestFrame(String operationId, String input) {
         JsonObject payload = new JsonObject();
         payload.addProperty("kind", "console.suggest");
