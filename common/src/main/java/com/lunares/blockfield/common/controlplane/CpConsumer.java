@@ -24,18 +24,35 @@ public final class CpConsumer {
     /** Namespaces this build applies. Gate snapshots belong to the proxy. */
     private static final Set<String> SETTINGS_NAMESPACES = Set.of("gameplay");
 
-    /** Typed actions this consumer routes; anything else (console, OP) is rejected, never run. */
+    /** Typed actions this consumer routes; anything else is rejected, never run. */
     static final Set<String> ACTION_KINDS =
             Set.of(
                     "moderation.kick",
                     "moderation.ban",
                     "moderation.say",
+                    "moderation.list",
                     "moderation.pardon",
                     "moderation.team-kick",
                     "moderation.class-lock",
                     "moderation.class-unlock",
                     "moderation.range",
-                    "moderation.stop-room");
+                    "moderation.stop-room",
+                    "moderation.maintenance",
+                    "moderation.announce",
+                    "console.run");
+
+    /**
+     * Kinds whose terminal ack carries text (command output or the rejection reason). Only these: a
+     * control plane predating the ack {@code output} field never sends them, so it never sees the
+     * field it would refuse.
+     */
+    private static final Set<String> OUTPUT_KINDS =
+            Set.of("moderation.list", "moderation.maintenance", "console.run");
+
+    /** Output cap per ack; the control plane accepts up to 64 KiB. */
+    static final int MAX_OUTPUT = 16_384;
+
+    private static final int MAX_COMMAND = 1000;
 
     private static final Pattern NICKNAME = Pattern.compile("[A-Za-z0-9_]{3,16}");
     private static final Pattern CLASS_ID = Pattern.compile("[a-z0-9_]{1,32}");
@@ -43,6 +60,8 @@ public final class CpConsumer {
             Pattern.compile("[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}");
     private static final Set<String> RANGE_OPS = Set.of("open", "close", "reset");
     private static final Set<String> STOP_OUTCOMES = Set.of("none", "draw", "RED", "BLUE");
+    private static final Set<String> MAINTENANCE_OPS =
+            Set.of("status", "drain", "resume", "interrupt");
 
     private final CpStore store;
     private final CpApplier applier;
@@ -307,11 +326,16 @@ public final class CpConsumer {
             return terminal(
                     frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
         }
-        ActionArgs args = actionArgs(kind, frame.envelopePayload);
+        boolean console = "console.run".equals(kind);
+        ActionArgs args =
+                console
+                        ? consoleArgs(frame.envelopePayload)
+                        : actionArgs(kind, frame.envelopePayload);
         if (args == null) {
             return terminal(
                     frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
         }
+        boolean withOutput = OUTPUT_KINDS.contains(kind);
         String epochId = frame.epoch.toString();
         if (store.isActionStarted(epochId, frame.operationId)) {
             // Crash after the started-marker, before any terminal state: a non-idempotent
@@ -326,7 +350,10 @@ public final class CpConsumer {
         store.markActionStarted(epochId, frame.operationId, kind);
         CpApplier.Outcome outcome;
         try {
-            outcome = actions.handleAction(kind, target, args.playerId(), args.reason());
+            outcome =
+                    console
+                            ? actions.handleConsole(target, args.reason(), args.readOnly())
+                            : actions.handleAction(kind, target, args.playerId(), args.reason());
         } catch (RuntimeException e) {
             store.markActionOperatorNeeded(frame.operationId);
             return terminal(
@@ -340,17 +367,38 @@ public final class CpConsumer {
                     outcome.result() == CpAck.Result.OK
                             ? CpAck.Result.APPLY_FAILED
                             : outcome.result();
-            return terminal(
-                    frame, CpAck.State.REJECTED, result, String.join("; ", outcome.errors()));
+            String why = String.join("; ", outcome.errors());
+            return terminal(frame, CpAck.State.REJECTED, result, why, withOutput ? why : null);
         }
-        return effectiveChain(frame);
+        return effectiveChain(frame, withOutput ? outcome.output() : null);
     }
 
     /**
      * Handler-facing arguments per moderation kind (see {@link CpActionHandler} for the mapping).
      * Null means the payload is malformed and the frame is rejected without a handler call.
      */
-    private record ActionArgs(String playerId, String reason) {}
+    private record ActionArgs(String playerId, String reason, boolean readOnly) {
+        ActionArgs(String playerId, String reason) {
+            this(playerId, reason, false);
+        }
+    }
+
+    /**
+     * {@code console.run}: one line (no control characters, at most 1000 chars) plus the control
+     * plane's read-only verdict, carried in {@code reason}/{@code readOnly}. Null when malformed.
+     */
+    private static ActionArgs consoleArgs(JsonObject payload) {
+        String command = stringField(payload, "command");
+        if (command.isBlank()
+                || command.length() > MAX_COMMAND
+                || command.chars().anyMatch(Character::isISOControl)
+                || !payload.has("readOnly")
+                || !payload.get("readOnly").isJsonPrimitive()
+                || !payload.getAsJsonPrimitive("readOnly").isBoolean()) {
+            return null;
+        }
+        return new ActionArgs("", command, payload.get("readOnly").getAsBoolean());
+    }
 
     private static ActionArgs actionArgs(String kind, JsonObject payload) {
         return switch (kind) {
@@ -378,6 +426,14 @@ public final class CpConsumer {
                 yield RANGE_OPS.contains(op) ? new ActionArgs(op, "") : null;
             }
             case "moderation.stop-room" -> stopRoomArgs(payload);
+            case "moderation.list", "moderation.announce" -> new ActionArgs("", "");
+            case "moderation.maintenance" -> {
+                String op = stringField(payload, "op");
+                String reason = stringField(payload, "reason");
+                if (!MAINTENANCE_OPS.contains(op) || reason.length() > 120) yield null;
+                if ("interrupt".equals(op) == reason.isBlank()) yield null;
+                yield new ActionArgs(op, reason);
+            }
             default -> null;
         };
     }
@@ -420,18 +476,23 @@ public final class CpConsumer {
 
     private List<CpAck> terminal(
             CpEnvelope frame, CpAck.State state, CpAck.Result result, String why) {
+        return terminal(frame, state, result, why, null);
+    }
+
+    /** {@code output} rides the final ack only; the durable record keeps state and result. */
+    private List<CpAck> terminal(
+            CpEnvelope frame, CpAck.State state, CpAck.Result result, String why, String output) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         store.recordTerminal(
                 frame.epoch.toString(), frame.operationId, frame.sequence, state, result);
+        CpAck last = CpAck.forEnvelope(frame, state, result, now, capped(output));
         if (state == CpAck.State.UNKNOWN) {
-            return List.of(CpAck.forEnvelope(frame, state, result, now));
+            return List.of(last);
         }
-        return List.of(
-                CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
-                CpAck.forEnvelope(frame, state, result, now));
+        return List.of(CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now), last);
     }
 
-    private List<CpAck> effectiveChain(CpEnvelope frame) {
+    private List<CpAck> effectiveChain(CpEnvelope frame, String output) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         store.recordTerminal(
                 frame.epoch.toString(),
@@ -439,15 +500,29 @@ public final class CpConsumer {
                 frame.sequence,
                 CpAck.State.EFFECTIVE,
                 CpAck.Result.OK);
-        return effectiveChain(frame, now);
+        return effectiveChain(frame, now, capped(output));
     }
 
     private static List<CpAck> effectiveChain(CpEnvelope frame, OffsetDateTime now) {
+        return effectiveChain(frame, now, null);
+    }
+
+    private static List<CpAck> effectiveChain(CpEnvelope frame, OffsetDateTime now, String output) {
         return List.of(
                 CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
                 CpAck.forEnvelope(frame, CpAck.State.VALIDATED, now),
                 CpAck.forEnvelope(frame, CpAck.State.APPLIED, now),
-                CpAck.forEnvelope(frame, CpAck.State.EFFECTIVE, now));
+                CpAck.forEnvelope(frame, CpAck.State.EFFECTIVE, CpAck.Result.OK, now, output));
+    }
+
+    private static String capped(String output) {
+        if (output == null || output.length() <= MAX_OUTPUT) return output;
+        // Never split a surrogate pair: the control plane refuses lone surrogates.
+        int end =
+                Character.isHighSurrogate(output.charAt(MAX_OUTPUT - 1))
+                        ? MAX_OUTPUT - 1
+                        : MAX_OUTPUT;
+        return output.substring(0, end);
     }
 
     private List<CpAck> repost(CpEnvelope frame, CpStore.Terminal prior) {

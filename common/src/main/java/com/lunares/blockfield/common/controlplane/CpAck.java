@@ -46,6 +46,9 @@ public final class CpAck {
     public final OffsetDateTime actualAt;
     public final Result result;
 
+    /** Command output for the control plane (informational, not part of the receipt), or null. */
+    public final String output;
+
     public CpAck(
             UUID epoch,
             long sequence,
@@ -55,6 +58,20 @@ public final class CpAck {
             State state,
             OffsetDateTime actualAt,
             Result result) {
+        this(epoch, sequence, generation, revision, payloadHash, state, actualAt, result, null);
+    }
+
+    public CpAck(
+            UUID epoch,
+            long sequence,
+            String generation,
+            Long revision,
+            String payloadHash,
+            State state,
+            OffsetDateTime actualAt,
+            Result result,
+            String output) {
+        this.output = output;
         this.epoch = epoch;
         this.sequence = sequence;
         this.generation = generation;
@@ -71,6 +88,11 @@ public final class CpAck {
 
     public static CpAck forEnvelope(
             CpEnvelope envelope, State state, Result result, OffsetDateTime now) {
+        return forEnvelope(envelope, state, result, now, null);
+    }
+
+    public static CpAck forEnvelope(
+            CpEnvelope envelope, State state, Result result, OffsetDateTime now, String output) {
         return new CpAck(
                 envelope.epoch,
                 envelope.sequence,
@@ -79,7 +101,8 @@ public final class CpAck {
                 envelope.payloadHash,
                 state,
                 now,
-                result);
+                result,
+                output);
     }
 
     public String toJson() {
@@ -93,6 +116,8 @@ public final class CpAck {
         body.addProperty("state", state.name().toLowerCase(Locale.ROOT));
         body.addProperty("actualAt", actualAt.toString());
         body.addProperty("result", result.wire());
+        // Absent, not null: control planes before the output field reject unknown keys.
+        if (output != null) body.addProperty("output", output);
         return body.toString();
     }
 }

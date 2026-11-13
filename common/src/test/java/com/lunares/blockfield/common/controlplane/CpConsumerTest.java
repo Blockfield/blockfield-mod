@@ -552,6 +552,159 @@ class CpConsumerTest {
     }
 
     @Test
+    void listReturnsOutputOnTheEffectiveAckOnly() {
+        RecordingActions actions = new RecordingActions();
+        actions.output = "There are 2 of a max of 40 players online: a, b";
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks = withActions.onFrame(actionFrame(42, "moderation.list", "unused", ""));
+
+        assertEquals(List.of("moderation.list/arena//"), actions.calls);
+        CpAck last = acks.get(acks.size() - 1);
+        assertEquals(CpAck.State.EFFECTIVE, last.state);
+        assertEquals(actions.output, last.output);
+        assertTrue(last.toJson().contains("\"output\""));
+        assertFalse(acks.get(0).toJson().contains("output"), "only the final ack carries it");
+    }
+
+    @Test
+    void maintenanceRoutesOpAndNeedsReasonOnlyForInterrupt() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        assertEquals(
+                CpAck.State.EFFECTIVE,
+                last(withActions.onFrame(maintenanceFrame("op-m1", "status", ""))).state);
+        assertEquals(
+                CpAck.State.EFFECTIVE,
+                last(withActions.onFrame(maintenanceFrame("op-m2", "interrupt", "hotfix"))).state);
+        for (String[] bad :
+                List.of(
+                        new String[] {"op-m3", "interrupt", ""},
+                        new String[] {"op-m4", "status", "why"},
+                        new String[] {"op-m5", "pause", ""})) {
+            CpAck ack = last(withActions.onFrame(maintenanceFrame(bad[0], bad[1], bad[2])));
+            assertEquals(CpAck.State.REJECTED, ack.state, bad[0]);
+            assertEquals(CpAck.Result.INVALID_SCHEMA, ack.result, bad[0]);
+        }
+        assertEquals(
+                List.of(
+                        "moderation.maintenance/arena/status/",
+                        "moderation.maintenance/arena/interrupt/hotfix"),
+                actions.calls);
+    }
+
+    @Test
+    void consoleLineGoesToHandleConsoleWithTheReadOnlyVerdict() {
+        RecordingActions actions = new RecordingActions();
+        actions.output = "The game is running normally";
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        CpAck ack = last(withActions.onFrame(consoleFrame("op-c1", "tick query", true)));
+        CpAck run = last(withActions.onFrame(consoleFrame("op-c2", "save-all", false)));
+
+        assertEquals(CpAck.State.EFFECTIVE, ack.state);
+        assertEquals("The game is running normally", ack.output);
+        assertEquals(CpAck.State.EFFECTIVE, run.state);
+        assertEquals(
+                List.of("console/arena/tick query/true", "console/arena/save-all/false"),
+                actions.calls);
+    }
+
+    @Test
+    void malformedConsoleFramesRejectedWithoutHandlerCall() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        for (String frame :
+                List.of(
+                        consoleFrame("op-cb1", "say hi\nstop", false),
+                        consoleFrame("op-cb2", "   ", true),
+                        consoleFrame("op-cb3", "x".repeat(1001), false),
+                        consoleFrame("op-cb4", "list", null))) {
+            CpAck ack = last(withActions.onFrame(frame));
+            assertEquals(CpAck.State.REJECTED, ack.state);
+            assertEquals(CpAck.Result.INVALID_SCHEMA, ack.result);
+        }
+        assertTrue(actions.calls.isEmpty());
+    }
+
+    @Test
+    void consoleRejectionReasonRidesTheAckButKickRejectionsStaySilent() {
+        RecordingActions actions = new RecordingActions();
+        actions.next = CpApplier.Outcome.rejected(CpAck.Result.APPLY_FAILED, "not allowlisted");
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        CpAck console = last(withActions.onFrame(consoleFrame("op-r1", "op Steve", true)));
+        CpAck kick =
+                last(
+                        withActions.onFrame(
+                                actionFrameOp(42, "op-r2", "moderation.kick", "playerId", "p")));
+
+        assertEquals(CpAck.State.REJECTED, console.state);
+        assertEquals("not allowlisted", console.output);
+        assertEquals(CpAck.State.REJECTED, kick.state);
+        // Older control planes refuse an unknown ack field: pre-existing kinds never send it.
+        assertNull(kick.output);
+        assertFalse(kick.toJson().contains("output"));
+    }
+
+    @Test
+    void longOutputIsCappedWithoutSplittingASurrogatePair() {
+        RecordingActions actions = new RecordingActions();
+        actions.output = "a".repeat(CpConsumer.MAX_OUTPUT - 1) + "\uD83D\uDE00tail";
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        String output = last(withActions.onFrame(consoleFrame("op-o1", "list", true))).output;
+
+        assertEquals(CpConsumer.MAX_OUTPUT - 1, output.length());
+        assertFalse(Character.isHighSurrogate(output.charAt(output.length() - 1)));
+    }
+
+    private static CpAck last(List<CpAck> acks) {
+        return acks.get(acks.size() - 1);
+    }
+
+    private String maintenanceFrame(String operationId, String op, String reason) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", "moderation.maintenance");
+        payload.addProperty("target", "arena");
+        payload.addProperty("op", op);
+        if (!reason.isEmpty()) payload.addProperty("reason", reason);
+        return payloadFrame(operationId, payload);
+    }
+
+    private String consoleFrame(String operationId, String command, Boolean readOnly) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", "console.run");
+        payload.addProperty("target", "arena");
+        payload.addProperty("command", command);
+        if (readOnly != null) payload.addProperty("readOnly", readOnly);
+        return payloadFrame(operationId, payload);
+    }
+
+    /** Every frame at the cursor's next sequence, decided by its own operation id. */
+    private String payloadFrame(String operationId, JsonObject payload) {
+        return frameWithOp(
+                EPOCH,
+                42,
+                operationId,
+                payload,
+                null,
+                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                true,
+                null,
+                GENERATION,
+                AUDIENCE);
+    }
+
+    @Test
     void decidedModerationActionRepostsWithoutRerun() {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
@@ -1021,13 +1174,21 @@ class CpConsumerTest {
     static final class RecordingActions implements CpActionHandler {
         final List<String> calls = new ArrayList<>();
         boolean throwOnHandle;
+        String output;
+        CpApplier.Outcome next;
 
         @Override
         public CpApplier.Outcome handleAction(
                 String kind, String target, String playerId, String reason) {
             calls.add(kind + "/" + target + "/" + playerId + "/" + reason);
             if (throwOnHandle) throw new RuntimeException("boom");
-            return CpApplier.Outcome.ok();
+            return next != null ? next : CpApplier.Outcome.ok(output);
+        }
+
+        @Override
+        public CpApplier.Outcome handleConsole(String target, String command, boolean readOnly) {
+            calls.add("console/" + target + "/" + command + "/" + readOnly);
+            return next != null ? next : CpApplier.Outcome.ok(output);
         }
     }
 }
