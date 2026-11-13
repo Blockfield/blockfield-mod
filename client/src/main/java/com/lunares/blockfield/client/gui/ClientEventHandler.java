@@ -252,7 +252,10 @@ public class ClientEventHandler {
             // Голосование вытесняет выбор/высадку; отложенное открытие прежнего контекста отменяем.
             pendingScreen = null;
             latestUiJson = null;
-            Tablet.openMenu(json, id);
+            // Тик голосования (update=true) лишь обновляет уже открытый бюллетень на месте:
+            // переоткрытие дёрнуло бы вкладку из-под игрока (контракт sendVoteMenu).
+            if (update && Tablet.hasMenu(id)) Tablet.updateMenu(json);
+            else if (!update) Tablet.openMenu(json, id);
         } else if (Tablet.hasMenu(id)) {
             Tablet.updateMenu(json);
         } else if (!update || Tablet.adoptMenuUpdate(id)) {

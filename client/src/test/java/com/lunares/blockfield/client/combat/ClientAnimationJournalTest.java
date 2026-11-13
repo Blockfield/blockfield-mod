@@ -164,6 +164,41 @@ class ClientAnimationJournalTest {
         assertEquals(2L, tracked.counters().get("seedActivations"));
     }
 
+    @Test
+    void farRateSkipsKeepTheLifeSteppingOverHeldBoundaries() {
+        var buffer = new ClientSnapshotBuffer();
+        var tracked = new ClientAnimationJournal(buffer::paired, event -> true);
+        buffer.add(ENTITY, 0);
+        for (long tick = 100; tick <= 106; tick++) {
+            // farEvery=2: odd ticks are true skips, every due tick closes with a DELTA.
+            boolean due = tick % 2 == 0;
+            var checkpoint = checkpoint(identity(), tick, tick * .25);
+            var batch =
+                    due
+                            ? ClientSnapshotBufferTest.batch(
+                                    tick,
+                                    new com.lunares.blockfield.common.combat.AnimationRecipe
+                                            .SnapshotRecord(
+                                            identity(),
+                                            tick == 100 ? ClientSnapshotBufferTest.FULL_RESET : 0,
+                                            checkpoint.placement(),
+                                            checkpoint))
+                            : ClientSnapshotBufferTest.empty(tick);
+            assertTrue(ClientSnapshotBufferTest.apply(buffer, batch));
+            tracked.probe(
+                    tick, tick * 50 * MS, tick, tick * 50 * MS, client(tick * 50 * MS + 2 * MS));
+            if (tick == 100)
+                tracked.seed(seed(checkpoint, seq(tick, 1)), client(tick * 50 * MS + 4 * MS));
+            long next = (tick + 1) * 50 * MS;
+            tracked.probe(tick + 1, next, tick + 1, next, client(next + 2 * MS));
+            if (!due) continue;
+            var stamp = stamp(new Time(tick, 0), tick, next + 3 * MS);
+            tracked.frame(stamp, buffer::frames);
+            var row = tracked.row(buffer.frames(ENTITY).lastEntry().getValue(), stamp);
+            assertNull(row.unavailable(), "tick " + tick + ": " + row.unavailable());
+        }
+    }
+
     /**
      * A trails H, so a seed is first presented after the next batch and probe arrived. Its sW is
      * its causal receipt under the probe held then; the presenting frame only supplies frame,
