@@ -1125,4 +1125,106 @@ class CombatSceneClockTest {
         assertEquals(3, CombatSceneClock.jitterDelay(17, 2));
         assertEquals(4, CombatSceneClock.jitterDelay(40, 3));
     }
+
+    @Test
+    void sixToThreeDoesNotStartTwoTickShrinkTimer() {
+        var c = new CombatSceneClock();
+        int n = 0;
+        boolean reachedSix = false;
+        boolean reachedThree = false;
+        double lowJitterAt = Double.NaN;
+        double shrunkAt = Double.NaN;
+        double lastBurstAt = Double.NEGATIVE_INFINITY;
+        for (double now = 0; now < 20000; now += 10) {
+            if (!reachedSix) {
+                if (now < 1500) {
+                    while (n * 50 <= now) c.arrival(batch(1000 + n++), now);
+                } else if (now < 3000) {
+                    while (n * 50 + (n % 2 == 0 ? 40 : 0) <= now) {
+                        c.arrival(batch(1000 + n), now);
+                        n++;
+                    }
+                    lastBurstAt = now;
+                } else if (now - lastBurstAt >= 450) {
+                    while (n * 50 <= now) c.arrival(batch(1000 + n++), now);
+                    lastBurstAt = now;
+                }
+            } else if (!reachedThree) {
+                while (n * 50 + (n % 2 == 0 ? 40 : 0) <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            } else {
+                while (n * 50 + 20 <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            }
+            if (!c.frame(now)) continue;
+            if (!reachedSix && c.delay() == 6) {
+                reachedSix = true;
+            } else if (reachedSix && !reachedThree) {
+                assertTrue(
+                        c.jitter() >= CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                        "jitter stays in desired=3 band during 6->3 drain: " + c.jitter());
+                if (c.delay() == 3) reachedThree = true;
+            } else if (reachedThree) {
+                if (Double.isNaN(lowJitterAt)
+                        && c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS) {
+                    lowJitterAt = now;
+                }
+                if (!Double.isNaN(lowJitterAt) && c.delay() == 2 && Double.isNaN(shrunkAt)) {
+                    shrunkAt = now;
+                }
+            }
+        }
+        assertTrue(reachedSix, "delay reached 6");
+        assertTrue(reachedThree, "delay drained 6 -> 3");
+        assertFalse(Double.isNaN(lowJitterAt), "jitter dropped below 10 ms");
+        assertFalse(Double.isNaN(shrunkAt), "delay eventually shrunk to 2");
+        assertTrue(
+                shrunkAt - lowJitterAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "3->2 waited >= 3 s after desired became 2, waited " + (shrunkAt - lowJitterAt));
+    }
+
+    @Test
+    void interruptingDesiredTwoResetsShrinkHold() {
+        var c = new CombatSceneClock();
+        int n = 0;
+        boolean bumped = false;
+        double resumedLowJitterAt = Double.NaN;
+        double shrunkAt = Double.NaN;
+        for (double now = 0; now < 10000; now += 10) {
+            if (now >= 3000 && now < 3400) {
+                while (n * 50 + (n % 2 == 1 ? 80 : 0) <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            } else {
+                double offset = now >= 3400 ? 55 : 0;
+                while (n * 50 + offset <= now) {
+                    c.arrival(batch(1000 + n), now);
+                    n++;
+                }
+            }
+            if (!c.frame(now)) continue;
+            if (now >= 3000 && c.jitter() >= CombatSceneClock.STABLE_JITTER_ENTER_MS) bumped = true;
+            if (bumped
+                    && now >= 3500
+                    && Double.isNaN(resumedLowJitterAt)
+                    && c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS) {
+                resumedLowJitterAt = now;
+            }
+            if (!Double.isNaN(resumedLowJitterAt) && c.delay() == 2 && Double.isNaN(shrunkAt)) {
+                shrunkAt = now;
+            }
+            if (now < 3500) assertEquals(3, c.delay(), "stays at 3 before bump at " + now);
+        }
+        assertTrue(bumped, "brief spike raised jitter above 10 ms");
+        assertFalse(Double.isNaN(resumedLowJitterAt), "jitter recovered below 10 ms");
+        assertFalse(Double.isNaN(shrunkAt), "delay eventually shrunk to 2");
+        assertTrue(
+                shrunkAt - resumedLowJitterAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "timer reset on desired != 2, waited " + (shrunkAt - resumedLowJitterAt));
+    }
 }

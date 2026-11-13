@@ -214,7 +214,7 @@ public final class CombatSceneClock {
             if (burstSeen)
                 desired = Math.max(desired, Math.clamp((int) Math.ceil(occPeak) - 1, min, max));
             desired = Math.clamp(desired, min, max);
-            if (desired >= delay) shrinkSinceMs = Double.NaN;
+            if (desired != 2) shrinkSinceMs = Double.NaN;
             else if (Double.isNaN(shrinkSinceMs)) shrinkSinceMs = nowMs;
             // The servo then retargets R within ±dilation, so a step never snaps the drawn pose.
             if (desired != delay
