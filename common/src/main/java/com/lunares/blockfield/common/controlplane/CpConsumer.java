@@ -487,9 +487,10 @@ public final class CpConsumer {
     private List<CpAck> terminal(
             CpEnvelope frame, CpAck.State state, CpAck.Result result, String why, String output) {
         OffsetDateTime now = OffsetDateTime.now(clock);
+        String kept = capped(output);
         store.recordTerminal(
-                frame.epoch.toString(), frame.operationId, frame.sequence, state, result);
-        CpAck last = CpAck.forEnvelope(frame, state, result, now, capped(output));
+                frame.epoch.toString(), frame.operationId, frame.sequence, state, result, kept);
+        CpAck last = CpAck.forEnvelope(frame, state, result, now, kept);
         if (state == CpAck.State.UNKNOWN) {
             return List.of(last);
         }
@@ -498,13 +499,15 @@ public final class CpConsumer {
 
     private List<CpAck> effectiveChain(CpEnvelope frame, String output) {
         OffsetDateTime now = OffsetDateTime.now(clock);
+        String kept = capped(output);
         store.recordTerminal(
                 frame.epoch.toString(),
                 frame.operationId,
                 frame.sequence,
                 CpAck.State.EFFECTIVE,
-                CpAck.Result.OK);
-        return effectiveChain(frame, now, capped(output));
+                CpAck.Result.OK,
+                kept);
+        return effectiveChain(frame, now, kept);
     }
 
     private static List<CpAck> effectiveChain(CpEnvelope frame, OffsetDateTime now) {
@@ -544,13 +547,14 @@ public final class CpConsumer {
     private List<CpAck> repost(CpEnvelope frame, CpStore.Terminal prior) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         return switch (prior.state()) {
-            case EFFECTIVE -> effectiveChain(frame, now);
+            case EFFECTIVE -> effectiveChain(frame, now, prior.output());
             case UNKNOWN ->
                     List.of(CpAck.forEnvelope(frame, CpAck.State.UNKNOWN, prior.result(), now));
             default ->
                     List.of(
                             CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
-                            CpAck.forEnvelope(frame, prior.state(), prior.result(), now));
+                            CpAck.forEnvelope(
+                                    frame, prior.state(), prior.result(), now, prior.output()));
         };
     }
 

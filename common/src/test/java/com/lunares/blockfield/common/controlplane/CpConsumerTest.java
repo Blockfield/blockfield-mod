@@ -678,6 +678,41 @@ class CpConsumerTest {
                 last(withActions.onFrame(consoleFrame("op-o2", "list", true))).output);
     }
 
+    @Test
+    void repostAfterCrashCarriesTheSavedOutputUntilTheCursorPasses() {
+        RecordingActions actions = new RecordingActions();
+        actions.output = "There are 3 of a max of 40 players online: a, b, c";
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String frame = consoleFrame("op-p1", "list", true);
+
+        withActions.onFrame(frame);
+        // Acks lost before the cursor moved: the replay reposts, never re-runs.
+        CpAck reposted = last(withActions.onFrame(frame));
+
+        assertEquals(CpAck.State.EFFECTIVE, reposted.state);
+        assertEquals(actions.output, reposted.output);
+        assertEquals(1, actions.calls.size());
+        store.saveCursorIfForward(EPOCH, 42);
+        assertNull(store.lastTerminal(EPOCH, "op-p1").output(), "acknowledged output is dropped");
+        assertEquals(CpAck.State.EFFECTIVE, store.lastTerminal(EPOCH, "op-p1").state());
+    }
+
+    @Test
+    void rejectedConsoleRepostKeepsItsReason() {
+        RecordingActions actions = new RecordingActions();
+        actions.next = CpApplier.Outcome.rejected(CpAck.Result.APPLY_FAILED, "not allowlisted");
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String frame = consoleFrame("op-p2", "op Steve", true);
+
+        withActions.onFrame(frame);
+        CpAck reposted = last(withActions.onFrame(frame));
+
+        assertEquals(CpAck.State.REJECTED, reposted.state);
+        assertEquals("not allowlisted", reposted.output);
+    }
+
     private static CpAck last(List<CpAck> acks) {
         return acks.get(acks.size() - 1);
     }
