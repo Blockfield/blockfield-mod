@@ -40,7 +40,8 @@ public final class CpConsumer {
                     "moderation.stop-room",
                     "moderation.maintenance",
                     "moderation.announce",
-                    "console.run");
+                    "console.run",
+                    "console.suggest");
 
     /**
      * Kinds whose terminal ack carries text (command output or the rejection reason). Only these: a
@@ -48,7 +49,7 @@ public final class CpConsumer {
      * field it would refuse.
      */
     private static final Set<String> OUTPUT_KINDS =
-            Set.of("moderation.list", "moderation.maintenance", "console.run");
+            Set.of("moderation.list", "moderation.maintenance", "console.run", "console.suggest");
 
     /** Output cap per ack in characters: the control plane's Ack.output limit. */
     static final int MAX_OUTPUT_CHARS = 16_384;
@@ -333,10 +334,13 @@ public final class CpConsumer {
                     frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
         }
         boolean console = "console.run".equals(kind);
+        boolean suggest = "console.suggest".equals(kind);
         ActionArgs args =
-                console
-                        ? consoleArgs(frame.envelopePayload)
-                        : actionArgs(kind, frame.envelopePayload);
+                suggest
+                        ? suggestArgs(frame.envelopePayload)
+                        : console
+                                ? consoleArgs(frame.envelopePayload)
+                                : actionArgs(kind, frame.envelopePayload);
         if (args == null) {
             return terminal(
                     frame, CpAck.State.REJECTED, CpAck.Result.INVALID_SCHEMA, "not a known action");
@@ -357,9 +361,12 @@ public final class CpConsumer {
         CpApplier.Outcome outcome;
         try {
             outcome =
-                    console
-                            ? actions.handleConsole(target, args.reason(), args.readOnly())
-                            : actions.handleAction(kind, target, args.playerId(), args.reason());
+                    suggest
+                            ? actions.handleSuggest(target, args.reason())
+                            : console
+                                    ? actions.handleConsole(target, args.reason(), args.readOnly())
+                                    : actions.handleAction(
+                                            kind, target, args.playerId(), args.reason());
         } catch (RuntimeException e) {
             store.markActionOperatorNeeded(frame.operationId);
             return terminal(
@@ -375,6 +382,12 @@ public final class CpConsumer {
                             : outcome.result();
             String why = String.join("; ", outcome.errors());
             return terminal(frame, CpAck.State.REJECTED, result, why, withOutput ? why : null);
+        }
+        if (suggest && !fitsCap(outcome.output())) {
+            // A long suggestion list would truncate mid-document into invalid JSON: refuse
+            // outright so the ack never carries a broken suggest answer.
+            String why = "suggest output exceeds the ack output cap, refused";
+            return terminal(frame, CpAck.State.REJECTED, CpAck.Result.APPLY_FAILED, why, why);
         }
         return effectiveChain(frame, withOutput ? outcome.output() : null);
     }
@@ -404,6 +417,18 @@ public final class CpConsumer {
             return null;
         }
         return new ActionArgs("", command, payload.get("readOnly").getAsBoolean());
+    }
+
+    /**
+     * {@code console.suggest}: the partial line as typed (at most 1000 chars, no control
+     * characters). Empty input completes the command itself. Null when malformed.
+     */
+    private static ActionArgs suggestArgs(JsonObject payload) {
+        String input = stringField(payload, "input");
+        if (input.length() > MAX_COMMAND || input.chars().anyMatch(Character::isISOControl)) {
+            return null;
+        }
+        return new ActionArgs("", input);
     }
 
     private static ActionArgs actionArgs(String kind, JsonObject payload) {
@@ -526,13 +551,7 @@ public final class CpConsumer {
 
     private static String capped(String output) {
         if (output == null) return null;
-        // Other control characters would become \\uXXXX escapes; the UTF-8 round trip turns a
-        // lone surrogate (which the control plane refuses) into '?'.
-        String text =
-                new String(
-                        output.replaceAll("[\\p{Cntrl}&&[^\\n\\t]]", " ")
-                                .getBytes(StandardCharsets.UTF_8),
-                        StandardCharsets.UTF_8);
+        String text = sanitize(output);
         int end = 0;
         int bytes = 0;
         // Cut on a code point boundary at whichever cap comes first.
@@ -545,6 +564,19 @@ public final class CpConsumer {
             end += chars;
         }
         return text.substring(0, end);
+    }
+
+    private static String sanitize(String output) {
+        // Other control characters would become \\uXXXX escapes; the UTF-8 round trip turns a
+        // lone surrogate (which the control plane refuses) into '?'.
+        return new String(
+                output.replaceAll("[\\p{Cntrl}&&[^\\n\\t]]", " ").getBytes(StandardCharsets.UTF_8),
+                StandardCharsets.UTF_8);
+    }
+
+    /** True when a suggest answer survives the ack output cap byte-for-byte. */
+    private static boolean fitsCap(String output) {
+        return output == null || capped(output).equals(sanitize(output));
     }
 
     /** Bytes one code point takes in the ack JSON (Gson escaping, UTF-8). */

@@ -34,4 +34,14 @@ public interface CpActionHandler {
     default CpApplier.Outcome handleConsole(String target, String command, boolean readOnly) {
         return CpApplier.Outcome.rejected(CpAck.Result.INVALID_SCHEMA, "console not supported");
     }
+
+    /**
+     * One completion request ({@code console.suggest}): the partial line as typed (leading slashes
+     * stripped by the control plane, at most 1000 chars, no control characters). The outcome's
+     * output is the suggest JSON ({@code {"from":N,"suggestions":[...]}}). Without an override,
+     * completion answers are not supported.
+     */
+    default CpApplier.Outcome handleSuggest(String target, String input) {
+        return CpApplier.Outcome.rejected(CpAck.Result.INVALID_SCHEMA, "suggest not supported");
+    }
 }
