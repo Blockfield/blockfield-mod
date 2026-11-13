@@ -1227,4 +1227,82 @@ class CombatSceneClockTest {
                 shrunkAt - resumedLowJitterAt >= CombatSceneClock.SHRINK_HOLD_MS,
                 "timer reset on desired != 2, waited " + (shrunkAt - resumedLowJitterAt));
     }
+
+    @Test
+    void midWindowJitterSpikeResetsTwoTickShrinkHold() {
+        var c = new CombatSceneClock();
+        // Pre-warm with alternating 0/16 ms arrival phase (jitter ~8 ms < 10 ms) so the 3 s hold
+        // starts at t = 1000 while delay is 3.
+        for (int n = 0; n <= 50; n++) {
+            double at = n * 50 + (n % 2 == 0 ? 0 : 16);
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+        }
+        assertEquals(3, c.delay());
+        assertTrue(
+                c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                "pre-spike jitter below 10 ms: " + c.jitter());
+
+        // Between the 2500 ms and 3000 ms evaluations, one packet arrives +45 ms late so jitter
+        // exceeds 10 ms, then on-time packets decay jitter back below 10 ms before t = 3000.
+        double spikeAt = 2595;
+        c.arrival(batch(1051), spikeAt);
+        assertTrue(
+                c.jitter() >= CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                "spike pushed jitter above 10 ms: " + c.jitter());
+        c.frame(spikeAt);
+
+        double shrunkAt = Double.NaN;
+        for (int n = 52; n <= 160; n++) {
+            double at = n * 50 + 8;
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+            if (n == 60) {
+                assertTrue(
+                        c.jitter() < CombatSceneClock.STABLE_JITTER_ENTER_MS,
+                        "jitter low again by 3000 ms eval: " + c.jitter());
+            }
+            if (c.delay() == 2 && Double.isNaN(shrunkAt)) shrunkAt = at;
+            if (at < spikeAt + CombatSceneClock.SHRINK_HOLD_MS) {
+                assertEquals(3, c.delay(), "no shrink to 2 ticks before 3 s after spike at " + at);
+            }
+        }
+        assertFalse(Double.isNaN(shrunkAt), "eventually shrunk to 2 ticks");
+        assertTrue(
+                shrunkAt - spikeAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "shrunk " + (shrunkAt - spikeAt) + " ms after spike");
+    }
+
+    @Test
+    void midWindowBacklogSpikeResetsTwoTickShrinkHold() {
+        var c = new CombatSceneClock();
+        for (int n = 0; n <= 50; n++) {
+            double at = n * 50;
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+        }
+        assertEquals(3, c.delay());
+
+        // A 200 ms stall (< holdMs/2 = 250 ms so burstSeen stays false) arrives in one burst at
+        // 2700 ms: backlog triggers on tick 1051 and clears by 1054 before the 3000 ms eval.
+        double stallAt = 2700;
+        for (int n = 51; n <= 54; n++) c.arrival(batch(1000 + n), stallAt);
+        c.frame(stallAt);
+
+        double shrunkAt = Double.NaN;
+        for (int n = 55; n <= 160; n++) {
+            double at = n * 50;
+            c.arrival(batch(1000 + n), at);
+            c.frame(at);
+            if (c.delay() == 2 && Double.isNaN(shrunkAt)) shrunkAt = at;
+            if (at < stallAt + CombatSceneClock.SHRINK_HOLD_MS) {
+                assertEquals(
+                        3, c.delay(), "no shrink to 2 ticks before 3 s after backlog at " + at);
+            }
+        }
+        assertFalse(Double.isNaN(shrunkAt), "eventually shrunk to 2 ticks");
+        assertTrue(
+                shrunkAt - stallAt >= CombatSceneClock.SHRINK_HOLD_MS,
+                "shrunk " + (shrunkAt - stallAt) + " ms after backlog");
+    }
 }

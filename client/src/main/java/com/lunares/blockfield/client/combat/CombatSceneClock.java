@@ -190,6 +190,7 @@ public final class CombatSceneClock {
         // spell marks the window, and the peak occupancy since the last slew sizes the absorption.
         if (!Double.isNaN(time)) occPeak = Math.max(occPeak, high - time);
         if (gap || silence >= holdMs / 2) burstSeen = true;
+        if (backlog || gap) shrinkSinceMs = Double.NaN;
         // Ordered backlog remains valid decode history, but is not a network timing sample.
         if (backlog) return;
         if (batches++ == 0) {
@@ -206,16 +207,11 @@ public final class CombatSceneClock {
         // Unsampled, the last rate holds and R walks away from H without bound.
         servoMissed = batches > 1 && nextServoMs != Double.POSITIVE_INFINITY;
         nextServoMs = smooth + (high + .5) * 50;
+        int desired = desiredDelay();
+        if (desired != 2) shrinkSinceMs = Double.NaN;
+        else if (Double.isNaN(shrinkSinceMs)) shrinkSinceMs = nowMs;
         if (nowMs - lastSlew >= 500
                 && (Math.abs(rate - 1) <= .05000001 || (catchUp && catchUpBurst))) {
-            int desired = batches < 20 ? 3 : jitterDelay(jitter, delay);
-            // A marked window absorbs its peak occupancy into a higher delay; an unmarked one
-            // follows the jitter term, so the delay also slews back down after bursts stop.
-            if (burstSeen)
-                desired = Math.max(desired, Math.clamp((int) Math.ceil(occPeak) - 1, min, max));
-            desired = Math.clamp(desired, min, max);
-            if (desired != 2) shrinkSinceMs = Double.NaN;
-            else if (Double.isNaN(shrinkSinceMs)) shrinkSinceMs = nowMs;
             // The servo then retargets R within ±dilation, so a step never snaps the drawn pose.
             if (desired != delay
                     && (delay > 3 || desired > delay || nowMs - shrinkSinceMs >= SHRINK_HOLD_MS)) {
@@ -226,6 +222,15 @@ public final class CombatSceneClock {
             burstSeen = false;
             occPeak = 0;
         }
+    }
+
+    private int desiredDelay() {
+        int desired = batches < 20 ? 3 : jitterDelay(jitter, delay);
+        // A marked window absorbs its peak occupancy into a higher delay; an unmarked one
+        // follows the jitter term, so the delay also slews back down after bursts stop.
+        if (burstSeen)
+            desired = Math.max(desired, Math.clamp((int) Math.ceil(occPeak) - 1, min, max));
+        return Math.clamp(desired, min, max);
     }
 
     /**
