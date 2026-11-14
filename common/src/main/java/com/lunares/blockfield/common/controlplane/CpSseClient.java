@@ -11,6 +11,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -369,13 +370,26 @@ public final class CpSseClient {
     }
 
     /**
-     * Post the current ack chain for one frame, then advance the cursor. A 409/stale answer drops
-     * this chain and re-syncs from the snapshot on the next pass: the terminal decision stays
-     * durable, so the replay re-posts it instead of rebuilding chained retries. A terminal
-     * validation rejection (400/404/422, see {@link #postAckJson}) fails the post-ack hook, drops
-     * the stored receipt and advances the cursor without retrying: the server will never accept it,
-     * so replaying would wedge the cursor on a doomed ack. The post-ack hook stays pending across
-     * every other retry and completes when a delivery is accepted.
+     * Post the current ack chain for one frame, then advance the cursor only after the control
+     * plane has recorded a terminal outcome.
+     *
+     * <ul>
+     *   <li>{@code 409}: drops this chain and re-syncs from the snapshot on the next pass: the
+     *       durable terminal decision stays stored, so any replay re-posts it instead of re-running
+     *       non-idempotent actions.
+     *   <li>{@code 400}/{@code 404}/{@code 422} on a post-{@code received} ack (when the server
+     *       already accepted {@code received} and advanced {@code received_cursor}): attempts one
+     *       fallback {@code unknown} ({@code effect_uncertain}, no {@code output}) ack so the row
+     *       does not stay stranded in {@code received}/{@code validated}/{@code applied}. If the
+     *       fallback returns {@code 200}, the consumer records {@code UNKNOWN}, fails the post-ack
+     *       hook with the rejection, and only then saves the local cursor.
+     *   <li>{@code 400}/{@code 404}/{@code 422} on the initial ack (before {@code received}), on an
+     *       {@code unknown} ack, or when the fallback {@code unknown} itself fails: fails the hook
+     *       without advancing the local cursor and triggers a resync ({@link CpResyncException}) so
+     *       the frame is never silently skipped.
+     *   <li>Retryable errors ({@code 408}/{@code 429}/{@code 5xx}/other {@code 4xx}/IO): leave the
+     *       hook pending and retry with backoff from the unchanged local cursor.
+     * </ul>
      */
     private boolean dispatch(String event, String data) throws IOException, InterruptedException {
         if (data.isEmpty()) return false;
@@ -384,17 +398,14 @@ public final class CpSseClient {
         List<CpAck> acks = consumer.onFrame(data);
         CpAck first = acks.get(0);
         CpAck last = acks.get(acks.size() - 1);
+        int sent = 0;
         try {
-            for (CpAck ack : acks) postAck(ack);
+            for (; sent < acks.size(); sent++) {
+                postAck(acks.get(sent));
+            }
             store.saveCursorIfForward(first.epoch.toString(), first.sequence);
         } catch (CpAckRejectedException terminal) {
-            consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
-            reporter.warn(
-                    "control-plane ack permanently rejected, dropping frame: "
-                            + terminal.getMessage(),
-                    terminal);
-            store.saveCursorIfForward(first.epoch.toString(), first.sequence);
-            return true;
+            return handleRejectedAck(first, acks.get(sent), sent > 0, terminal);
         } catch (Throwable failure) {
             consumer.ackFailed(first.epoch, first.sequence, first.operationId, failure);
             throw failure;
@@ -403,19 +414,65 @@ public final class CpSseClient {
         return true;
     }
 
+    private boolean handleRejectedAck(
+            CpAck first, CpAck failed, boolean receivedAccepted, CpAckRejectedException terminal)
+            throws IOException, InterruptedException {
+        if (receivedAccepted && failed.state != CpAck.State.UNKNOWN) {
+            CpAck fallback =
+                    new CpAck(
+                            failed.epoch,
+                            failed.sequence,
+                            failed.generation,
+                            failed.revision,
+                            failed.payloadHash,
+                            CpAck.State.UNKNOWN,
+                            OffsetDateTime.now(clock),
+                            CpAck.Result.EFFECT_UNCERTAIN,
+                            null,
+                            failed.operationId);
+            try {
+                postAck(fallback);
+            } catch (CpAckRejectedException fallbackRejected) {
+                terminal.addSuppressed(fallbackRejected);
+                consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+                throw new CpResyncException(
+                        "control-plane ack rejected ("
+                                + terminal.statusCode()
+                                + ") and fallback unknown rejected ("
+                                + fallbackRejected.statusCode()
+                                + "), resyncing",
+                        terminal);
+            } catch (Throwable failure) {
+                consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+                throw failure;
+            }
+            consumer.ackSettledUnknown(first.epoch, first.sequence, first.operationId, terminal);
+            reporter.warn(
+                    "control-plane ack rejected after received, settled as unknown: "
+                            + terminal.getMessage(),
+                    terminal);
+            store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+            return true;
+        }
+        consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+        throw new CpResyncException(
+                "control-plane ack rejected (" + terminal.statusCode() + "), resyncing", terminal);
+    }
+
     void postAck(CpAck ack) throws IOException, InterruptedException {
         postAckJson(ack.toJson());
     }
 
     /**
-     * Post one ack body. Status policy, consistent with the consumer hook lifecycle (a terminal
-     * rejection fails the hook and is never retried; everything else replays with the hook pending,
-     * and the run loop retries with backoff):
+     * Post one ack body. Status policy, consistent with the consumer hook lifecycle:
      *
      * <ul>
-     *   <li>{@code 409}: stale cursor or generation, drops the chain and re-syncs.
-     *   <li>{@code 400}, {@code 404}, {@code 422}: validation rejection, the row will never accept
-     *       this receipt ({@link CpAckRejectedException}).
+     *   <li>{@code 409}: stale cursor, generation, or transition ({@link CpResyncException}), drops
+     *       the chain and re-syncs.
+     *   <li>{@code 400}, {@code 404}, {@code 422}: validation rejection ({@link
+     *       CpAckRejectedException}). Fails the hook; if {@code received} was already accepted, the
+     *       dispatcher attempts one fallback {@code unknown} ack before saving the cursor,
+     *       otherwise it triggers a resync without advancing the cursor.
      *   <li>{@code 408}, {@code 429}, {@code 5xx}, any other {@code 4xx} (including transient
      *       {@code 401}/{@code 403}), IO and timeouts: retryable, the hook stays pending.
      * </ul>

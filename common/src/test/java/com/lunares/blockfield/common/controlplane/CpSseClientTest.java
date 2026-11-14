@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -1110,16 +1111,25 @@ class CpSseClientTest {
     }
 
     @Test
-    void permanentRejectionDropsFrameWithoutRetryAndFailsHook() throws Exception {
+    void initialAckRejectionTriggersResyncWithoutAdvancingCursorAndFailsHook() throws Exception {
         HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<String> events = new CopyOnWriteArrayList<>();
         AtomicInteger ackPosts = new AtomicInteger();
+        AtomicInteger snapshots = new AtomicInteger();
         AtomicReference<Throwable> hookError = new AtomicReference<>();
         AtomicBoolean clientStop = new AtomicBoolean();
-        CountDownLatch hookDone = new CountDownLatch(1);
+        CountDownLatch resynced = new CountDownLatch(1);
         wsServer.createContext(
                 "/v2/agents/ws-game/snapshot",
-                exchange -> respond(exchange, 200, snapshotFor("ws-game", EPOCH, 41, 41)));
+                exchange -> {
+                    int hit = snapshots.incrementAndGet();
+                    events.add("snapshot:" + hit);
+                    respond(exchange, 200, snapshotFor("ws-game", EPOCH, 41, 41));
+                    if (hit >= 2) {
+                        clientStop.set(true);
+                        resynced.countDown();
+                    }
+                });
         wsServer.createContext(
                 "/v2/agents/ws-game/events",
                 exchange -> {
@@ -1140,7 +1150,7 @@ class CpSseClientTest {
                 "/v2/agents/ws-game/acks",
                 exchange -> {
                     exchange.getRequestBody().readAllBytes();
-                    ackPosts.incrementAndGet();
+                    events.add("ack:" + ackPosts.incrementAndGet());
                     respond(exchange, 422, "{\"error\":\"unknown outbox row\"}");
                 });
         wsServer.setExecutor(Executors.newCachedThreadPool());
@@ -1168,8 +1178,6 @@ class CpSseClientTest {
                                         if (error != null) {
                                             hookError.set(error);
                                             events.add("hook-failed");
-                                            hookDone.countDown();
-                                            clientStop.set(true);
                                         }
                                     });
                             return CpApplier.Outcome.ok();
@@ -1190,13 +1198,134 @@ class CpSseClientTest {
                             store,
                             consumer,
                             new Quiet(),
-                            CLOCK);
+                            CLOCK,
+                            CpSseClient.IDLE_TIMEOUT,
+                            (millis, s) -> !s.get());
+            ExecutorService runner = Executors.newSingleThreadExecutor();
+            try {
+                Future<?> done = runner.submit(() -> client.run(clientStop));
+                assertTrue(resynced.await(20, TimeUnit.SECONDS), "422 must trigger resync");
+                done.get(15, TimeUnit.SECONDS);
+            } finally {
+                runner.shutdownNow();
+            }
+
+            assertInstanceOf(CpAckRejectedException.class, hookError.get());
+            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
+            assertEquals(1, ackPosts.get());
+            assertTrue(snapshots.get() >= 2, "expected fresh snapshot resync: " + snapshots.get());
+            assertEquals(
+                    41,
+                    store.loadCursor().sequence(),
+                    "cursor must not advance when terminal outcome was never recorded");
+            assertEquals(1, events.stream().filter("handler:stop"::equals).count());
+        } finally {
+            wsServer.stop(0);
+        }
+    }
+
+    @Test
+    void finalAckRejectionSettlesUnknownAndAdvancesCursorOnlyAfterAccepted() throws Exception {
+        HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        List<String> events = new CopyOnWriteArrayList<>();
+        List<JsonObject> postedAcks = new CopyOnWriteArrayList<>();
+        AtomicReference<Throwable> hookError = new AtomicReference<>();
+        AtomicBoolean clientStop = new AtomicBoolean();
+        CountDownLatch settled = new CountDownLatch(1);
+        wsServer.createContext(
+                "/v2/agents/ws-game/snapshot",
+                exchange -> respond(exchange, 200, snapshotFor("ws-game", EPOCH, 41, 41)));
+        wsServer.createContext(
+                "/v2/agents/ws-game/events",
+                exchange -> {
+                    if (queryCursor(exchange) < 42) {
+                        respond(
+                                exchange,
+                                200,
+                                "id: "
+                                        + EPOCH
+                                        + ":42\nevent: control\ndata: "
+                                        + workshopStopFrame(EPOCH, 42)
+                                        + "\n\n");
+                    } else {
+                        respond(exchange, 200, "");
+                        clientStop.set(true);
+                        settled.countDown();
+                    }
+                });
+        CpStore store = new CpStore(directory.resolve("cp-ws-final-422-unknown"));
+        wsServer.createContext(
+                "/v2/agents/ws-game/acks",
+                exchange -> {
+                    String raw =
+                            new String(
+                                    exchange.getRequestBody().readAllBytes(),
+                                    StandardCharsets.UTF_8);
+                    JsonObject parsed = JsonParser.parseString(raw).getAsJsonObject();
+                    postedAcks.add(parsed);
+                    String state = parsed.get("state").getAsString();
+                    events.add("ack:" + state + ":cursor=" + store.loadCursor().sequence());
+                    if ("effective".equals(state)) {
+                        respond(exchange, 422, "{\"error\":\"output rejected\"}");
+                        return;
+                    }
+                    respond(exchange, 200, "{}");
+                });
+        wsServer.setExecutor(Executors.newCachedThreadPool());
+        wsServer.start();
+        try {
+            CpActionHandler handler =
+                    new CpActionHandler() {
+                        @Override
+                        public CpApplier.Outcome handleAction(
+                                String kind, String target, String playerId, String reason) {
+                            return CpApplier.Outcome.rejected(
+                                    CpAck.Result.INVALID_SCHEMA, "unexpected");
+                        }
+
+                        @Override
+                        public CpApplier.Outcome handleWorkshopGame(
+                                String target,
+                                String gameOp,
+                                String job,
+                                CompletableFuture<CpAck> acked) {
+                            events.add("handler:" + gameOp);
+                            acked.whenComplete(
+                                    (ack, error) -> {
+                                        if (error != null) {
+                                            hookError.set(error);
+                                            events.add(
+                                                    "hook-failed:cursor="
+                                                            + store.loadCursor().sequence());
+                                        }
+                                    });
+                            return CpApplier.Outcome.ok("stop output");
+                        }
+                    };
+            CpConsumer consumer =
+                    new CpConsumer(
+                            store,
+                            (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                            handler,
+                            CLOCK,
+                            "ws-game");
+            CpSseClient client =
+                    new CpSseClient(
+                            "http://127.0.0.1:" + wsServer.getAddress().getPort(),
+                            "ws-game",
+                            "bearer",
+                            store,
+                            consumer,
+                            new Quiet(),
+                            CLOCK,
+                            CpSseClient.IDLE_TIMEOUT,
+                            (millis, s) -> !s.get());
             ExecutorService runner = Executors.newSingleThreadExecutor();
             try {
                 Future<?> done = runner.submit(() -> client.run(clientStop));
                 assertTrue(
-                        hookDone.await(20, TimeUnit.SECONDS),
-                        "permanently rejected hook never failed");
+                        settled.await(20, TimeUnit.SECONDS),
+                        "expected stream resume after unknown settlement");
                 done.get(15, TimeUnit.SECONDS);
             } finally {
                 runner.shutdownNow();
@@ -1205,11 +1334,152 @@ class CpSseClientTest {
             assertInstanceOf(CpAckRejectedException.class, hookError.get());
             assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
             assertEquals(
-                    1,
-                    ackPosts.get(),
-                    "permanent rejection must not retry the stored receipt: " + ackPosts.get());
-            assertEquals(42, store.loadCursor().sequence(), "dropped frame wedged the cursor");
-            assertEquals(1, events.stream().filter("handler:stop"::equals).count());
+                    List.of("received", "validated", "applied", "effective", "unknown"),
+                    postedAcks.stream().map(o -> o.get("state").getAsString()).toList());
+            JsonObject unknownBody = postedAcks.get(4);
+            assertEquals("effect_uncertain", unknownBody.get("result").getAsString());
+            assertFalse(unknownBody.has("output"));
+            assertTrue(consumer.needsOperator());
+            CpStore.Terminal terminal =
+                    store.lastTerminal(EPOCH, "123e4567-e89b-12d3-a456-426614170042");
+            assertNotNull(terminal);
+            assertEquals(CpAck.State.UNKNOWN, terminal.state());
+            assertEquals(CpAck.Result.EFFECT_UNCERTAIN, terminal.result());
+            assertEquals(42, store.loadCursor().sequence());
+            assertEquals(
+                    List.of(
+                            "handler:stop",
+                            "ack:received:cursor=41",
+                            "ack:validated:cursor=41",
+                            "ack:applied:cursor=41",
+                            "ack:effective:cursor=41",
+                            "ack:unknown:cursor=41",
+                            "hook-failed:cursor=41"),
+                    events);
+        } finally {
+            wsServer.stop(0);
+        }
+    }
+
+    @Test
+    void finalAckAndFallbackUnknownRejectedDoesNotAdvanceCursorAndResyncs() throws Exception {
+        HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        List<String> postedStates = new CopyOnWriteArrayList<>();
+        AtomicInteger snapshots = new AtomicInteger();
+        AtomicReference<Throwable> hookError = new AtomicReference<>();
+        AtomicBoolean clientStop = new AtomicBoolean();
+        CountDownLatch resynced = new CountDownLatch(1);
+        wsServer.createContext(
+                "/v2/agents/ws-game/snapshot",
+                exchange -> {
+                    int hit = snapshots.incrementAndGet();
+                    respond(exchange, 200, snapshotFor("ws-game", EPOCH, 41, 41));
+                    if (hit >= 2) {
+                        clientStop.set(true);
+                        resynced.countDown();
+                    }
+                });
+        wsServer.createContext(
+                "/v2/agents/ws-game/events",
+                exchange -> {
+                    if (queryCursor(exchange) < 42) {
+                        respond(
+                                exchange,
+                                200,
+                                "id: "
+                                        + EPOCH
+                                        + ":42\nevent: control\ndata: "
+                                        + workshopStopFrame(EPOCH, 42)
+                                        + "\n\n");
+                    } else {
+                        respond(exchange, 200, "");
+                    }
+                });
+        wsServer.createContext(
+                "/v2/agents/ws-game/acks",
+                exchange -> {
+                    String raw =
+                            new String(
+                                    exchange.getRequestBody().readAllBytes(),
+                                    StandardCharsets.UTF_8);
+                    String state =
+                            JsonParser.parseString(raw)
+                                    .getAsJsonObject()
+                                    .get("state")
+                                    .getAsString();
+                    postedStates.add(state);
+                    if ("effective".equals(state) || "unknown".equals(state)) {
+                        respond(exchange, 422, "{\"error\":\"receipt_time\"}");
+                        return;
+                    }
+                    respond(exchange, 200, "{}");
+                });
+        wsServer.setExecutor(Executors.newCachedThreadPool());
+        wsServer.start();
+        try {
+            CpStore store = new CpStore(directory.resolve("cp-ws-final-422-resync"));
+            CpActionHandler handler =
+                    new CpActionHandler() {
+                        @Override
+                        public CpApplier.Outcome handleAction(
+                                String kind, String target, String playerId, String reason) {
+                            return CpApplier.Outcome.rejected(
+                                    CpAck.Result.INVALID_SCHEMA, "unexpected");
+                        }
+
+                        @Override
+                        public CpApplier.Outcome handleWorkshopGame(
+                                String target,
+                                String gameOp,
+                                String job,
+                                CompletableFuture<CpAck> acked) {
+                            acked.whenComplete(
+                                    (ack, error) -> {
+                                        if (error != null) hookError.set(error);
+                                    });
+                            return CpApplier.Outcome.ok("stop output");
+                        }
+                    };
+            CpConsumer consumer =
+                    new CpConsumer(
+                            store,
+                            (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                            handler,
+                            CLOCK,
+                            "ws-game");
+            CpSseClient client =
+                    new CpSseClient(
+                            "http://127.0.0.1:" + wsServer.getAddress().getPort(),
+                            "ws-game",
+                            "bearer",
+                            store,
+                            consumer,
+                            new Quiet(),
+                            CLOCK,
+                            CpSseClient.IDLE_TIMEOUT,
+                            (millis, s) -> !s.get());
+            ExecutorService runner = Executors.newSingleThreadExecutor();
+            try {
+                Future<?> done = runner.submit(() -> client.run(clientStop));
+                assertTrue(
+                        resynced.await(20, TimeUnit.SECONDS),
+                        "fallback 422 must trigger resync without advancing cursor");
+                done.get(15, TimeUnit.SECONDS);
+            } finally {
+                runner.shutdownNow();
+            }
+
+            assertInstanceOf(CpAckRejectedException.class, hookError.get());
+            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
+            assertEquals(1, hookError.get().getSuppressed().length);
+            assertEquals(
+                    List.of("received", "validated", "applied", "effective", "unknown"),
+                    postedStates);
+            assertEquals(
+                    41,
+                    store.loadCursor().sequence(),
+                    "cursor must never advance when fallback unknown is also rejected");
+            assertTrue(snapshots.get() >= 2);
         } finally {
             wsServer.stop(0);
         }

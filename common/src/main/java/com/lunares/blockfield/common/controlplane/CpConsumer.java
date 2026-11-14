@@ -196,39 +196,63 @@ public final class CpConsumer {
 
     /**
      * Track a new post-ack hook, bounded by {@link #MAX_PENDING_ACKS}. A hook for the same frame
-     * replaces the stale one as superseded; a hook for another operation reissued at the same
-     * (epoch, sequence) supersedes the previous occupant, whose ack the server row will never
-     * match; past the cap the oldest hook fails as superseded so entries never leak across
-     * reconnects. Callers hold the consumer lock (intrinsic locks are re-entrant, so handler
-     * callbacks that re-enter the consumer cannot deadlock here).
+     * replaces the stale one as superseded; any hook for another operation at the same or an
+     * earlier sequence in the epoch is superseded because the control plane has already moved past
+     * it; past the cap the oldest hook fails as superseded so entries never leak across reconnects.
+     * Superseded hooks are collected under the consumer lock and failed outside it.
      */
-    private void registerPending(PendingAck next) {
+    private void registerPending(PendingAck next, List<PendingAck> superseded) {
         PendingAck replaced = pendingAcks.put(next.key(), next);
         if (replaced != null) {
-            replaced.future()
-                    .completeExceptionally(new CpResyncException("superseded by frame redelivery"));
+            superseded.add(replaced);
         }
-        Iterator<Map.Entry<PendingKey, PendingAck>> it = pendingAcks.entrySet().iterator();
-        while (it.hasNext()) {
-            PendingAck other = it.next().getValue();
-            if (other != next
-                    && other.epoch().equals(next.epoch())
-                    && other.sequence() == next.sequence()
-                    && !other.operationId().equals(next.operationId())) {
-                it.remove();
-                other.future()
-                        .completeExceptionally(
-                                new CpResyncException("superseded by frame with same sequence"));
-            }
-        }
+        superseded.addAll(
+                removeSupersededLocked(next.epoch(), next.sequence(), next.operationId()));
         while (pendingAcks.size() > MAX_PENDING_ACKS) {
             Iterator<PendingAck> oldest = pendingAcks.values().iterator();
             PendingAck evicted = oldest.next();
             oldest.remove();
-            evicted.future()
-                    .completeExceptionally(
-                            new CpResyncException("superseded: too many pending ack hooks"));
+            superseded.add(evicted);
         }
+    }
+
+    private List<PendingAck> removeSupersededLocked(UUID epoch, long sequence, String operationId) {
+        if (pendingAcks.isEmpty()) {
+            return List.of();
+        }
+        List<PendingAck> superseded = new ArrayList<>();
+        Iterator<Map.Entry<PendingKey, PendingAck>> it = pendingAcks.entrySet().iterator();
+        while (it.hasNext()) {
+            PendingAck entry = it.next().getValue();
+            if (!entry.epoch().equals(epoch)) {
+                continue;
+            }
+            if (entry.sequence() < sequence
+                    || (entry.sequence() == sequence
+                            && !Objects.equals(entry.operationId(), operationId))) {
+                superseded.add(entry);
+                it.remove();
+            }
+        }
+        return superseded;
+    }
+
+    private List<PendingAck> removeSupersededForFrameLocked(
+            CpEnvelope frame, CpStore.Cursor cursor, String epochId) {
+        List<PendingAck> superseded =
+                new ArrayList<>(
+                        removeSupersededLocked(frame.epoch, frame.sequence, frame.operationId));
+        if (epochId.equals(cursor.epoch()) && cursor.sequence() > frame.sequence) {
+            Iterator<Map.Entry<PendingKey, PendingAck>> it = pendingAcks.entrySet().iterator();
+            while (it.hasNext()) {
+                PendingAck entry = it.next().getValue();
+                if (entry.epoch().equals(frame.epoch) && entry.sequence() <= cursor.sequence()) {
+                    superseded.add(entry);
+                    it.remove();
+                }
+            }
+        }
+        return superseded;
     }
 
     private SnapshotReport onSnapshotLocked(String json) {
@@ -281,25 +305,31 @@ public final class CpConsumer {
 
     /**
      * Handle one SSE frame, returning the ack chain to POST in order. The cursor is advanced by the
-     * caller only after every ack is accepted, so an undelivered frame replays from the stored
-     * cursor: settings re-apply idempotently, decided operations re-post their terminal state, and
-     * started-but-unfinished actions report unknown instead of re-running. Gaps and
-     * epoch/generation changes request a re-snapshot.
+     * caller only after a terminal ack ({@code effective}, {@code rejected}, or {@code unknown}) is
+     * accepted, so an undelivered frame replays from the stored cursor: settings re-apply
+     * idempotently, decided operations re-post their terminal state, and started-but-unfinished
+     * actions report unknown instead of re-running. Gaps and epoch/generation changes request a
+     * re-snapshot.
      *
      * <p>A throwing frame leaves earlier post-ack hooks pending: the hook completes when a later
-     * accepted delivery arrives (see {@link #ackAccepted}), and only the snapshot, rejection and
-     * shutdown paths fail hooks that can never be delivered.
+     * accepted delivery arrives (see {@link #ackAccepted}), and only the snapshot, frame/cursor
+     * supersede, permanent rejection, and shutdown paths fail hooks that can never be delivered.
      */
     public List<CpAck> onFrame(String json) {
-        synchronized (lock) {
-            if (closed) {
-                throw new IllegalStateException("control-plane consumer shut down");
+        List<PendingAck> superseded = new ArrayList<>();
+        try {
+            synchronized (lock) {
+                if (closed) {
+                    throw new IllegalStateException("control-plane consumer shut down");
+                }
+                return onFrameLocked(json, superseded);
             }
-            return onFrameLocked(json);
+        } finally {
+            failAll(superseded, new CpResyncException("superseded by control-plane frame"));
         }
     }
 
-    private List<CpAck> onFrameLocked(String json) {
+    private List<CpAck> onFrameLocked(String json, List<PendingAck> superseded) {
         CpEnvelope frame = CpEnvelope.parse(json);
         if (epoch == null || !epoch.equals(frame.epoch.toString())) {
             throw new CpResyncException("frame epoch is not the snapshotted one");
@@ -319,11 +349,13 @@ public final class CpConsumer {
         CpStore.Terminal prior = store.lastTerminal(epochId, frame.operationId);
         if (frame.sequence <= cursor.sequence()) {
             if (prior == null) throw new CpResyncException("cursor moved past an undecided frame");
+            superseded.addAll(removeSupersededForFrameLocked(frame, cursor, epochId));
             return repost(frame, prior);
         }
         if (frame.sequence > cursor.sequence() + 1) {
             throw new CpResyncException("frame gap, server replays from the cursor");
         }
+        superseded.addAll(removeSupersededForFrameLocked(frame, cursor, epochId));
         if (prior != null) return repost(frame, prior);
         if (!frame.executable) {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, note(frame));
@@ -335,7 +367,7 @@ public final class CpConsumer {
             // Typed moderation/drain actions are fenced until a CpActionHandler is wired with the
             // command-credential split; this consumer applies settings only.
             // (S4b dispatches action frames here, before settings apply.)
-            return onAction(frame);
+            return onAction(frame, superseded);
         }
         // The bare settings value is extracted once here; the applier never sees the wrapper.
         String namespace = namespaceOf(frame);
@@ -374,31 +406,72 @@ public final class CpConsumer {
      * Notify the consumer that the control plane accepted the final ack for a frame (and the cursor
      * was saved), completing any handler post-ack hook. Matching is by the full frame identity
      * (epoch, sequence, operationId): an ack for another operation reissued at the same sequence
-     * never completes this frame's hook. Unknown frames are ignored, so a replayed receipt never
-     * completes a hook twice. Safe to call from any thread; completions run outside the consumer
-     * lock.
+     * never completes this frame's hook, and instead fails it as superseded along with any pending
+     * hooks behind the accepted sequence in the same epoch. Unknown frames are ignored, so a
+     * replayed receipt never completes a hook twice. Safe to call from any thread; completions run
+     * outside the consumer lock.
      */
     public void ackAccepted(CpAck finalAck) {
         Objects.requireNonNull(finalAck, "finalAck");
         PendingAck matched;
+        List<PendingAck> superseded;
         synchronized (lock) {
             matched =
                     pendingAcks.remove(
                             new PendingKey(
                                     finalAck.epoch, finalAck.sequence, finalAck.operationId));
+            superseded =
+                    removeSupersededLocked(finalAck.epoch, finalAck.sequence, finalAck.operationId);
         }
         if (matched != null) {
             matched.future().complete(finalAck);
         }
+        failAll(
+                superseded,
+                new CpResyncException(
+                        "superseded by accepted ack at sequence " + finalAck.sequence));
+    }
+
+    /**
+     * Record a frame as {@link CpAck.State#UNKNOWN} after the control plane accepted a fallback
+     * {@code unknown} ack following a permanent rejection (400/404/422) on a post-{@code received}
+     * state, fail the handler's post-ack hook with the rejection that prevented normal completion,
+     * and supersede any pending hooks at or behind {@code sequence} in the same epoch.
+     */
+    void ackSettledUnknown(
+            UUID epoch, long sequence, String operationId, CpAckRejectedException error) {
+        Objects.requireNonNull(epoch, "epoch");
+        Objects.requireNonNull(error, "error");
+        PendingAck matched;
+        List<PendingAck> superseded;
+        synchronized (lock) {
+            if (operationId != null) {
+                store.recordTerminal(
+                        epoch.toString(),
+                        operationId,
+                        sequence,
+                        CpAck.State.UNKNOWN,
+                        CpAck.Result.EFFECT_UNCERTAIN,
+                        null);
+            }
+            matched = pendingAcks.remove(new PendingKey(epoch, sequence, operationId));
+            superseded = removeSupersededLocked(epoch, sequence, operationId);
+        }
+        if (matched != null) {
+            matched.future().completeExceptionally(error);
+        }
+        failAll(
+                superseded,
+                new CpResyncException("superseded by settled ack at sequence " + sequence));
     }
 
     /**
      * Notify the consumer that posting acks for {@code epoch}/{@code sequence}/{@code operationId}
-     * failed or timed out. Only a permanent control-plane rejection ({@link
-     * CpAckRejectedException}) fails the handler hook: the terminal receipt is durable, so a
-     * retryable failure (HTTP 5xx, timeout, IO, retryable 4xx, 409 resync) leaves the hook pending
-     * and a later accepted delivery of the replayed receipt completes it. Unknown frames are
-     * ignored.
+     * failed or timed out without settling the row on the control plane. Only a permanent
+     * control-plane rejection ({@link CpAckRejectedException}) fails the handler hook: the terminal
+     * receipt is durable, so a retryable failure (HTTP 5xx, timeout, IO, retryable 4xx, 409 resync)
+     * leaves the hook pending and a later accepted delivery of the replayed receipt completes it.
+     * Unknown frames are ignored.
      */
     public void ackFailed(UUID epoch, long sequence, String operationId, Throwable error) {
         Objects.requireNonNull(epoch, "epoch");
@@ -518,7 +591,7 @@ public final class CpConsumer {
         return new NamespaceApply(CpAck.State.REJECTED, result, outcome.errors());
     }
 
-    private List<CpAck> onAction(CpEnvelope frame) {
+    private List<CpAck> onAction(CpEnvelope frame, List<PendingAck> superseded) {
         if (actions == null) {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "actions fenced");
         }
@@ -559,7 +632,8 @@ public final class CpConsumer {
         CompletableFuture<CpAck> ackFuture = new CompletableFuture<>();
         registerPending(
                 new PendingAck(
-                        frame.epoch, frame.sequence, frame.operationId.toString(), ackFuture));
+                        frame.epoch, frame.sequence, frame.operationId.toString(), ackFuture),
+                superseded);
         CpApplier.Outcome outcome;
         try {
             outcome =

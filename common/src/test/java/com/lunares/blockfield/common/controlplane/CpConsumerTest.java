@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -1240,7 +1241,7 @@ class CpConsumerTest {
     }
 
     @Test
-    void foreignOperationAckNeverCompletesPendingHook() throws Exception {
+    void foreignOperationFrameAndAckSupersedePendingHookOnce() {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1248,19 +1249,94 @@ class CpConsumerTest {
         List<CpAck> stopAcks =
                 withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
         CompletableFuture<CpAck> stopHook = actions.lastAckHook;
+        AtomicInteger completions = new AtomicInteger();
+        stopHook.whenComplete((ack, err) -> completions.incrementAndGet());
 
-        // Another operation decided at the same sequence without a hook (non-executable): its
-        // ack must not complete the stop hook.
+        // Another operation occupying the same sequence without a hook (non-executable)
+        // supersedes the pending hook immediately rather than leaving it hanging until close().
         List<CpAck> foreignAcks = withActions.onFrame(nonExecutableFrame(42, "superseded"));
-        withActions.ackAccepted(last(foreignAcks));
-        assertFalse(stopHook.isDone());
+        ExecutionException thrown = assertThrows(ExecutionException.class, stopHook::get);
+        assertInstanceOf(CpResyncException.class, thrown.getCause());
+        assertEquals(1, completions.get());
 
-        // The stop redelivery re-posts its own receipt, and only its own ack completes the hook.
-        List<CpAck> replayed =
+        // Subsequent acceptance of either ack is a no-op and never completes twice.
+        withActions.ackAccepted(last(foreignAcks));
+        withActions.ackAccepted(last(stopAcks));
+        assertEquals(1, completions.get());
+    }
+
+    @Test
+    void foreignOperationAckAcceptedDirectlySupersedesPendingHookOnce() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> stopAcks =
                 withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
-        assertEquals(1, actions.calls.size());
-        withActions.ackAccepted(last(replayed));
-        assertSame(last(replayed), stopHook.get());
+        CompletableFuture<CpAck> stopHook = actions.lastAckHook;
+        AtomicInteger completions = new AtomicInteger();
+        stopHook.whenComplete((ack, err) -> completions.incrementAndGet());
+
+        CpAck foreignAck =
+                new CpAck(
+                        UUID.fromString(EPOCH),
+                        42,
+                        GENERATION,
+                        null,
+                        "a".repeat(64),
+                        CpAck.State.REJECTED,
+                        OffsetDateTime.now(CLOCK),
+                        CpAck.Result.OK,
+                        null,
+                        "op-foreign");
+        withActions.ackAccepted(foreignAck);
+        ExecutionException thrown = assertThrows(ExecutionException.class, stopHook::get);
+        assertInstanceOf(CpResyncException.class, thrown.getCause());
+        assertEquals(1, completions.get());
+
+        withActions.ackAccepted(last(stopAcks));
+        assertEquals(1, completions.get());
+    }
+
+    @Test
+    void cursorAdvancingPastPendingHookFailsItOnce() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
+        CompletableFuture<CpAck> firstHook = actions.lastAckHook;
+        AtomicInteger firstCompletions = new AtomicInteger();
+        firstHook.whenComplete((ack, err) -> firstCompletions.incrementAndGet());
+
+        CpAck higherSeqAck =
+                new CpAck(
+                        UUID.fromString(EPOCH),
+                        43,
+                        GENERATION,
+                        null,
+                        "a".repeat(64),
+                        CpAck.State.EFFECTIVE,
+                        OffsetDateTime.now(CLOCK),
+                        CpAck.Result.OK,
+                        null,
+                        "op-next");
+        withActions.ackAccepted(higherSeqAck);
+        ExecutionException thrown = assertThrows(ExecutionException.class, firstHook::get);
+        assertInstanceOf(CpResyncException.class, thrown.getCause());
+        assertEquals(1, firstCompletions.get());
+
+        // Cursor advancing via store before the next frame also supersedes any stale pending hook.
+        withActions.onFrame(workshopGameFrame("op-wg-two", "workshop", "save-off", null));
+        CompletableFuture<CpAck> secondHook = actions.lastAckHook;
+        AtomicInteger secondCompletions = new AtomicInteger();
+        secondHook.whenComplete((ack, err) -> secondCompletions.incrementAndGet());
+
+        store.saveCursorIfForward(EPOCH, 42);
+        withActions.onFrame(nonExecutableFrame(43, "later"));
+        ExecutionException secondThrown = assertThrows(ExecutionException.class, secondHook::get);
+        assertInstanceOf(CpResyncException.class, secondThrown.getCause());
+        assertEquals(1, secondCompletions.get());
     }
 
     @Test

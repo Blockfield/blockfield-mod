@@ -5,4 +5,8 @@ public final class CpResyncException extends RuntimeException {
     public CpResyncException(String message) {
         super(message);
     }
+
+    public CpResyncException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }
