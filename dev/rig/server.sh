@@ -48,7 +48,18 @@ P
         ;;
     mod)
         python3 "$RIG/process_guard.py" idle server
-        jar="${2:-$(/bin/ls -t "$ROOT"/blockfield-server/mod-server/server/build/libs/blockfield-server-*.jar 2>/dev/null | grep -v sources | head -1)}"
+        libs="$ROOT/blockfield-server/mod-server/server/build/libs"
+        pinned="$(python3 -c 'import json,sys;print("\n".join(json.load(open(sys.argv[1])).get("files", {})))' "$ROOT/blockfield-server/distribution/gameplay.lock.json" 2>/dev/null | grep '^blockfield-server-.*\.jar$' | head -1)"
+        if [ -n "${2:-}" ]; then
+            jar="$2"
+        elif [ -n "$pinned" ] && [ -f "$libs/$pinned" ]; then
+            jar="$libs/$pinned"
+        else
+            if [ -n "$pinned" ]; then
+                echo "lock pins $pinned, no such build; using newest local jar" >&2
+            fi
+            jar="$(/bin/ls -t "$libs"/blockfield-server-*.jar 2>/dev/null | grep -v sources | head -1)"
+        fi
         [ -n "$jar" ] || {
             echo "no server jar: pass the jar path (built in blockfield-server/mod-server)"
             exit 1
