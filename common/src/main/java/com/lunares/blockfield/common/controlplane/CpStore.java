@@ -1,5 +1,6 @@
 package com.lunares.blockfield.common.controlplane;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -14,7 +15,12 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Locale;
+import java.util.UUID;
 
 /**
  * Durable consumer state in ONE small file ({@code state.json}): epoch, generation, cursor,
@@ -81,6 +87,71 @@ public final class CpStore {
         }
         state.addProperty("epoch", epoch);
         state.addProperty("cursor", sequence);
+        save(state);
+    }
+
+    public record PendingAcks(List<CpAck> acks, int sent) {}
+
+    /** Persist the exact wire bodies so a lost response can be retried idempotently. */
+    public synchronized void savePendingAcks(List<CpAck> acks, int sent) {
+        JsonObject state = load();
+        JsonObject pending = new JsonObject();
+        JsonArray entries = new JsonArray();
+        for (CpAck ack : acks) {
+            JsonObject entry = JsonParser.parseString(ack.toJson()).getAsJsonObject();
+            entry.addProperty("operationId", ack.operationId);
+            entries.add(entry);
+        }
+        pending.add("acks", entries);
+        pending.addProperty("sent", sent);
+        state.add("pendingAcks", pending);
+        if (acks.size() == 1 && acks.get(0).state == CpAck.State.UNKNOWN) {
+            CpAck ack = acks.get(0);
+            if (ack.operationId != null) {
+                String key = terminalKey(ack.epoch.toString(), ack.operationId);
+                terminal(state)
+                        .add(
+                                key,
+                                terminalEntry(
+                                        ack.operationId, ack.sequence, ack.state, ack.result));
+                if (started(state).has(key))
+                    operator(state).addProperty("action/" + ack.operationId, true);
+            }
+        }
+        save(state);
+    }
+
+    public synchronized PendingAcks loadPendingAcks() {
+        JsonObject pending = objectField(load(), "pendingAcks");
+        if (pending == null) return null;
+        List<CpAck> acks = new ArrayList<>();
+        for (JsonElement item : pending.getAsJsonArray("acks")) {
+            JsonObject a = item.getAsJsonObject();
+            acks.add(
+                    new CpAck(
+                            UUID.fromString(a.get("epoch").getAsString()),
+                            a.get("sequence").getAsLong(),
+                            a.get("generation").getAsString(),
+                            a.get("revision").isJsonNull() ? null : a.get("revision").getAsLong(),
+                            a.get("payloadHash").isJsonNull()
+                                    ? null
+                                    : a.get("payloadHash").getAsString(),
+                            CpAck.State.valueOf(
+                                    a.get("state").getAsString().toUpperCase(Locale.ROOT)),
+                            OffsetDateTime.parse(a.get("actualAt").getAsString()),
+                            CpAck.Result.valueOf(
+                                    a.get("result").getAsString().toUpperCase(Locale.ROOT)),
+                            a.has("output") ? a.get("output").getAsString() : null,
+                            a.has("operationId") && !a.get("operationId").isJsonNull()
+                                    ? a.get("operationId").getAsString()
+                                    : null));
+        }
+        return new PendingAcks(List.copyOf(acks), pending.get("sent").getAsInt());
+    }
+
+    public synchronized void clearPendingAcks() {
+        JsonObject state = load();
+        state.remove("pendingAcks");
         save(state);
     }
 

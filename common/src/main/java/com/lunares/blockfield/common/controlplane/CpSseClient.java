@@ -196,6 +196,10 @@ public final class CpSseClient {
         boolean needsSnapshot = true;
         while (!stop.get()) {
             try {
+                if (store.loadPendingAcks() != null) {
+                    deliverPending();
+                    backoff = BACKOFF_MIN_MILLIS;
+                }
                 if (needsSnapshot) {
                     resnapshot();
                     needsSnapshot = false;
@@ -369,57 +373,49 @@ public final class CpSseClient {
         return new StreamOutcome(frames, active);
     }
 
-    /**
-     * Post the current ack chain for one frame, then advance the cursor only after the control
-     * plane has recorded a terminal outcome.
-     *
-     * <ul>
-     *   <li>{@code 409}: drops this chain and re-syncs from the snapshot on the next pass: the
-     *       durable terminal decision stays stored (and CP never advances its cursor past a
-     *       non-terminal operation), so any replay re-posts the settled outcome without re-running
-     *       non-idempotent actions.
-     *   <li>{@code 400}/{@code 404}/{@code 422} after {@code received} was accepted: demotes the
-     *       durable record to {@code UNKNOWN} ({@code effect_uncertain}) with the hook still
-     *       pending and posts one fallback {@code unknown} ack. If accepted ({@code 200}), saves
-     *       the local cursor and fails the hook via {@link CpConsumer#ackAccepted}; if fallback
-     *       transiently fails (e.g. {@code 5xx}/IO/{@code 401}/{@code 403}/{@code 408}/{@code
-     *       429}/{@code 409}), keeps the hook pending and retries {@code unknown}; if fallback
-     *       itself is rejected with {@code 400}/{@code 404}/{@code 422}, fails the hook and
-     *       triggers resync.
-     *   <li>{@code 400}/{@code 404}/{@code 422} on the initial ack (before {@code received}) or on
-     *       an {@code unknown} ack: demotes any stored {@code effective} record to {@code unknown},
-     *       fails the hook without advancing the local cursor, and triggers resync ({@link
-     *       CpResyncException}) so redelivery never posts {@code effective} without a hook.
-     *   <li>Retryable errors ({@code 408}/{@code 429}/{@code 5xx}/other {@code 4xx}/IO): leave the
-     *       hook pending and retry with backoff from the unchanged local cursor.
-     * </ul>
-     */
+    /** Persist and deliver the chain before accepting another frame. */
     private boolean dispatch(String event, String data) throws IOException, InterruptedException {
         if (data.isEmpty()) return false;
         if ("resync".equals(event)) throw new CpResyncException("server asked to resync");
         if (!"control".equals(event)) return false;
-        List<CpAck> acks = consumer.onFrame(data);
+        CpEnvelope frame = CpEnvelope.parse(data);
+        CpStore.Cursor cursor = store.loadCursor();
+        CpStore.Terminal prior = store.lastTerminal(frame.epoch.toString(), frame.operationId);
+        if (cursor.epoch().equals(frame.epoch.toString())
+                && frame.sequence <= cursor.sequence()
+                && prior != null
+                && prior.sequence() == frame.sequence) return false;
+        if (store.loadPendingAcks() == null) {
+            store.savePendingAcks(consumer.onFrame(data), 0);
+        }
+        deliverPending();
+        return true;
+    }
+
+    private void deliverPending() throws IOException, InterruptedException {
+        CpStore.PendingAcks pending = store.loadPendingAcks();
+        if (pending == null) return;
+        List<CpAck> acks = pending.acks();
         CpAck first = acks.get(0);
-        CpAck last = acks.get(acks.size() - 1);
-        CpAck finalAck = last;
-        int sent = 0;
+        CpAck finalAck = acks.get(acks.size() - 1);
+        int sent = pending.sent();
         try {
             for (; sent < acks.size(); sent++) {
                 postAck(acks.get(sent));
+                store.savePendingAcks(acks, sent + 1);
             }
         } catch (CpAckRejectedException terminal) {
             finalAck = handleRejectedAck(first, acks.get(sent), sent > 0, terminal);
         }
         store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+        store.clearPendingAcks();
         consumer.ackAccepted(finalAck);
-        return true;
     }
 
     private CpAck handleRejectedAck(
             CpAck first, CpAck failed, boolean receivedAccepted, CpAckRejectedException terminal)
             throws IOException, InterruptedException {
         if (receivedAccepted && failed.state != CpAck.State.UNKNOWN) {
-            consumer.markFallbackUnknown(first.epoch, first.sequence, first.operationId, terminal);
             CpAck fallback =
                     new CpAck(
                             failed.epoch,
@@ -432,11 +428,14 @@ public final class CpSseClient {
                             CpAck.Result.EFFECT_UNCERTAIN,
                             null,
                             failed.operationId);
+            store.savePendingAcks(List.of(fallback), 0);
+            consumer.markFallbackUnknown(first.epoch, first.sequence, first.operationId, terminal);
             try {
                 postAck(fallback);
             } catch (CpAckRejectedException fallbackRejected) {
                 terminal.addSuppressed(fallbackRejected);
                 consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+                store.clearPendingAcks();
                 throw new CpResyncException(
                         "control-plane ack rejected ("
                                 + terminal.statusCode()
@@ -452,6 +451,7 @@ public final class CpSseClient {
             return fallback;
         }
         consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+        store.clearPendingAcks();
         throw new CpResyncException(
                 "control-plane ack rejected (" + terminal.statusCode() + "), resyncing", terminal);
     }
@@ -464,8 +464,8 @@ public final class CpSseClient {
      * Post one ack body. Status policy, consistent with the consumer hook lifecycle:
      *
      * <ul>
-     *   <li>{@code 409}: stale cursor, generation, or transition ({@link CpResyncException}), drops
-     *       the chain and re-syncs.
+     *   <li>{@code 409}: stale cursor, generation, or transition ({@link CpResyncException}); the
+     *       saved chain stays pending for retry.
      *   <li>{@code 400}, {@code 404}, {@code 422}: validation rejection ({@link
      *       CpAckRejectedException}). Demotes any durable {@code effective} record to {@code
      *       unknown}; if {@code received} was already accepted, attempts fallback {@code unknown}

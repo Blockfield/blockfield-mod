@@ -559,6 +559,44 @@ class CpSseClientTest {
     }
 
     @Test
+    void restartResumesPendingChainWithoutRedelivery() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        ackStatus = body -> calls.incrementAndGet() == 2 ? 500 : 200;
+        stopAfterAcks.set(5);
+        CpStore store = new CpStore(directory.resolve("cp-restart"));
+        List<Long> applied = new CopyOnWriteArrayList<>();
+        CpConsumer first = new CpConsumer(store, recordingApplier(applied), CLOCK);
+        first.onSnapshot(snapshot());
+        eventsBody = cursor -> sse(frame()) + sse(frame());
+        CpSseClient firstClient = newClient(store, first);
+        assertThrows(IOException.class, () -> firstClient.stream(new AtomicBoolean()));
+        assertEquals(1, store.loadPendingAcks().sent());
+
+        eventsBody = cursor -> "";
+        CpStore reopened = new CpStore(directory.resolve("cp-restart"));
+        CpConsumer second = new CpConsumer(reopened, recordingApplier(applied), CLOCK);
+        runToStop(newClient(reopened, second));
+
+        assertEquals(List.of(41L, 42L), applied);
+        assertEquals(42, reopened.loadCursor().sequence());
+        assertNull(reopened.loadPendingAcks());
+        eventsBody = cursor -> sse(frame());
+        newClient(reopened, second).stream(new AtomicBoolean());
+        assertEquals(5, ackBodies.size(), "redelivery after retry must not repost or reapply");
+        assertEquals(List.of(41L, 42L), applied);
+        assertEquals(
+                List.of("received", "validated", "validated", "applied", "effective"),
+                ackBodies.stream()
+                        .map(
+                                body ->
+                                        JsonParser.parseString(body)
+                                                .getAsJsonObject()
+                                                .get("state")
+                                                .getAsString())
+                        .toList());
+    }
+
+    @Test
     void stopInterruptsBlockedStream() throws Exception {
         HttpServer holding = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         holding.createContext(
@@ -865,6 +903,7 @@ class CpSseClientTest {
         HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<String> events = new CopyOnWriteArrayList<>();
         AtomicInteger ackCalls = new AtomicInteger();
+        AtomicInteger eventCalls = new AtomicInteger();
         AtomicInteger hookSuccesses = new AtomicInteger();
         AtomicBoolean clientStop = new AtomicBoolean();
         CountDownLatch halted = new CountDownLatch(1);
@@ -874,7 +913,7 @@ class CpSseClientTest {
         wsServer.createContext(
                 "/v2/agents/ws-game/events",
                 exchange -> {
-                    if (queryCursor(exchange) < 42) {
+                    if (eventCalls.incrementAndGet() == 1) {
                         respond(
                                 exchange,
                                 200,
@@ -894,8 +933,8 @@ class CpSseClientTest {
                             new String(
                                     exchange.getRequestBody().readAllBytes(),
                                     StandardCharsets.UTF_8);
-                    if (ackCalls.incrementAndGet() == 1) {
-                        // Transient 500 on the first ack post: the chain drops, the hook waits.
+                    if (ackCalls.incrementAndGet() == 2) {
+                        // The old control plane will not redeliver after received.
                         respond(exchange, 500, "{}");
                         return;
                     }
