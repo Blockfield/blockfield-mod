@@ -180,8 +180,8 @@ public final class CpSseClient {
      * (repeats rate-limited) and retried with backoff, never fatal: the cursor does not advance
      * past it, so it replays until an operator reconciles it. Keep-alive comments refresh liveness:
      * a connection that carried any line resumes without growing the backoff; only a totally silent
-     * close backs off. Returns when stopped, closing the consumer so hooks that never delivered
-     * fail as shut down instead of hanging.
+     * close backs off. Returns when stopped, closing the consumer so pending post-ack hooks settle
+     * immediately.
      */
     public void run(AtomicBoolean stop) {
         try {
@@ -398,26 +398,6 @@ public final class CpSseClient {
         List<CpAck> acks = pending.acks();
         CpAck first = acks.get(0);
         CpAck finalAck = acks.get(acks.size() - 1);
-        if (pending.hadHook()
-                && finalAck.state == CpAck.State.EFFECTIVE
-                && !consumer.hasLiveHook(first)) {
-            CpAck unknown =
-                    new CpAck(
-                            finalAck.epoch,
-                            finalAck.sequence,
-                            finalAck.generation,
-                            finalAck.revision,
-                            finalAck.payloadHash,
-                            CpAck.State.UNKNOWN,
-                            OffsetDateTime.now(clock),
-                            CpAck.Result.EFFECT_UNCERTAIN,
-                            null,
-                            finalAck.operationId);
-            acks = new java.util.ArrayList<>(acks);
-            acks.set(acks.size() - 1, unknown);
-            store.savePendingAcks(acks, pending.sent(), false);
-            finalAck = unknown;
-        }
         int sent = pending.sent();
         try {
             for (; sent < acks.size(); sent++) {
@@ -448,8 +428,8 @@ public final class CpSseClient {
                             CpAck.Result.EFFECT_UNCERTAIN,
                             null,
                             failed.operationId);
-            store.savePendingAcks(List.of(fallback), 0, false);
-            consumer.markFallbackUnknown(first.epoch, first.sequence, first.operationId, terminal);
+            store.savePendingAcks(List.of(fallback), 0);
+            consumer.markFallbackUnknown(first.epoch, first.sequence, first.operationId);
             try {
                 postAck(fallback);
             } catch (CpAckRejectedException fallbackRejected) {
@@ -481,7 +461,7 @@ public final class CpSseClient {
     }
 
     /**
-     * Post one ack body. Status policy, consistent with the consumer hook lifecycle:
+     * Post one ack body. Status policy:
      *
      * <ul>
      *   <li>{@code 409}: stale cursor, generation, or transition ({@link CpResyncException}); the
@@ -489,11 +469,10 @@ public final class CpSseClient {
      *   <li>{@code 400}, {@code 404}, {@code 422}: validation rejection ({@link
      *       CpAckRejectedException}). Demotes any durable {@code effective} record to {@code
      *       unknown}; if {@code received} was already accepted, attempts fallback {@code unknown}
-     *       (keeping the hook pending across transient fallback failures until CP records a
-     *       terminal outcome), otherwise triggers resync and fails the hook without advancing the
-     *       cursor.
+     *       across transient failures until CP records a terminal state, otherwise triggers resync
+     *       and settles the hook without advancing the cursor.
      *   <li>{@code 408}, {@code 429}, {@code 5xx}, any other {@code 4xx} (including transient
-     *       {@code 401}/{@code 403}), IO and timeouts: retryable, the hook stays pending.
+     *       {@code 401}/{@code 403}), IO and timeouts: retryable.
      * </ul>
      */
     void postAckJson(String body) throws IOException, InterruptedException {

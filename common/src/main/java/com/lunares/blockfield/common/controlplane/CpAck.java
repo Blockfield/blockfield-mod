@@ -50,9 +50,9 @@ public final class CpAck {
     public final String output;
 
     /**
-     * Frame identity for post-ack hook matching (epoch/sequence/operationId). Never serialized:
-     * older control planes refuse unknown ack keys, so the wire body stays exactly the frozen
-     * envelope identity.
+     * In-process frame identity for post-ack hook matching (epoch/sequence/operationId). Never
+     * serialized: older control planes refuse unknown ack keys, so the wire body stays exactly the
+     * frozen envelope identity.
      */
     public final String operationId;
 

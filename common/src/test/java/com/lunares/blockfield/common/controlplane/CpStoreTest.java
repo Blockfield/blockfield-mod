@@ -223,17 +223,14 @@ class CpStoreTest {
                 CpAck.Result.OK,
                 null,
                 false,
-                true,
                 acks);
 
         assertEquals(1, writes.get());
         CpStore.Terminal terminal = atomic.lastTerminal(epoch.toString(), "op-hook");
         assertNotNull(terminal);
         assertEquals(CpAck.State.EFFECTIVE, terminal.state());
-        assertTrue(terminal.hadHook());
         CpStore.PendingAcks pending = atomic.loadPendingAcks();
         assertNotNull(pending);
-        assertTrue(pending.hadHook());
         assertEquals(0, pending.sent());
     }
 
@@ -279,7 +276,6 @@ class CpStoreTest {
                                 CpAck.Result.OK,
                                 null,
                                 false,
-                                true,
                                 acks));
 
         CpStore reopened = new CpStore(dir);
@@ -287,84 +283,5 @@ class CpStoreTest {
         assertTrue(reopened.isActionStarted("epoch-a", "op-1"));
         assertNull(reopened.lastTerminal("epoch-a", "op-1"));
         assertNull(reopened.loadPendingAcks());
-    }
-
-    @Test
-    void demoteHookedFrameAndClearPendingAcksAreSingleWrites() {
-        AtomicInteger writes = new AtomicInteger();
-        CpStore atomic = new CpStore(directory.resolve("cp-demote"), writes::incrementAndGet);
-        UUID epoch = UUID.fromString("123e4567-e89b-12d3-a456-426614174000");
-        OffsetDateTime now = OffsetDateTime.of(2026, 11, 14, 12, 0, 0, 0, ZoneOffset.UTC);
-        CpAck effective =
-                new CpAck(
-                        epoch,
-                        42,
-                        "gen-1",
-                        null,
-                        "a".repeat(64),
-                        CpAck.State.EFFECTIVE,
-                        now,
-                        CpAck.Result.OK,
-                        null,
-                        "op-demote");
-        CpAck unknown =
-                new CpAck(
-                        epoch,
-                        42,
-                        "gen-1",
-                        null,
-                        "a".repeat(64),
-                        CpAck.State.UNKNOWN,
-                        now,
-                        CpAck.Result.EFFECT_UNCERTAIN,
-                        null,
-                        "op-demote");
-        atomic.markActionStarted(epoch.toString(), "op-demote", "workshop.game");
-        atomic.saveTerminalAndPendingAcks(
-                epoch.toString(),
-                "op-demote",
-                42,
-                CpAck.State.EFFECTIVE,
-                CpAck.Result.OK,
-                null,
-                false,
-                true,
-                List.of(effective));
-
-        writes.set(0);
-        atomic.demoteHookedFrame(epoch.toString(), "op-demote", 42, List.of(unknown));
-        assertEquals(1, writes.get());
-        CpStore.Terminal demoted = atomic.lastTerminal(epoch.toString(), "op-demote");
-        assertEquals(CpAck.State.UNKNOWN, demoted.state());
-        assertFalse(demoted.hadHook());
-        assertTrue(atomic.isActionOperatorNeeded("op-demote"));
-        assertFalse(atomic.loadPendingAcks().hadHook());
-
-        atomic.saveTerminalAndPendingAcks(
-                epoch.toString(),
-                "op-gen",
-                43,
-                CpAck.State.EFFECTIVE,
-                CpAck.Result.OK,
-                null,
-                false,
-                true,
-                List.of(
-                        new CpAck(
-                                epoch,
-                                43,
-                                "gen-1",
-                                null,
-                                "a".repeat(64),
-                                CpAck.State.EFFECTIVE,
-                                now,
-                                CpAck.Result.OK,
-                                null,
-                                "op-gen")));
-        writes.set(0);
-        atomic.clearPendingAcksAndDemoteHooked(atomic.loadPendingAcks().acks().get(0));
-        assertEquals(1, writes.get());
-        assertNull(atomic.loadPendingAcks());
-        assertEquals(CpAck.State.UNKNOWN, atomic.lastTerminal(epoch.toString(), "op-gen").state());
     }
 }

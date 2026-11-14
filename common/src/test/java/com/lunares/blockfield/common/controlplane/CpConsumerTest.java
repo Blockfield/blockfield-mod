@@ -11,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -18,9 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -1193,7 +1192,7 @@ class CpConsumerTest {
     }
 
     @Test
-    void ackHookFailsOnPermanentRejection() {
+    void ackHookCompletesNormallyOnPermanentRejection() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1201,20 +1200,26 @@ class CpConsumerTest {
         List<CpAck> acks =
                 withActions.onFrame(workshopGameFrame("op-wg-reject", "workshop", "stop", null));
         CompletableFuture<CpAck> hook = actions.lastAckHook;
+        AtomicInteger completions = new AtomicInteger();
+        hook.whenComplete(
+                (ack, err) -> {
+                    assertNull(err);
+                    completions.incrementAndGet();
+                });
 
         withActions.ackFailed(
                 UUID.fromString(EPOCH),
                 last(acks).sequence,
                 last(acks).operationId,
                 new CpAckRejectedException(400, "ack rejected"));
-        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
-        assertInstanceOf(CpAckRejectedException.class, thrown.getCause());
-        assertEquals(400, ((CpAckRejectedException) thrown.getCause()).statusCode());
+        assertNull(hook.get());
+        assertFalse(hook.isCompletedExceptionally());
+        assertEquals(1, completions.get());
         assertEquals(41, store.loadCursor().sequence());
     }
 
     @Test
-    void supersedingFrameAtSameSequenceFailsOldHookAndKeepsItsOwn() throws Exception {
+    void supersedingFrameAtSameSequenceCompletesOldHookAndKeepsItsOwn() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1225,28 +1230,26 @@ class CpConsumerTest {
         assertNotNull(stopHook);
         assertFalse(stopHook.isDone());
 
-        // The server reissues sequence 42 for another operation: the stop hook is superseded
-        // and fails, while the new frame gets its own hook.
+        // The server reissues sequence 42 for another operation: the stop hook settles
+        // normally, while the new frame gets its own hook.
         List<CpAck> otherAcks =
                 withActions.onFrame(workshopGameFrame("op-wg-other", "workshop", "save-off", null));
         CompletableFuture<CpAck> otherHook = actions.lastAckHook;
         assertNotSame(stopHook, otherHook);
-        ExecutionException superseded = assertThrows(ExecutionException.class, stopHook::get);
-        assertInstanceOf(CpResyncException.class, superseded.getCause());
+        assertNull(stopHook.get());
+        assertFalse(stopHook.isCompletedExceptionally());
 
         // The new frame's EFFECTIVE ack completes only its own hook ...
         withActions.ackAccepted(last(otherAcks));
         assertSame(last(otherAcks), otherHook.get());
 
-        // ... and a late ack naming the superseded operation is ignored, never completing
-        // another hook.
+        // ... and a late ack naming the superseded operation is ignored.
         withActions.ackAccepted(last(stopAcks));
         assertSame(last(otherAcks), otherHook.get());
-        assertTrue(stopHook.isCompletedExceptionally());
     }
 
     @Test
-    void foreignOperationFrameAndAckSupersedePendingHookOnce() {
+    void foreignOperationFrameAndAckSupersedePendingHookOnce() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1255,23 +1258,23 @@ class CpConsumerTest {
                 withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
         CompletableFuture<CpAck> stopHook = actions.lastAckHook;
         AtomicInteger completions = new AtomicInteger();
-        stopHook.whenComplete((ack, err) -> completions.incrementAndGet());
+        stopHook.whenComplete(
+                (ack, err) -> {
+                    assertNull(err);
+                    completions.incrementAndGet();
+                });
 
-        // Another operation occupying the same sequence without a hook (non-executable)
-        // supersedes the pending hook immediately rather than leaving it hanging until close().
         List<CpAck> foreignAcks = withActions.onFrame(nonExecutableFrame(42, "superseded"));
-        ExecutionException thrown = assertThrows(ExecutionException.class, stopHook::get);
-        assertInstanceOf(CpResyncException.class, thrown.getCause());
+        assertNull(stopHook.get());
         assertEquals(1, completions.get());
 
-        // Subsequent acceptance of either ack is a no-op and never completes twice.
         withActions.ackAccepted(last(foreignAcks));
         withActions.ackAccepted(last(stopAcks));
         assertEquals(1, completions.get());
     }
 
     @Test
-    void foreignOperationAckAcceptedDirectlySupersedesPendingHookOnce() {
+    void foreignOperationAckAcceptedDirectlySupersedesPendingHookOnce() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1280,7 +1283,11 @@ class CpConsumerTest {
                 withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
         CompletableFuture<CpAck> stopHook = actions.lastAckHook;
         AtomicInteger completions = new AtomicInteger();
-        stopHook.whenComplete((ack, err) -> completions.incrementAndGet());
+        stopHook.whenComplete(
+                (ack, err) -> {
+                    assertNull(err);
+                    completions.incrementAndGet();
+                });
 
         CpAck foreignAck =
                 new CpAck(
@@ -1295,8 +1302,7 @@ class CpConsumerTest {
                         null,
                         "op-foreign");
         withActions.ackAccepted(foreignAck);
-        ExecutionException thrown = assertThrows(ExecutionException.class, stopHook::get);
-        assertInstanceOf(CpResyncException.class, thrown.getCause());
+        assertNull(stopHook.get());
         assertEquals(1, completions.get());
 
         withActions.ackAccepted(last(stopAcks));
@@ -1304,7 +1310,7 @@ class CpConsumerTest {
     }
 
     @Test
-    void cursorAdvancingPastPendingHookFailsItOnce() {
+    void cursorAdvancingPastPendingHookCompletesItOnce() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1312,7 +1318,11 @@ class CpConsumerTest {
         withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
         CompletableFuture<CpAck> firstHook = actions.lastAckHook;
         AtomicInteger firstCompletions = new AtomicInteger();
-        firstHook.whenComplete((ack, err) -> firstCompletions.incrementAndGet());
+        firstHook.whenComplete(
+                (ack, err) -> {
+                    assertNull(err);
+                    firstCompletions.incrementAndGet();
+                });
 
         CpAck higherSeqAck =
                 new CpAck(
@@ -1327,61 +1337,70 @@ class CpConsumerTest {
                         null,
                         "op-next");
         withActions.ackAccepted(higherSeqAck);
-        ExecutionException thrown = assertThrows(ExecutionException.class, firstHook::get);
-        assertInstanceOf(CpResyncException.class, thrown.getCause());
+        assertNull(firstHook.get());
         assertEquals(1, firstCompletions.get());
 
-        // Cursor advancing via store before the next frame also supersedes any stale pending hook.
         withActions.onFrame(workshopGameFrame("op-wg-two", "workshop", "save-off", null));
         CompletableFuture<CpAck> secondHook = actions.lastAckHook;
         AtomicInteger secondCompletions = new AtomicInteger();
-        secondHook.whenComplete((ack, err) -> secondCompletions.incrementAndGet());
+        secondHook.whenComplete(
+                (ack, err) -> {
+                    assertNull(err);
+                    secondCompletions.incrementAndGet();
+                });
 
         store.saveCursorIfForward(EPOCH, 42);
         withActions.onFrame(nonExecutableFrame(43, "later"));
-        ExecutionException secondThrown = assertThrows(ExecutionException.class, secondHook::get);
-        assertInstanceOf(CpResyncException.class, secondThrown.getCause());
+        assertNull(secondHook.get());
         assertEquals(1, secondCompletions.get());
     }
 
     @Test
-    void ackHookFailsWhenSnapshotRotatesEpoch() {
+    void ackHookCompletesNormallyWhenSnapshotRotatesEpochOrAdvancesCursor() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
         withActions.onFrame(workshopGameFrame("op-wg-old", "workshop", "stop", null));
-        CompletableFuture<CpAck> hook = actions.lastAckHook;
+        CompletableFuture<CpAck> epochHook = actions.lastAckHook;
 
         withActions.onSnapshot(snapshot(OTHER_EPOCH, GENERATION, 41, gameplayValue(true)));
-        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
-        assertInstanceOf(CpResyncException.class, thrown.getCause());
+        assertNull(epochHook.get());
+        assertFalse(epochHook.isCompletedExceptionally());
+
+        CpConsumer cursorConsumer =
+                new CpConsumer(
+                        new CpStore(directory.resolve("cursor-snap")),
+                        applier,
+                        actions,
+                        CLOCK,
+                        AUDIENCE);
+        cursorConsumer.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        cursorConsumer.onFrame(workshopGameFrame("op-wg-past", "workshop", "stop", null));
+        CompletableFuture<CpAck> cursorHook = actions.lastAckHook;
+        cursorConsumer.onSnapshot(snapshotWithCursor(EPOCH, GENERATION, 42, 41));
+        assertNull(cursorHook.get());
+        assertFalse(cursorHook.isCompletedExceptionally());
     }
 
     @Test
-    void ackHookFailsWhenSnapshotCursorMovesPastFrame() {
-        RecordingActions actions = new RecordingActions();
-        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
-        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
-        withActions.onFrame(workshopGameFrame("op-wg-past", "workshop", "stop", null));
-        CompletableFuture<CpAck> hook = actions.lastAckHook;
-
-        withActions.onSnapshot(snapshotWithCursor(EPOCH, GENERATION, 42, 41));
-        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
-        assertInstanceOf(CpResyncException.class, thrown.getCause());
-    }
-
-    @Test
-    void consumerCloseFailsPendingHooksAndRejectsFurtherFrames() {
+    void consumerCloseCompletesPendingHooksOnceAndRejectsFurtherFrames() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
         withActions.onFrame(workshopGameFrame("op-wg-close", "workshop", "stop", null));
         CompletableFuture<CpAck> hook = actions.lastAckHook;
+        AtomicInteger completions = new AtomicInteger();
+        hook.whenComplete(
+                (ack, err) -> {
+                    assertNull(err);
+                    completions.incrementAndGet();
+                });
 
         withActions.close();
         withActions.close();
-        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
-        assertInstanceOf(IllegalStateException.class, thrown.getCause());
+        assertNull(hook.get());
+        assertFalse(hook.isCompletedExceptionally());
+        assertEquals(1, completions.get());
         assertThrows(
                 IllegalStateException.class,
                 () ->
@@ -1390,7 +1409,7 @@ class CpConsumerTest {
     }
 
     @Test
-    void ackAcceptedFailsPendingHookUnlessFinalStateIsEffective() {
+    void ackAcceptedCompletesHookNormallyOnRejectedAndUncertain() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1400,7 +1419,8 @@ class CpConsumerTest {
                 withActions.onFrame(workshopGameFrame("op-wg-rej", "workshop", "stop", null));
         CompletableFuture<CpAck> rejHook = actions.lastAckHook;
         withActions.ackAccepted(last(rejected));
-        assertTrue(rejHook.isCompletedExceptionally());
+        assertSame(last(rejected), rejHook.get());
+        assertFalse(rejHook.isCompletedExceptionally());
         commit(rejected);
 
         CpActionHandler throwing =
@@ -1443,11 +1463,12 @@ class CpConsumerTest {
                                 AUDIENCE));
         CompletableFuture<CpAck> uncHook = actions.lastAckHook;
         throwingConsumer.ackAccepted(last(uncertain));
-        assertTrue(uncHook.isCompletedExceptionally());
+        assertSame(last(uncertain), uncHook.get());
+        assertFalse(uncHook.isCompletedExceptionally());
     }
 
     @Test
-    void ackFailedRejectionDemotesEffectiveSoReplayNeverEmitsEffective() {
+    void ackFailedRejectionDemotesEffectiveSoReplayNeverEmitsEffective() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
@@ -1461,8 +1482,8 @@ class CpConsumerTest {
                 42,
                 "op-wg-demote",
                 new CpAckRejectedException(422, "receipt_time"));
-        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
-        assertInstanceOf(CpAckRejectedException.class, thrown.getCause());
+        assertNull(hook.get());
+        assertFalse(hook.isCompletedExceptionally());
         assertTrue(withActions.needsOperator());
         CpStore.Terminal stored = store.lastTerminal(EPOCH, "op-wg-demote");
         assertNotNull(stored);
@@ -1475,93 +1496,32 @@ class CpConsumerTest {
     }
 
     @Test
-    void hookedActionPersistsAtomicallyOnceAndSupportsLateAttachmentFromAnotherThread()
-            throws Exception {
-        AtomicInteger writes = new AtomicInteger();
-        CpStore countingStore =
-                new CpStore(directory.resolve("cp-atomic-hook"), writes::incrementAndGet);
+    void ackHookCompletesNormallyAfterBoundedWaitWhenDeliveryStalls() throws Exception {
         RecordingActions actions = new RecordingActions();
-        actions.next = CpApplier.Outcome.okWithHook();
-        CpConsumer withActions = new CpConsumer(countingStore, applier, actions, CLOCK, AUDIENCE);
-        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
-        writes.set(0);
+        CpConsumer bounded =
+                new CpConsumer(store, applier, actions, CLOCK, AUDIENCE, Duration.ofMillis(40));
+        bounded.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
 
         List<CpAck> acks =
-                withActions.onFrame(workshopGameFrame("op-wg-latehook", "workshop", "stop", null));
-        // One pre-execution started marker + ONE atomic write of terminal, pendingAcks and hadHook.
-        assertEquals(2, writes.get());
-        assertEquals(CpAck.State.EFFECTIVE, last(acks).state);
-        assertTrue(withActions.hasLiveHook(acks.get(0)));
-        assertTrue(countingStore.lastTerminal(EPOCH, "op-wg-latehook").hadHook());
-        assertTrue(countingStore.loadPendingAcks().hadHook());
+                bounded.onFrame(workshopGameFrame("op-wg-bound", "workshop", "stop", null));
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
+        AtomicInteger completions = new AtomicInteger();
+        CountDownLatch settled = new CountDownLatch(1);
+        hook.whenComplete(
+                (ack, err) -> {
+                    assertNull(ack);
+                    assertNull(err);
+                    completions.incrementAndGet();
+                    settled.countDown();
+                });
 
-        CompletableFuture<CpAck.State> observed = new CompletableFuture<>();
-        ExecutorService worker = Executors.newSingleThreadExecutor();
-        try {
-            worker.submit(
-                            () ->
-                                    actions.lastAckHook.whenComplete(
-                                            (ack, error) -> {
-                                                if (error != null) {
-                                                    observed.completeExceptionally(error);
-                                                } else {
-                                                    observed.complete(ack.state);
-                                                }
-                                            }))
-                    .get(5, TimeUnit.SECONDS);
-            withActions.ackAccepted(last(acks));
-            assertEquals(CpAck.State.EFFECTIVE, observed.get(5, TimeUnit.SECONDS));
-        } finally {
-            worker.shutdownNow();
-        }
-    }
+        assertTrue(settled.await(5, TimeUnit.SECONDS), "hook did not settle within bound");
+        assertNull(hook.get());
+        assertFalse(hook.isCompletedExceptionally());
 
-    @Test
-    void restartWithoutLiveHookDemotesHookedReceiptWhileUnhookedReplaysUnchanged() {
-        Path dir = directory.resolve("cp-repost-restart");
-        CpStore firstStore = new CpStore(dir);
-        RecordingActions actions = new RecordingActions();
-        actions.next = CpApplier.Outcome.okWithHook();
-        CpConsumer first = new CpConsumer(firstStore, applier, actions, CLOCK, AUDIENCE);
-        first.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
-
-        String stopFrame = workshopGameFrame("op-wg-hooked", "workshop", "stop", null);
-        first.onFrame(stopFrame);
-        assertTrue(firstStore.lastTerminal(EPOCH, "op-wg-hooked").hadHook());
-
-        // New consumer without the live hook replays UNKNOWN even if pendingAcks was dropped or
-        // kept.
-        CpStore secondStore = new CpStore(dir);
-        secondStore.clearPendingAcks();
-        CpConsumer second = new CpConsumer(secondStore, applier, CLOCK, AUDIENCE);
-        second.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
-        List<CpAck> demoted = second.onFrame(stopFrame);
-        assertEquals(1, demoted.size());
-        assertEquals(CpAck.State.UNKNOWN, demoted.get(0).state);
-        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, demoted.get(0).result);
-        assertTrue(second.needsOperator());
-        assertFalse(secondStore.lastTerminal(EPOCH, "op-wg-hooked").hadHook());
-
-        // Unhooked action across restart still replays EFFECTIVE unchanged.
-        RecordingActions unhookedActions = new RecordingActions();
-        unhookedActions.next = CpApplier.Outcome.ok();
-        CpStore thirdStore = new CpStore(directory.resolve("cp-unhooked-replay"));
-        CpConsumer third = new CpConsumer(thirdStore, applier, unhookedActions, CLOCK, AUDIENCE);
-        third.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
-        String saveFlush = workshopGameFrame("op-wg-flush", "workshop", "save-flush", null);
-        third.onFrame(saveFlush);
-        assertFalse(thirdStore.lastTerminal(EPOCH, "op-wg-flush").hadHook());
-        thirdStore.clearPendingAcks();
-
-        CpConsumer fourth =
-                new CpConsumer(
-                        new CpStore(directory.resolve("cp-unhooked-replay")),
-                        applier,
-                        CLOCK,
-                        AUDIENCE);
-        fourth.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
-        List<CpAck> replayed = fourth.onFrame(saveFlush);
-        assertEquals(CpAck.State.EFFECTIVE, last(replayed).state);
+        // Late ack acceptance never fires the continuation a second time.
+        bounded.ackAccepted(last(acks));
+        assertEquals(1, completions.get());
     }
 
     @Test
@@ -1595,7 +1555,7 @@ class CpConsumerTest {
                             CompletableFuture<CpAck> acked) {
                         handlerCalls.incrementAndGet();
                         crashNextPersist.set(true);
-                        return CpApplier.Outcome.okWithHook();
+                        return CpApplier.Outcome.ok();
                     }
                 };
         CpConsumer first = new CpConsumer(crashingStore, applier, handler, CLOCK, AUDIENCE);

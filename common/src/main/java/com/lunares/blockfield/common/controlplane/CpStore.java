@@ -36,28 +36,15 @@ public final class CpStore {
 
     public record Lkg(long revision, String sha256, String payloadJson) {}
 
-    /**
-     * {@code output}: the final ack's text, kept only until the cursor passes the frame. {@code
-     * hadHook}: true when the handler explicitly declared a post-ack hook for this operation.
-     */
+    /** {@code output}: the final ack's text, kept only until the cursor passes the frame. */
     public record Terminal(
             String operationId,
             long sequence,
             CpAck.State state,
             CpAck.Result result,
-            String output,
-            boolean hadHook) {
+            String output) {
         public Terminal(String operationId, long sequence, CpAck.State state, CpAck.Result result) {
-            this(operationId, sequence, state, result, null, false);
-        }
-
-        public Terminal(
-                String operationId,
-                long sequence,
-                CpAck.State state,
-                CpAck.Result result,
-                String output) {
-            this(operationId, sequence, state, result, output, false);
+            this(operationId, sequence, state, result, null);
         }
     }
 
@@ -110,23 +97,12 @@ public final class CpStore {
         save(state);
     }
 
-    public record PendingAcks(List<CpAck> acks, int sent, boolean hadHook) {}
+    public record PendingAcks(List<CpAck> acks, int sent) {}
 
     /** Persist the exact wire bodies so a lost response can be retried idempotently. */
     public synchronized void savePendingAcks(List<CpAck> acks, int sent) {
         JsonObject state = load();
-        JsonObject previous = objectField(state, "pendingAcks");
-        boolean hadHook =
-                previous != null
-                        && previous.has("hadHook")
-                        && previous.get("hadHook").getAsBoolean();
-        putPendingAcks(state, acks, sent, hadHook);
-        save(state);
-    }
-
-    public synchronized void savePendingAcks(List<CpAck> acks, int sent, boolean hadHook) {
-        JsonObject state = load();
-        putPendingAcks(state, acks, sent, hadHook);
+        putPendingAcks(state, acks, sent);
         save(state);
     }
 
@@ -134,11 +110,11 @@ public final class CpStore {
      * Persist a reposted chain only when no matching pending chain is already queued on disk, so
      * partially delivered chains keep their {@code sent} offset.
      */
-    public synchronized void saveRepostedPendingAcks(List<CpAck> acks, boolean hadHook) {
+    public synchronized void saveRepostedPendingAcks(List<CpAck> acks) {
         JsonObject state = load();
         JsonObject existing = objectField(state, "pendingAcks");
         if (existing != null && matchesPendingIdentity(existing, acks.get(0))) return;
-        putPendingAcks(state, acks, 0, hadHook);
+        putPendingAcks(state, acks, 0);
         save(state);
     }
 
@@ -157,10 +133,8 @@ public final class CpStore {
                 && Objects.equals(first.operationId, existingOp);
     }
 
-    private static void putPendingAcks(
-            JsonObject state, List<CpAck> acks, int sent, boolean hadHook) {
+    private static void putPendingAcks(JsonObject state, List<CpAck> acks, int sent) {
         JsonObject pending = new JsonObject();
-        pending.addProperty("hadHook", hadHook);
         JsonArray entries = new JsonArray();
         for (CpAck ack : acks) {
             JsonObject entry = JsonParser.parseString(ack.toJson()).getAsJsonObject();
@@ -180,8 +154,7 @@ public final class CpStore {
                     lastAck.sequence,
                     lastAck.state,
                     lastAck.result,
-                    null,
-                    false);
+                    null);
             if (started(state).has(terminalKey(epochId, lastAck.operationId))) {
                 operator(state).addProperty("action/" + lastAck.operationId, true);
             }
@@ -213,29 +186,12 @@ public final class CpStore {
                                     ? a.get("operationId").getAsString()
                                     : null));
         }
-        return new PendingAcks(
-                List.copyOf(acks),
-                pending.get("sent").getAsInt(),
-                pending.has("hadHook") && pending.get("hadHook").getAsBoolean());
+        return new PendingAcks(List.copyOf(acks), pending.get("sent").getAsInt());
     }
 
     public synchronized void clearPendingAcks() {
         JsonObject state = load();
         state.remove("pendingAcks");
-        save(state);
-    }
-
-    /**
-     * Drop a superseded pending chain and demote its terminal receipt in the same epoch when a
-     * generation change discards a hooked operation before the cursor passes it.
-     */
-    public synchronized void clearPendingAcksAndDemoteHooked(CpAck first) {
-        JsonObject state = load();
-        state.remove("pendingAcks");
-        if (first.operationId != null) {
-            markActionUncertainInState(
-                    state, first.epoch.toString(), first.operationId, first.sequence);
-        }
         save(state);
     }
 
@@ -281,7 +237,7 @@ public final class CpStore {
             List<CpAck> acks) {
         JsonObject state = load();
         putAppliedFrame(state, namespace, target, revision, payload, epoch, operationId, sequence);
-        putPendingAcks(state, acks, 0, false);
+        putPendingAcks(state, acks, 0);
         save(state);
     }
 
@@ -296,14 +252,7 @@ public final class CpStore {
             long sequence) {
         lkg(state).add(key(namespace, target), lkgEntry(revision, payload));
         putTerminal(
-                state,
-                epoch,
-                operationId,
-                sequence,
-                CpAck.State.EFFECTIVE,
-                CpAck.Result.OK,
-                null,
-                false);
+                state, epoch, operationId, sequence, CpAck.State.EFFECTIVE, CpAck.Result.OK, null);
         operator(state).remove(key(namespace, target));
     }
 
@@ -349,7 +298,7 @@ public final class CpStore {
             List<CpAck> acks) {
         JsonObject state = load();
         putUncertainFrame(state, namespace, target, revision, epoch, operationId, sequence, result);
-        putPendingAcks(state, acks, 0, false);
+        putPendingAcks(state, acks, 0);
         save(state);
     }
 
@@ -363,7 +312,7 @@ public final class CpStore {
             long sequence,
             CpAck.Result result) {
         markMax(operator(state), key(namespace, target), revision);
-        putTerminal(state, epoch, operationId, sequence, CpAck.State.UNKNOWN, result, null, false);
+        putTerminal(state, epoch, operationId, sequence, CpAck.State.UNKNOWN, result, null);
     }
 
     /** Last terminal ack for an operation, or null when it was never decided. */
@@ -378,8 +327,7 @@ public final class CpStore {
                     CpAck.Result.valueOf(stringField(entry, "result", "")),
                     entry.has("output") && !entry.get("output").isJsonNull()
                             ? entry.get("output").getAsString()
-                            : null,
-                    entry.has("hadHook") && entry.get("hadHook").getAsBoolean());
+                            : null);
         } catch (IllegalArgumentException e) {
             return null;
         }
@@ -404,14 +352,13 @@ public final class CpStore {
             CpAck.Result result,
             String output) {
         JsonObject stateJson = load();
-        putTerminal(stateJson, epoch, operationId, sequence, state, result, output, false);
+        putTerminal(stateJson, epoch, operationId, sequence, state, result, output);
         save(stateJson);
     }
 
     /**
-     * Persist a terminal receipt, optional action-operator marker, hook flag and queued ack chain
-     * in one atomic write so a crash never leaves a terminal receipt without its pending chain or
-     * hook flag.
+     * Persist a terminal receipt, optional action-operator marker, and queued ack chain in one
+     * atomic write so a crash never leaves a terminal receipt without its pending chain.
      */
     public synchronized void saveTerminalAndPendingAcks(
             String epoch,
@@ -421,26 +368,13 @@ public final class CpStore {
             CpAck.Result result,
             String output,
             boolean markOperator,
-            boolean hadHook,
             List<CpAck> acks) {
         JsonObject state = load();
-        putTerminal(state, epoch, operationId, sequence, ackState, result, output, hadHook);
+        putTerminal(state, epoch, operationId, sequence, ackState, result, output);
         if (markOperator && operationId != null) {
             operator(state).addProperty("action/" + operationId, true);
         }
-        putPendingAcks(state, acks, 0, hadHook);
-        save(state);
-    }
-
-    /**
-     * Atomically demote a hooked terminal receipt to UNKNOWN ({@code effect_uncertain}) when a
-     * replay arrives without its live post-ack hook, queuing only the {@code unknown} ack.
-     */
-    public synchronized void demoteHookedFrame(
-            String epoch, String operationId, long sequence, List<CpAck> unknownAcks) {
-        JsonObject state = load();
-        markActionUncertainInState(state, epoch, operationId, sequence);
-        putPendingAcks(state, unknownAcks, 0, false);
+        putPendingAcks(state, acks, 0);
         save(state);
     }
 
@@ -468,29 +402,12 @@ public final class CpStore {
                     sequence,
                     CpAck.State.UNKNOWN,
                     CpAck.Result.EFFECT_UNCERTAIN,
-                    null,
-                    false);
+                    null);
         }
         if (actionStarted) {
             operator(state).addProperty("action/" + operationId, true);
         }
         save(state);
-    }
-
-    private static void markActionUncertainInState(
-            JsonObject state, String epoch, String operationId, long sequence) {
-        putTerminal(
-                state,
-                epoch,
-                operationId,
-                sequence,
-                CpAck.State.UNKNOWN,
-                CpAck.Result.EFFECT_UNCERTAIN,
-                null,
-                false);
-        if (started(state).has(terminalKey(epoch, operationId))) {
-            operator(state).addProperty("action/" + operationId, true);
-        }
     }
 
     private static void putTerminal(
@@ -500,12 +417,10 @@ public final class CpStore {
             long sequence,
             CpAck.State state,
             CpAck.Result result,
-            String output,
-            boolean hadHook) {
+            String output) {
         if (!state.terminal()) throw new IllegalArgumentException("terminal states only");
         JsonObject entry = terminalEntry(operationId, sequence, state, result);
         if (output != null) entry.addProperty("output", output);
-        if (hadHook) entry.addProperty("hadHook", true);
         terminal(stateJson).add(terminalKey(epoch, operationId), entry);
     }
 

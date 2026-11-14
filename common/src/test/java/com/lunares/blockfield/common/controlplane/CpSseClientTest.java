@@ -799,7 +799,9 @@ class CpSseClientTest {
                             events.add("handler:" + gameOp);
                             acked.whenComplete(
                                     (ack, error) -> {
-                                        if (error == null && ack.state == CpAck.State.EFFECTIVE) {
+                                        if (error == null
+                                                && ack != null
+                                                && ack.state == CpAck.State.EFFECTIVE) {
                                             events.add("cursor:" + store.loadCursor().sequence());
                                             events.add("halt");
                                             halted.countDown();
@@ -1150,11 +1152,12 @@ class CpSseClientTest {
     }
 
     @Test
-    void initialAckRejectionTriggersResyncWithoutAdvancingCursorAndFailsHook() throws Exception {
+    void initialAckRejectionTriggersResyncWithoutAdvancingCursorAndSettlesHook() throws Exception {
         HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<String> events = new CopyOnWriteArrayList<>();
         AtomicInteger ackPosts = new AtomicInteger();
         AtomicInteger snapshots = new AtomicInteger();
+        AtomicInteger hookCompletions = new AtomicInteger();
         AtomicReference<Throwable> hookError = new AtomicReference<>();
         AtomicBoolean clientStop = new AtomicBoolean();
         CountDownLatch resynced = new CountDownLatch(1);
@@ -1214,10 +1217,9 @@ class CpSseClientTest {
                             events.add("handler:" + gameOp);
                             acked.whenComplete(
                                     (ack, error) -> {
-                                        if (error != null) {
-                                            hookError.set(error);
-                                            events.add("hook-failed");
-                                        }
+                                        hookError.set(error);
+                                        hookCompletions.incrementAndGet();
+                                        events.add("hook-settled");
                                     });
                             return CpApplier.Outcome.ok();
                         }
@@ -1249,8 +1251,8 @@ class CpSseClientTest {
                 runner.shutdownNow();
             }
 
-            assertInstanceOf(CpAckRejectedException.class, hookError.get());
-            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
+            assertNull(hookError.get());
+            assertEquals(1, hookCompletions.get());
             assertEquals(1, ackPosts.get());
             assertTrue(snapshots.get() >= 2, "expected fresh snapshot resync: " + snapshots.get());
             assertEquals(
@@ -1268,6 +1270,7 @@ class CpSseClientTest {
         HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<String> events = new CopyOnWriteArrayList<>();
         List<JsonObject> postedAcks = new CopyOnWriteArrayList<>();
+        AtomicReference<CpAck.State> hookState = new AtomicReference<>();
         AtomicReference<Throwable> hookError = new AtomicReference<>();
         AtomicBoolean clientStop = new AtomicBoolean();
         CountDownLatch settled = new CountDownLatch(1);
@@ -1331,12 +1334,11 @@ class CpSseClientTest {
                             events.add("handler:" + gameOp);
                             acked.whenComplete(
                                     (ack, error) -> {
-                                        if (error != null) {
-                                            hookError.set(error);
-                                            events.add(
-                                                    "hook-failed:cursor="
-                                                            + store.loadCursor().sequence());
-                                        }
+                                        hookError.set(error);
+                                        if (ack != null) hookState.set(ack.state);
+                                        events.add(
+                                                "hook-settled:cursor="
+                                                        + store.loadCursor().sequence());
                                     });
                             return CpApplier.Outcome.ok("stop output");
                         }
@@ -1370,8 +1372,8 @@ class CpSseClientTest {
                 runner.shutdownNow();
             }
 
-            assertInstanceOf(CpAckRejectedException.class, hookError.get());
-            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
+            assertNull(hookError.get());
+            assertEquals(CpAck.State.UNKNOWN, hookState.get());
             assertEquals(
                     List.of("received", "validated", "applied", "effective", "unknown"),
                     postedAcks.stream().map(o -> o.get("state").getAsString()).toList());
@@ -1393,7 +1395,7 @@ class CpSseClientTest {
                             "ack:applied:cursor=41",
                             "ack:effective:cursor=41",
                             "ack:unknown:cursor=41",
-                            "hook-failed:cursor=42"),
+                            "hook-settled:cursor=42"),
                     events);
         } finally {
             wsServer.stop(0);
@@ -1405,6 +1407,7 @@ class CpSseClientTest {
         HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         List<String> postedStates = new CopyOnWriteArrayList<>();
         AtomicInteger snapshots = new AtomicInteger();
+        AtomicInteger hookCompletions = new AtomicInteger();
         AtomicReference<Throwable> hookError = new AtomicReference<>();
         AtomicBoolean clientStop = new AtomicBoolean();
         CountDownLatch resynced = new CountDownLatch(1);
@@ -1474,7 +1477,8 @@ class CpSseClientTest {
                                 CompletableFuture<CpAck> acked) {
                             acked.whenComplete(
                                     (ack, error) -> {
-                                        if (error != null) hookError.set(error);
+                                        hookError.set(error);
+                                        hookCompletions.incrementAndGet();
                                     });
                             return CpApplier.Outcome.ok("stop output");
                         }
@@ -1508,9 +1512,8 @@ class CpSseClientTest {
                 runner.shutdownNow();
             }
 
-            assertInstanceOf(CpAckRejectedException.class, hookError.get());
-            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
-            assertEquals(1, hookError.get().getSuppressed().length);
+            assertNull(hookError.get());
+            assertEquals(1, hookCompletions.get());
             assertEquals(
                     List.of("received", "validated", "applied", "effective", "unknown"),
                     postedStates);
@@ -1531,6 +1534,7 @@ class CpSseClientTest {
         List<String> postedStates = new CopyOnWriteArrayList<>();
         List<String> events = new CopyOnWriteArrayList<>();
         AtomicInteger unknownAttempts = new AtomicInteger();
+        AtomicReference<CpAck.State> hookState = new AtomicReference<>();
         AtomicReference<Throwable> hookError = new AtomicReference<>();
         AtomicReference<CompletableFuture<CpAck>> hookRef = new AtomicReference<>();
         AtomicBoolean pendingDuringRetry = new AtomicBoolean(true);
@@ -1614,12 +1618,9 @@ class CpSseClientTest {
                             hookRef.set(acked);
                             acked.whenComplete(
                                     (ack, error) -> {
-                                        if (error == null) {
-                                            events.add("stop-ran");
-                                        } else {
-                                            hookError.set(error);
-                                            events.add("hook-failed");
-                                        }
+                                        hookError.set(error);
+                                        if (ack != null) hookState.set(ack.state);
+                                        events.add("hook-settled");
                                     });
                             return CpApplier.Outcome.ok("stop output");
                         }
@@ -1654,8 +1655,8 @@ class CpSseClientTest {
             }
 
             assertTrue(pendingDuringRetry.get(), "hook must stay pending across fallback 500/429");
-            assertInstanceOf(CpAckRejectedException.class, hookError.get());
-            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
+            assertNull(hookError.get());
+            assertEquals(CpAck.State.UNKNOWN, hookState.get());
             assertEquals(
                     List.of(
                             "received",
@@ -1667,7 +1668,7 @@ class CpSseClientTest {
                             "unknown"),
                     postedStates);
             assertEquals(42, store.loadCursor().sequence());
-            assertEquals(List.of("handler:stop", "hook-failed"), events);
+            assertEquals(List.of("handler:stop", "hook-settled"), events);
             assertTrue(consumer.needsOperator());
         } finally {
             wsServer.stop(0);
@@ -1681,6 +1682,7 @@ class CpSseClientTest {
         List<String> events = new CopyOnWriteArrayList<>();
         AtomicInteger snapshots = new AtomicInteger();
         AtomicInteger unknownAttempts = new AtomicInteger();
+        AtomicReference<CpAck.State> hookState = new AtomicReference<>();
         AtomicReference<Throwable> hookError = new AtomicReference<>();
         AtomicBoolean clientStop = new AtomicBoolean();
         CountDownLatch settled = new CountDownLatch(1);
@@ -1754,12 +1756,9 @@ class CpSseClientTest {
                             events.add("handler:" + gameOp);
                             acked.whenComplete(
                                     (ack, error) -> {
-                                        if (error == null) {
-                                            events.add("stop-ran");
-                                        } else {
-                                            hookError.set(error);
-                                            events.add("hook-failed");
-                                        }
+                                        hookError.set(error);
+                                        if (ack != null) hookState.set(ack.state);
+                                        events.add("hook-settled");
                                     });
                             return CpApplier.Outcome.ok("stop output");
                         }
@@ -1794,13 +1793,13 @@ class CpSseClientTest {
             }
 
             assertTrue(snapshots.get() >= 2);
-            assertInstanceOf(CpAckRejectedException.class, hookError.get());
-            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
+            assertNull(hookError.get());
+            assertEquals(CpAck.State.UNKNOWN, hookState.get());
             assertEquals(
                     List.of("received", "validated", "applied", "effective", "unknown", "unknown"),
                     postedStates);
             assertEquals(42, store.loadCursor().sequence());
-            assertEquals(List.of("handler:stop", "hook-failed"), events);
+            assertEquals(List.of("handler:stop", "hook-settled"), events);
         } finally {
             wsServer.stop(0);
         }
@@ -1881,12 +1880,8 @@ class CpSseClientTest {
                             events.add("handler:" + gameOp);
                             acked.whenComplete(
                                     (ack, error) -> {
-                                        if (error == null) {
-                                            events.add("stop-ran");
-                                        } else {
-                                            hookError.set(error);
-                                            events.add("hook-failed");
-                                        }
+                                        hookError.set(error);
+                                        events.add("hook-settled");
                                     });
                             return CpApplier.Outcome.ok();
                         }
@@ -1921,11 +1916,10 @@ class CpSseClientTest {
             }
 
             assertTrue(snapshots.get() >= 2);
-            assertInstanceOf(CpAckRejectedException.class, hookError.get());
-            assertEquals(422, ((CpAckRejectedException) hookError.get()).statusCode());
+            assertNull(hookError.get());
             assertEquals(List.of("received", "unknown"), postedStates);
             assertEquals(42, store.loadCursor().sequence());
-            assertEquals(List.of("handler:stop", "hook-failed"), events);
+            assertEquals(List.of("handler:stop", "hook-settled"), events);
         } finally {
             wsServer.stop(0);
         }
@@ -1934,7 +1928,7 @@ class CpSseClientTest {
     @Test
     void conflictResnapshotsBeforeRetryAndDropsSupersededChain() throws Exception {
         CpStore store = new CpStore(directory.resolve("conflict-epoch"));
-        AtomicInteger failed = new AtomicInteger();
+        AtomicInteger settled = new AtomicInteger();
         CpActionHandler handler =
                 new CpActionHandler() {
                     public CpApplier.Outcome handleAction(
@@ -1946,7 +1940,9 @@ class CpSseClientTest {
                             String target, String op, String job, CompletableFuture<CpAck> acked) {
                         acked.whenComplete(
                                 (ack, error) -> {
-                                    if (error != null) failed.incrementAndGet();
+                                    assertNull(ack);
+                                    assertNull(error);
+                                    settled.incrementAndGet();
                                 });
                         return CpApplier.Outcome.ok();
                     }
@@ -1964,51 +1960,7 @@ class CpSseClientTest {
         runToStop(client);
         assertEquals(1, ackBodies.size());
         assertNull(store.loadPendingAcks());
-        assertEquals(1, failed.get());
-    }
-
-    @Test
-    void restartDemotesChainWithLostHook() throws Exception {
-        CpStore store = new CpStore(directory.resolve("restart-hook"));
-        CpActionHandler handler =
-                new CpActionHandler() {
-                    public CpApplier.Outcome handleAction(
-                            String kind, String target, String playerId, String reason) {
-                        return CpApplier.Outcome.ok();
-                    }
-
-                    public CpApplier.Outcome handleWorkshopGame(
-                            String target, String op, String job, CompletableFuture<CpAck> acked) {
-                        acked.thenAccept(ack -> {});
-                        return CpApplier.Outcome.okWithHook();
-                    }
-                };
-        CpConsumer first =
-                new CpConsumer(store, (n, t, r, v) -> CpApplier.Outcome.ok(), handler, CLOCK);
-        first.onSnapshot(snapshot());
-        eventsBody = cursor -> sse(workshopStopFrame(EPOCH, 42).replace("ws-game", "game-1"));
-        AtomicInteger calls = new AtomicInteger();
-        ackStatus = body -> calls.incrementAndGet() == 2 ? 500 : 200;
-        assertThrows(IOException.class, () -> newClient(store, first).stream(new AtomicBoolean()));
-        assertTrue(store.loadPendingAcks().hadHook());
-        stopAfterAcks.set(5);
-        eventsBody = cursor -> "";
-        CpStore reopened = new CpStore(directory.resolve("restart-hook"));
-        CpConsumer second = new CpConsumer(reopened, (n, t, r, v) -> CpApplier.Outcome.ok(), CLOCK);
-        runToStop(newClient(reopened, second));
-        assertEquals(
-                List.of("received", "validated", "validated", "applied", "unknown"),
-                ackBodies.stream()
-                        .map(
-                                body ->
-                                        JsonParser.parseString(body)
-                                                .getAsJsonObject()
-                                                .get("state")
-                                                .getAsString())
-                        .toList());
-        assertEquals(
-                CpAck.State.UNKNOWN,
-                reopened.lastTerminal(EPOCH, "123e4567-e89b-12d3-a456-426614170042").state());
+        assertEquals(1, settled.get());
     }
 
     @Test
@@ -2036,7 +1988,7 @@ class CpSseClientTest {
                             String target, String op, String job, CompletableFuture<CpAck> acked) {
                         handlerCalls.incrementAndGet();
                         crashWrite.set(true);
-                        return CpApplier.Outcome.okWithHook();
+                        return CpApplier.Outcome.ok();
                     }
                 };
         CpConsumer first =
@@ -2066,72 +2018,8 @@ class CpSseClientTest {
     }
 
     @Test
-    void lateAttachedHookFromAnotherThreadCountsAsHookedAndRunsOnAck() throws Exception {
-        Path dir = directory.resolve("late-thread-hook");
-        CpStore store = new CpStore(dir);
-        AtomicReference<CompletableFuture<CpAck>> capturedAcked = new AtomicReference<>();
-        CpActionHandler handler =
-                new CpActionHandler() {
-                    public CpApplier.Outcome handleAction(
-                            String kind, String target, String playerId, String reason) {
-                        return CpApplier.Outcome.ok();
-                    }
-
-                    public CpApplier.Outcome handleWorkshopGame(
-                            String target, String op, String job, CompletableFuture<CpAck> acked) {
-                        capturedAcked.set(acked);
-                        return CpApplier.Outcome.okWithHook();
-                    }
-                };
-        CpConsumer consumer =
-                new CpConsumer(store, (n, t, r, v) -> CpApplier.Outcome.ok(), handler, CLOCK);
-        consumer.onSnapshot(snapshot());
-        eventsBody = cursor -> sse(workshopStopFrame(EPOCH, 42).replace("ws-game", "game-1"));
-        AtomicInteger calls = new AtomicInteger();
-        ackStatus = body -> calls.incrementAndGet() == 3 ? 500 : 200;
-        assertThrows(
-                IOException.class, () -> newClient(store, consumer).stream(new AtomicBoolean()));
-
-        // Handler did not attach inside handleWorkshopGame, yet the persisted flag and live hook
-        // remain active until attached later from another thread.
-        assertNotNull(capturedAcked.get());
-        assertTrue(store.loadPendingAcks().hadHook());
-        assertTrue(consumer.hasLiveHook(store.loadPendingAcks().acks().get(0)));
-
-        CompletableFuture<CpAck.State> hookOutcome = new CompletableFuture<>();
-        ExecutorService otherThread = Executors.newSingleThreadExecutor();
-        try {
-            otherThread
-                    .submit(
-                            () ->
-                                    capturedAcked
-                                            .get()
-                                            .whenComplete(
-                                                    (ack, err) -> {
-                                                        if (err != null) {
-                                                            hookOutcome.completeExceptionally(err);
-                                                        } else {
-                                                            hookOutcome.complete(ack.state);
-                                                        }
-                                                    }))
-                    .get(5, TimeUnit.SECONDS);
-
-            ackStatus = body -> 200;
-            stopAfterAcks.set(5);
-            eventsBody = cursor -> "";
-            runToStop(newClient(store, consumer));
-            assertEquals(CpAck.State.EFFECTIVE, hookOutcome.get(5, TimeUnit.SECONDS));
-            assertEquals(
-                    List.of("received", "validated", "applied", "applied", "effective"),
-                    ackStates());
-        } finally {
-            otherThread.shutdownNow();
-        }
-    }
-
-    @Test
-    void unhookedActionResumesEffectiveAcrossRestart() throws Exception {
-        Path dir = directory.resolve("unhooked-restart");
+    void actionResumesEffectiveAcrossRestart() throws Exception {
+        Path dir = directory.resolve("action-restart");
         CpStore store = new CpStore(dir);
         CpActionHandler handler =
                 new CpActionHandler() {
@@ -2157,7 +2045,6 @@ class CpSseClientTest {
         AtomicInteger calls = new AtomicInteger();
         ackStatus = body -> calls.incrementAndGet() == 2 ? 500 : 200;
         assertThrows(IOException.class, () -> newClient(store, first).stream(new AtomicBoolean()));
-        assertFalse(store.loadPendingAcks().hadHook());
 
         stopAfterAcks.set(5);
         eventsBody = cursor -> "";
@@ -2173,9 +2060,13 @@ class CpSseClientTest {
     }
 
     @Test
-    void restartAcrossGenerationRotationDemotesHookedAction() throws Exception {
-        Path dir = directory.resolve("restart-generation-rotation");
-        CpStore store = new CpStore(dir);
+    void hookCompletesAfterBoundWhenCpIsDownAndContinuationRunsOnce() throws Exception {
+        CpStore store = new CpStore(directory.resolve("hook-bound-cp-down"));
+        AtomicInteger continuations = new AtomicInteger();
+        AtomicReference<CpAck> observedAck = new AtomicReference<>();
+        AtomicReference<Throwable> observedErr = new AtomicReference<>();
+        CountDownLatch halted = new CountDownLatch(1);
+        AtomicBoolean clientStop = new AtomicBoolean();
         CpActionHandler handler =
                 new CpActionHandler() {
                     public CpApplier.Outcome handleAction(
@@ -2185,35 +2076,111 @@ class CpSseClientTest {
 
                     public CpApplier.Outcome handleWorkshopGame(
                             String target, String op, String job, CompletableFuture<CpAck> acked) {
-                        return CpApplier.Outcome.okWithHook();
+                        acked.whenComplete(
+                                (ack, error) -> {
+                                    observedAck.set(ack);
+                                    observedErr.set(error);
+                                    continuations.incrementAndGet();
+                                    halted.countDown();
+                                    clientStop.set(true);
+                                });
+                        return CpApplier.Outcome.ok();
                     }
                 };
-        CpConsumer first =
-                new CpConsumer(store, (n, t, r, v) -> CpApplier.Outcome.ok(), handler, CLOCK);
-        first.onSnapshot(snapshot());
+        CpConsumer consumer =
+                new CpConsumer(
+                        store,
+                        (n, t, r, v) -> CpApplier.Outcome.ok(),
+                        handler,
+                        CLOCK,
+                        null,
+                        Duration.ofMillis(80));
         eventsBody = cursor -> sse(workshopStopFrame(EPOCH, 42).replace("ws-game", "game-1"));
         ackStatus = body -> 500;
-        assertThrows(IOException.class, () -> newClient(store, first).stream(new AtomicBoolean()));
-        assertTrue(store.lastTerminal(EPOCH, "123e4567-e89b-12d3-a456-426614170042").hadHook());
+        CpSseClient client =
+                new CpSseClient(
+                        "http://127.0.0.1:" + server.getAddress().getPort(),
+                        "game-1",
+                        "bearer",
+                        store,
+                        consumer,
+                        new Quiet(),
+                        CLOCK,
+                        CpSseClient.IDLE_TIMEOUT,
+                        (millis, s) -> !s.get());
+        ExecutorService runner = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> done = runner.submit(() -> client.run(clientStop));
+            assertTrue(halted.await(5, TimeUnit.SECONDS), "continuation must run after bound");
+            done.get(5, TimeUnit.SECONDS);
+        } finally {
+            runner.shutdownNow();
+        }
+        assertNull(observedAck.get());
+        assertNull(observedErr.get());
+        assertEquals(1, continuations.get());
+    }
 
-        String nextGen = "123e4567-e89b-12d3-a456-426614174099";
-        snapshotBody = () -> snapshot().replace(GENERATION, nextGen);
-        eventsBody =
-                cursor ->
-                        sse(
-                                workshopStopFrame(EPOCH, 42)
-                                        .replace("ws-game", "game-1")
-                                        .replace(GENERATION, nextGen));
-        ackStatus = body -> 200;
-        stopAfterAcks.set(2);
-        CpStore reopened = new CpStore(dir);
-        CpConsumer second = new CpConsumer(reopened, (n, t, r, v) -> CpApplier.Outcome.ok(), CLOCK);
-        runToStop(newClient(reopened, second));
-        assertEquals(List.of("received", "unknown"), ackStates());
-        assertEquals(
-                CpAck.State.UNKNOWN,
-                reopened.lastTerminal(EPOCH, "123e4567-e89b-12d3-a456-426614170042").state());
-        assertTrue(second.needsOperator());
+    @Test
+    void hookCompletesOnConsumerCloseAndContinuationRunsOnce() throws Exception {
+        CpStore store = new CpStore(directory.resolve("hook-close"));
+        AtomicInteger continuations = new AtomicInteger();
+        AtomicReference<CpAck> observedAck = new AtomicReference<>();
+        AtomicReference<Throwable> observedErr = new AtomicReference<>();
+        CountDownLatch ackAttempted = new CountDownLatch(1);
+        CountDownLatch halted = new CountDownLatch(1);
+        AtomicBoolean clientStop = new AtomicBoolean();
+        CpActionHandler handler =
+                new CpActionHandler() {
+                    public CpApplier.Outcome handleAction(
+                            String kind, String target, String playerId, String reason) {
+                        return CpApplier.Outcome.ok();
+                    }
+
+                    public CpApplier.Outcome handleWorkshopGame(
+                            String target, String op, String job, CompletableFuture<CpAck> acked) {
+                        acked.whenComplete(
+                                (ack, error) -> {
+                                    observedAck.set(ack);
+                                    observedErr.set(error);
+                                    continuations.incrementAndGet();
+                                    halted.countDown();
+                                });
+                        return CpApplier.Outcome.ok();
+                    }
+                };
+        CpConsumer consumer =
+                new CpConsumer(store, (n, t, r, v) -> CpApplier.Outcome.ok(), handler, CLOCK);
+        eventsBody = cursor -> sse(workshopStopFrame(EPOCH, 42).replace("ws-game", "game-1"));
+        ackStatus =
+                body -> {
+                    ackAttempted.countDown();
+                    clientStop.set(true);
+                    return 500;
+                };
+        CpSseClient client =
+                new CpSseClient(
+                        "http://127.0.0.1:" + server.getAddress().getPort(),
+                        "game-1",
+                        "bearer",
+                        store,
+                        consumer,
+                        new Quiet(),
+                        CLOCK,
+                        CpSseClient.IDLE_TIMEOUT,
+                        (millis, s) -> !s.get());
+        ExecutorService runner = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> done = runner.submit(() -> client.run(clientStop));
+            assertTrue(ackAttempted.await(5, TimeUnit.SECONDS));
+            done.get(5, TimeUnit.SECONDS);
+            assertTrue(halted.await(5, TimeUnit.SECONDS), "continuation must run on close");
+        } finally {
+            runner.shutdownNow();
+        }
+        assertNull(observedAck.get());
+        assertNull(observedErr.get());
+        assertEquals(1, continuations.get());
     }
 
     private List<String> ackStates() {
