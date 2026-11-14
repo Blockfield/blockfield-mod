@@ -4,7 +4,7 @@ This document specifies the end-to-end delivery, cursor advancement, post-ack ho
 
 ## 1. Unified Terminal Contract (`cpv2` + Consumer)
 
-For each `control` SSE frame at `(epoch, sequence, operationId)`, `CpConsumer.onFrame` persists the execution verdict in `CpStore` (`state.json`) and returns the `CpAck` chain to `POST /v2/agents/{agentId}/acks`:
+For each `control` SSE frame at `(epoch, sequence, operationId)`, `CpConsumer.onFrame` atomically persists the durable receipt, the queued `CpAck` chain, any LKG/operator update, and the explicit post-ack hook flag in ONE `CpStore` (`state.json`) write, and returns the chain to `POST /v2/agents/{agentId}/acks`:
 
 - **Settings / Effective Actions**: `received` -> `validated` -> `applied` -> `effective` (`output` on `effective` only when applicable).
 - **Non-executable / Expired / Malformed / Rejected Actions**: `received` -> `rejected`.
@@ -40,7 +40,9 @@ The client stores the exact ack bodies and progress before posting, and retries 
    - `consumer.ackFailed` demotes any durable `EFFECTIVE` state in `CpStore` to `UNKNOWN`/`EFFECT_UNCERTAIN` and fails the pending hook with `CpAckRejectedException`.
    - Client leaves local cursor unchanged and throws `CpResyncException` so `GET /snapshot` + `/events` redelivers the non-terminal operation as `[unknown]`—never re-sending `effective` without a hook.
 
-## 4. Post-Ack Hook Identity & Supersede Rules (`CpConsumer`)
+## 4. Post-Ack Hook Identity, Persistence & Supersede Rules (`CpConsumer`)
+
+Post-ack dependency is declared explicitly by `CpActionHandler` before persistence via `CpApplier.Outcome.okWithHook(...)` (`needsPostAckHook = true`, used by e.g. `workshop.game stop`), never inferred from `CompletableFuture` dependents—so a handler that stores `acked` and attaches continuations later from another thread still counts as hooked. The receipt (`hadHook`), pending ack chain (`hadHook`), and action state are written together in ONE atomic `state.json` replacement (with `started` persisted before execution, so a crash before or during atomic persist also settles as `unknown`).
 
 Post-ack hooks (`CompletableFuture<CpAck>` for `workshop.game`) are keyed by full frame identity `(epoch, sequence, operationId)` so an ack for another operation at the same sequence can never settle a hook by accident. A hook succeeds only when CP returns `200` for `effective` on that exact `operationId`, stays pending across every transient failure (including fallback `unknown` retries), and fails immediately (outside the consumer lock) when:
 
@@ -48,4 +50,4 @@ Post-ack hooks (`CompletableFuture<CpAck>` for `workshop.game`) are keyed by ful
 - **Permanent rejection without retryable fallback**: `ackFailed` receives `CpAckRejectedException`.
 - **Superseded or shutdown**: `onSnapshot` changes `epoch` or `generation` or moves `cursor >= sequence`; `onFrame` accepts a different `operationId` at `<= sequence` or sees cursor past it; `ackAccepted` settles at `>= sequence`; or `close()` shuts down the consumer (preferring any stored `CpAckRejectedException` over `CpResyncException`).
 
-After restart, a pending action whose post-ack hook was lost is settled as `unknown` / `effect_uncertain`.
+After restart or superseded generation in the same epoch without the live hook in memory, any stored chain or terminal flagged `hadHook = true` settles as `unknown` / `effect_uncertain` (never `effective`); unflagged actions (`Outcome.ok(...)`) replay `effective` unchanged.

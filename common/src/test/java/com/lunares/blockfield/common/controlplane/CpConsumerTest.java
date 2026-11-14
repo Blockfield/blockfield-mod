@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -18,6 +19,10 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
@@ -1467,6 +1472,151 @@ class CpConsumerTest {
         assertEquals(1, replayed.size());
         assertEquals(CpAck.State.UNKNOWN, replayed.get(0).state);
         assertEquals(CpAck.Result.EFFECT_UNCERTAIN, replayed.get(0).result);
+    }
+
+    @Test
+    void hookedActionPersistsAtomicallyOnceAndSupportsLateAttachmentFromAnotherThread()
+            throws Exception {
+        AtomicInteger writes = new AtomicInteger();
+        CpStore countingStore =
+                new CpStore(directory.resolve("cp-atomic-hook"), writes::incrementAndGet);
+        RecordingActions actions = new RecordingActions();
+        actions.next = CpApplier.Outcome.okWithHook();
+        CpConsumer withActions = new CpConsumer(countingStore, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        writes.set(0);
+
+        List<CpAck> acks =
+                withActions.onFrame(workshopGameFrame("op-wg-latehook", "workshop", "stop", null));
+        // One pre-execution started marker + ONE atomic write of terminal, pendingAcks and hadHook.
+        assertEquals(2, writes.get());
+        assertEquals(CpAck.State.EFFECTIVE, last(acks).state);
+        assertTrue(withActions.hasLiveHook(acks.get(0)));
+        assertTrue(countingStore.lastTerminal(EPOCH, "op-wg-latehook").hadHook());
+        assertTrue(countingStore.loadPendingAcks().hadHook());
+
+        CompletableFuture<CpAck.State> observed = new CompletableFuture<>();
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+            worker.submit(
+                            () ->
+                                    actions.lastAckHook.whenComplete(
+                                            (ack, error) -> {
+                                                if (error != null) {
+                                                    observed.completeExceptionally(error);
+                                                } else {
+                                                    observed.complete(ack.state);
+                                                }
+                                            }))
+                    .get(5, TimeUnit.SECONDS);
+            withActions.ackAccepted(last(acks));
+            assertEquals(CpAck.State.EFFECTIVE, observed.get(5, TimeUnit.SECONDS));
+        } finally {
+            worker.shutdownNow();
+        }
+    }
+
+    @Test
+    void restartWithoutLiveHookDemotesHookedReceiptWhileUnhookedReplaysUnchanged() {
+        Path dir = directory.resolve("cp-repost-restart");
+        CpStore firstStore = new CpStore(dir);
+        RecordingActions actions = new RecordingActions();
+        actions.next = CpApplier.Outcome.okWithHook();
+        CpConsumer first = new CpConsumer(firstStore, applier, actions, CLOCK, AUDIENCE);
+        first.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        String stopFrame = workshopGameFrame("op-wg-hooked", "workshop", "stop", null);
+        first.onFrame(stopFrame);
+        assertTrue(firstStore.lastTerminal(EPOCH, "op-wg-hooked").hadHook());
+
+        // New consumer without the live hook replays UNKNOWN even if pendingAcks was dropped or
+        // kept.
+        CpStore secondStore = new CpStore(dir);
+        secondStore.clearPendingAcks();
+        CpConsumer second = new CpConsumer(secondStore, applier, CLOCK, AUDIENCE);
+        second.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        List<CpAck> demoted = second.onFrame(stopFrame);
+        assertEquals(1, demoted.size());
+        assertEquals(CpAck.State.UNKNOWN, demoted.get(0).state);
+        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, demoted.get(0).result);
+        assertTrue(second.needsOperator());
+        assertFalse(secondStore.lastTerminal(EPOCH, "op-wg-hooked").hadHook());
+
+        // Unhooked action across restart still replays EFFECTIVE unchanged.
+        RecordingActions unhookedActions = new RecordingActions();
+        unhookedActions.next = CpApplier.Outcome.ok();
+        CpStore thirdStore = new CpStore(directory.resolve("cp-unhooked-replay"));
+        CpConsumer third = new CpConsumer(thirdStore, applier, unhookedActions, CLOCK, AUDIENCE);
+        third.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String saveFlush = workshopGameFrame("op-wg-flush", "workshop", "save-flush", null);
+        third.onFrame(saveFlush);
+        assertFalse(thirdStore.lastTerminal(EPOCH, "op-wg-flush").hadHook());
+        thirdStore.clearPendingAcks();
+
+        CpConsumer fourth =
+                new CpConsumer(
+                        new CpStore(directory.resolve("cp-unhooked-replay")),
+                        applier,
+                        CLOCK,
+                        AUDIENCE);
+        fourth.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        List<CpAck> replayed = fourth.onFrame(saveFlush);
+        assertEquals(CpAck.State.EFFECTIVE, last(replayed).state);
+    }
+
+    @Test
+    void crashBetweenApplyAndPersistNeverReplaysEffective() {
+        Path dir = directory.resolve("cp-crash-between");
+        AtomicBoolean crashNextPersist = new AtomicBoolean();
+        CpStore crashingStore =
+                new CpStore(
+                        dir,
+                        () -> {
+                            if (crashNextPersist.get()) {
+                                throw new UncheckedIOException(
+                                        new IOException("crash before persist"));
+                            }
+                        });
+        AtomicInteger handlerCalls = new AtomicInteger();
+        CpActionHandler handler =
+                new CpActionHandler() {
+                    @Override
+                    public CpApplier.Outcome handleAction(
+                            String kind, String target, String playerId, String reason) {
+                        return CpApplier.Outcome.rejected(
+                                CpAck.Result.INVALID_SCHEMA, "unexpected");
+                    }
+
+                    @Override
+                    public CpApplier.Outcome handleWorkshopGame(
+                            String target,
+                            String gameOp,
+                            String job,
+                            CompletableFuture<CpAck> acked) {
+                        handlerCalls.incrementAndGet();
+                        crashNextPersist.set(true);
+                        return CpApplier.Outcome.okWithHook();
+                    }
+                };
+        CpConsumer first = new CpConsumer(crashingStore, applier, handler, CLOCK, AUDIENCE);
+        first.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        String stopFrame = workshopGameFrame("op-wg-between", "workshop", "stop", null);
+        assertThrows(UncheckedIOException.class, () -> first.onFrame(stopFrame));
+        assertEquals(1, handlerCalls.get());
+        assertTrue(new CpStore(dir).isActionStarted(EPOCH, "op-wg-between"));
+        assertNull(new CpStore(dir).lastTerminal(EPOCH, "op-wg-between"));
+        assertNull(new CpStore(dir).loadPendingAcks());
+
+        CpStore reopened = new CpStore(dir);
+        CpConsumer second = new CpConsumer(reopened, applier, handler, CLOCK, AUDIENCE);
+        second.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        List<CpAck> acks = second.onFrame(stopFrame);
+        assertEquals(1, handlerCalls.get());
+        assertEquals(1, acks.size());
+        assertEquals(CpAck.State.UNKNOWN, acks.get(0).state);
+        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, acks.get(0).result);
+        assertTrue(second.needsOperator());
     }
 
     private String workshopGameFrame(String operationId, String target, String gameOp, String job) {

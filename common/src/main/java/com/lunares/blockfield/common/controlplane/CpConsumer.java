@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
@@ -141,11 +142,9 @@ public final class CpConsumer {
 
     public record SnapshotReport(List<String> errors) {}
 
-    /** Frame identity for the durable terminal record; null on the snapshot path. */
-    private record FrameIdentity(String epoch, String operationId, long sequence) {}
-
-    /** Verdict of the single shared settings-apply path, as ack-equivalent states. */
-    private record NamespaceApply(CpAck.State state, CpAck.Result result, List<String> errors) {}
+    /** Verdict of the single shared settings-apply path, with acks when driven by a frame. */
+    private record NamespaceApply(
+            CpAck.State state, CpAck.Result result, List<String> errors, List<CpAck> acks) {}
 
     private record PendingKey(UUID epoch, long sequence, String operationId) {}
 
@@ -154,9 +153,16 @@ public final class CpConsumer {
             long sequence,
             String operationId,
             CompletableFuture<CpAck> future,
+            AtomicBoolean hooked,
             AtomicReference<CpAckRejectedException> rejection) {
         PendingAck(UUID epoch, long sequence, String operationId, CompletableFuture<CpAck> future) {
-            this(epoch, sequence, operationId, future, new AtomicReference<>());
+            this(
+                    epoch,
+                    sequence,
+                    operationId,
+                    future,
+                    new AtomicBoolean(),
+                    new AtomicReference<>());
         }
 
         PendingKey key() {
@@ -167,8 +173,9 @@ public final class CpConsumer {
     /**
      * Adopt the snapshot baseline (desired state only, never receipt ACKs) and reconcile
      * last-known-good toward it. Unknown namespaces are reported, not applied. Pending ack hooks
-     * survive if the snapshot stays in the same epoch with its cursor behind the frame; hooks
-     * discarded by an epoch change or a cursor at or past their sequence fail as superseded.
+     * survive if the snapshot stays in the same epoch and generation with its cursor behind the
+     * frame; hooks discarded by an epoch or generation change or a cursor at or past their sequence
+     * fail as superseded.
      */
     public SnapshotReport onSnapshot(String json) {
         List<PendingAck> discarded = List.of();
@@ -181,15 +188,20 @@ public final class CpConsumer {
                 CpStore.PendingAcks chain = store.loadPendingAcks();
                 if (chain != null) {
                     CpAck first = chain.acks().get(0);
-                    if (!first.epoch.toString().equals(epoch)
-                            || !first.generation.equals(generation)
-                            || store.loadCursor().sequence() >= first.sequence) {
-                        store.clearPendingAcks();
+                    boolean epochChanged = !first.epoch.toString().equals(epoch);
+                    boolean generationChanged = !first.generation.equals(generation);
+                    boolean cursorPassed = store.loadCursor().sequence() >= first.sequence;
+                    if (epochChanged || generationChanged || cursorPassed) {
                         PendingAck hook =
                                 pendingAcks.remove(
                                         new PendingKey(
                                                 first.epoch, first.sequence, first.operationId));
                         if (hook != null) discarded = List.of(hook);
+                        if (!epochChanged && !cursorPassed && chain.hadHook()) {
+                            store.clearPendingAcksAndDemoteHooked(first);
+                        } else {
+                            store.clearPendingAcks();
+                        }
                     }
                 }
                 List<PendingAck> superseded = discardSupersededBySnapshotLocked();
@@ -417,24 +429,21 @@ public final class CpConsumer {
         if (lkg != null && frame.revision < lkg.revision()) {
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.OK, "stale revision");
         }
-        NamespaceApply apply =
-                applyNamespace(
-                        namespace,
-                        target,
-                        frame.revision,
-                        bareValue,
-                        new FrameIdentity(epochId, frame.operationId, frame.sequence));
-        if (apply.state() == CpAck.State.EFFECTIVE) {
-            return effectiveChain(frame, OffsetDateTime.now(clock));
-        }
-        return terminal(frame, apply.state(), apply.result(), String.join("; ", apply.errors()));
+        return applyNamespace(namespace, target, frame.revision, bareValue, frame).acks();
     }
 
     boolean hasLiveHook(CpAck ack) {
+        return hasLiveHook(ack.epoch, ack.sequence, ack.operationId);
+    }
+
+    private boolean hasLiveHook(CpEnvelope frame) {
+        return hasLiveHook(frame.epoch, frame.sequence, frame.operationId);
+    }
+
+    private boolean hasLiveHook(UUID epoch, long sequence, String operationId) {
         synchronized (lock) {
-            PendingAck pending =
-                    pendingAcks.get(new PendingKey(ack.epoch, ack.sequence, ack.operationId));
-            return pending != null && pending.future().getNumberOfDependents() > 0;
+            PendingAck pending = pendingAcks.get(new PendingKey(epoch, sequence, operationId));
+            return pending != null && pending.hooked().get();
         }
     }
 
@@ -529,19 +538,7 @@ public final class CpConsumer {
         if (operationId == null) {
             return;
         }
-        CpStore.Terminal existing = store.lastTerminal(epochId, operationId);
-        if (alwaysRecord || existing == null || existing.state() == CpAck.State.EFFECTIVE) {
-            store.recordTerminal(
-                    epochId,
-                    operationId,
-                    sequence,
-                    CpAck.State.UNKNOWN,
-                    CpAck.Result.EFFECT_UNCERTAIN,
-                    null);
-        }
-        if (store.isActionStarted(epochId, operationId)) {
-            store.markActionOperatorNeeded(operationId);
-        }
+        store.demoteUncertain(epochId, operationId, sequence, alwaysRecord);
     }
 
     /**
@@ -584,61 +581,87 @@ public final class CpConsumer {
      * itself, never the envelope wrapper, so both paths feed the applier one shape.
      */
     private NamespaceApply applyNamespace(
-            String namespace, String target, long revision, JsonObject value, FrameIdentity frame) {
+            String namespace, String target, long revision, JsonObject value, CpEnvelope frame) {
+        OffsetDateTime now = frame != null ? OffsetDateTime.now(clock) : null;
         if (store.isOperatorNeeded(namespace, target, revision)) {
             String note =
                     namespace + "/" + target + ": effect uncertain, needs operator (not retried)";
-            if (frame != null) {
-                store.saveUncertainFrame(
-                        namespace,
-                        target,
-                        revision,
-                        frame.epoch(),
-                        frame.operationId(),
-                        frame.sequence(),
-                        CpAck.Result.EFFECT_UNCERTAIN);
-            }
-            return new NamespaceApply(
-                    CpAck.State.UNKNOWN, CpAck.Result.EFFECT_UNCERTAIN, List.of(note));
+            return uncertainNamespace(namespace, target, revision, frame, now, note);
         }
         CpApplier.Outcome outcome;
         try {
             outcome = applier.applySettings(namespace, target, revision, value);
         } catch (RuntimeException e) {
             String note = namespace + "/" + target + ": effect uncertain, needs operator";
-            if (frame != null) {
-                store.saveUncertainFrame(
-                        namespace,
-                        target,
-                        revision,
-                        frame.epoch(),
-                        frame.operationId(),
-                        frame.sequence(),
-                        CpAck.Result.EFFECT_UNCERTAIN);
-            } else {
-                store.markOperatorNeeded(namespace, target, revision);
-            }
-            return new NamespaceApply(
-                    CpAck.State.UNKNOWN, CpAck.Result.EFFECT_UNCERTAIN, List.of(note));
+            return uncertainNamespace(namespace, target, revision, frame, now, note);
         }
         if (outcome.applied()) {
+            List<CpAck> acks = null;
             if (frame != null) {
-                store.saveAppliedFrame(
+                acks = effectiveChain(frame, now, null);
+                store.saveAppliedFrameAndPendingAcks(
                         namespace,
                         target,
                         revision,
                         value,
-                        frame.epoch(),
-                        frame.operationId(),
-                        frame.sequence());
+                        frame.epoch.toString(),
+                        frame.operationId,
+                        frame.sequence,
+                        acks);
             } else {
                 store.saveAppliedSnapshot(namespace, target, revision, value);
             }
-            return new NamespaceApply(CpAck.State.EFFECTIVE, CpAck.Result.OK, List.of());
+            return new NamespaceApply(CpAck.State.EFFECTIVE, CpAck.Result.OK, List.of(), acks);
         }
         CpAck.Result result =
                 outcome.result() == CpAck.Result.OK ? CpAck.Result.APPLY_FAILED : outcome.result();
-        return new NamespaceApply(CpAck.State.REJECTED, result, outcome.errors());
+        List<CpAck> acks = null;
+        if (frame != null) {
+            acks = terminalAcks(frame, CpAck.State.REJECTED, result, now, null);
+            store.saveTerminalAndPendingAcks(
+                    frame.epoch.toString(),
+                    frame.operationId,
+                    frame.sequence,
+                    CpAck.State.REJECTED,
+                    result,
+                    null,
+                    false,
+                    false,
+                    acks);
+        }
+        return new NamespaceApply(CpAck.State.REJECTED, result, outcome.errors(), acks);
+    }
+
+    private NamespaceApply uncertainNamespace(
+            String namespace,
+            String target,
+            long revision,
+            CpEnvelope frame,
+            OffsetDateTime now,
+            String note) {
+        List<CpAck> acks = null;
+        if (frame != null) {
+            acks =
+                    List.of(
+                            CpAck.forEnvelope(
+                                    frame,
+                                    CpAck.State.UNKNOWN,
+                                    CpAck.Result.EFFECT_UNCERTAIN,
+                                    now));
+            store.saveUncertainFrameAndPendingAcks(
+                    namespace,
+                    target,
+                    revision,
+                    frame.epoch.toString(),
+                    frame.operationId,
+                    frame.sequence,
+                    CpAck.Result.EFFECT_UNCERTAIN,
+                    acks);
+        } else {
+            store.markOperatorNeeded(namespace, target, revision);
+        }
+        return new NamespaceApply(
+                CpAck.State.UNKNOWN, CpAck.Result.EFFECT_UNCERTAIN, List.of(note), acks);
     }
 
     private List<CpAck> onAction(CpEnvelope frame, List<PendingAck> superseded) {
@@ -671,19 +694,20 @@ public final class CpConsumer {
         if (store.isActionStarted(epochId, frame.operationId)) {
             // Crash after the started-marker, before any terminal state: a non-idempotent
             // action is never re-run; it reports unknown for operator reconciliation.
-            store.markActionOperatorNeeded(frame.operationId);
             return terminal(
                     frame,
                     CpAck.State.UNKNOWN,
                     CpAck.Result.EFFECT_UNCERTAIN,
-                    "action started but never finished, needs operator");
+                    "action started but never finished, needs operator",
+                    null,
+                    true);
         }
         store.markActionStarted(epochId, frame.operationId, kind);
         CompletableFuture<CpAck> ackFuture = new CompletableFuture<>();
-        registerPending(
+        PendingAck pending =
                 new PendingAck(
-                        frame.epoch, frame.sequence, frame.operationId.toString(), ackFuture),
-                superseded);
+                        frame.epoch, frame.sequence, frame.operationId.toString(), ackFuture);
+        registerPending(pending, superseded);
         CpApplier.Outcome outcome;
         try {
             outcome =
@@ -700,12 +724,13 @@ public final class CpConsumer {
                                             : actions.handleAction(
                                                     kind, target, args.playerId(), args.reason());
         } catch (RuntimeException e) {
-            store.markActionOperatorNeeded(frame.operationId);
             return terminal(
                     frame,
                     CpAck.State.UNKNOWN,
                     CpAck.Result.EFFECT_UNCERTAIN,
-                    "effect uncertain, needs operator");
+                    "effect uncertain, needs operator",
+                    null,
+                    true);
         }
         if (!outcome.applied()) {
             CpAck.Result result =
@@ -721,7 +746,20 @@ public final class CpConsumer {
             String why = "suggest output exceeds the ack output cap, refused";
             return terminal(frame, CpAck.State.REJECTED, CpAck.Result.APPLY_FAILED, why, why);
         }
-        return effectiveChain(frame, withOutput ? outcome.output() : null);
+        if (outcome.needsPostAckHook() && !workshopGame) {
+            return terminal(
+                    frame,
+                    CpAck.State.UNKNOWN,
+                    CpAck.Result.EFFECT_UNCERTAIN,
+                    "post-ack hook declared on unsupported action kind",
+                    null,
+                    true);
+        }
+        boolean needsHook = workshopGame && outcome.needsPostAckHook();
+        if (needsHook) {
+            pending.hooked().set(true);
+        }
+        return effectiveChain(frame, withOutput ? outcome.output() : null, needsHook);
     }
 
     /**
@@ -870,38 +908,66 @@ public final class CpConsumer {
 
     private List<CpAck> terminal(
             CpEnvelope frame, CpAck.State state, CpAck.Result result, String why) {
-        return terminal(frame, state, result, why, null);
+        return terminal(frame, state, result, why, null, false);
+    }
+
+    private List<CpAck> terminal(
+            CpEnvelope frame, CpAck.State state, CpAck.Result result, String why, String output) {
+        return terminal(frame, state, result, why, output, false);
     }
 
     /** {@code output} rides the final ack only; the durable record keeps state and result. */
     private List<CpAck> terminal(
-            CpEnvelope frame, CpAck.State state, CpAck.Result result, String why, String output) {
+            CpEnvelope frame,
+            CpAck.State state,
+            CpAck.Result result,
+            String why,
+            String output,
+            boolean markOperator) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         String kept = capped(output);
-        store.recordTerminal(
-                frame.epoch.toString(), frame.operationId, frame.sequence, state, result, kept);
-        CpAck last = CpAck.forEnvelope(frame, state, result, now, kept);
+        List<CpAck> acks = terminalAcks(frame, state, result, now, kept);
+        store.saveTerminalAndPendingAcks(
+                frame.epoch.toString(),
+                frame.operationId,
+                frame.sequence,
+                state,
+                result,
+                kept,
+                markOperator,
+                false,
+                acks);
+        return acks;
+    }
+
+    private static List<CpAck> terminalAcks(
+            CpEnvelope frame,
+            CpAck.State state,
+            CpAck.Result result,
+            OffsetDateTime now,
+            String output) {
+        CpAck last = CpAck.forEnvelope(frame, state, result, now, output);
         if (state == CpAck.State.UNKNOWN) {
             return List.of(last);
         }
         return List.of(CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now), last);
     }
 
-    private List<CpAck> effectiveChain(CpEnvelope frame, String output) {
+    private List<CpAck> effectiveChain(CpEnvelope frame, String output, boolean hadHook) {
         OffsetDateTime now = OffsetDateTime.now(clock);
         String kept = capped(output);
-        store.recordTerminal(
+        List<CpAck> acks = effectiveChain(frame, now, kept);
+        store.saveTerminalAndPendingAcks(
                 frame.epoch.toString(),
                 frame.operationId,
                 frame.sequence,
                 CpAck.State.EFFECTIVE,
                 CpAck.Result.OK,
-                kept);
-        return effectiveChain(frame, now, kept);
-    }
-
-    private static List<CpAck> effectiveChain(CpEnvelope frame, OffsetDateTime now) {
-        return effectiveChain(frame, now, null);
+                kept,
+                false,
+                hadHook,
+                acks);
+        return acks;
     }
 
     private static List<CpAck> effectiveChain(CpEnvelope frame, OffsetDateTime now, String output) {
@@ -953,16 +1019,24 @@ public final class CpConsumer {
 
     private List<CpAck> repost(CpEnvelope frame, CpStore.Terminal prior) {
         OffsetDateTime now = OffsetDateTime.now(clock);
-        return switch (prior.state()) {
-            case EFFECTIVE -> effectiveChain(frame, now, prior.output());
-            case UNKNOWN ->
-                    List.of(CpAck.forEnvelope(frame, CpAck.State.UNKNOWN, prior.result(), now));
-            default ->
+        if (prior.state() == CpAck.State.EFFECTIVE && prior.hadHook() && !hasLiveHook(frame)) {
+            List<CpAck> unknown =
                     List.of(
-                            CpAck.forEnvelope(frame, CpAck.State.RECEIVED, now),
                             CpAck.forEnvelope(
-                                    frame, prior.state(), prior.result(), now, prior.output()));
-        };
+                                    frame,
+                                    CpAck.State.UNKNOWN,
+                                    CpAck.Result.EFFECT_UNCERTAIN,
+                                    now));
+            store.demoteHookedFrame(
+                    frame.epoch.toString(), frame.operationId, frame.sequence, unknown);
+            return unknown;
+        }
+        List<CpAck> acks =
+                prior.state() == CpAck.State.EFFECTIVE
+                        ? effectiveChain(frame, now, prior.output())
+                        : terminalAcks(frame, prior.state(), prior.result(), now, prior.output());
+        store.saveRepostedPendingAcks(acks, prior.hadHook());
+        return acks;
     }
 
     private static JsonObject parseObject(String json, String what) {

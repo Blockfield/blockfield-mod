@@ -60,8 +60,12 @@ public interface CpActionHandler {
      * supersede (different frame/cursor advance/resnapshot past the sequence), or consumer
      * shutdown. Handlers must not block on {@code acked} synchronously inside this method (acks are
      * posted only after it returns); attach non-blocking continuations such as {@code whenComplete}
-     * (optionally with {@code orTimeout}). Without an override, Workshop game actions are not
-     * supported.
+     * (optionally with {@code orTimeout}, including later from another thread) and declare the
+     * post-ack dependency explicitly by returning {@link CpApplier.Outcome#okWithHook()} or {@link
+     * CpApplier.Outcome#okWithHook(String)} (for example for {@code workshop.game stop}). Returning
+     * plain {@link CpApplier.Outcome#ok()} declares that no post-ack hook is required, allowing
+     * {@code EFFECTIVE} to replay unchanged across restarts. Without an override, Workshop game
+     * actions are not supported.
      */
     default CpApplier.Outcome handleWorkshopGame(
             String target, String gameOp, String job, CompletableFuture<CpAck> acked) {

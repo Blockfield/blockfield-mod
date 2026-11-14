@@ -386,8 +386,7 @@ public final class CpSseClient {
                 && prior != null
                 && prior.sequence() == frame.sequence) return false;
         if (store.loadPendingAcks() == null) {
-            List<CpAck> acks = consumer.onFrame(data);
-            store.savePendingAcks(acks, 0, consumer.hasLiveHook(acks.get(0)));
+            consumer.onFrame(data);
         }
         deliverPending();
         return true;
@@ -449,7 +448,7 @@ public final class CpSseClient {
                             CpAck.Result.EFFECT_UNCERTAIN,
                             null,
                             failed.operationId);
-            store.savePendingAcks(List.of(fallback), 0);
+            store.savePendingAcks(List.of(fallback), 0, false);
             consumer.markFallbackUnknown(first.epoch, first.sequence, first.operationId, terminal);
             try {
                 postAck(fallback);
