@@ -133,7 +133,7 @@ public final class CpSseClient {
 
     /**
      * Split-credential form: the stream spends only the command bearer; the console-read bearer
-     * belongs to the server-side ConsoleLink and never leaves with this client.
+     * belongs to the server-side ConsoleLogPush and never leaves with this client.
      */
     public CpSseClient(
             String baseUrl,

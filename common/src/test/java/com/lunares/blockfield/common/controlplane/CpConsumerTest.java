@@ -730,6 +730,69 @@ class CpConsumerTest {
         assertEquals("not allowlisted", reposted.output);
     }
 
+    @Test
+    void suggestFrameGoesToHandleSuggestWithTextOutput() {
+        RecordingActions actions = new RecordingActions();
+        actions.suggestOutput = "{\"from\":5,\"suggestions\":[{\"text\":\"set\"}]}";
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        CpAck ack = last(withActions.onFrame(suggestFrame("op-s1", "time s")));
+
+        assertEquals(CpAck.State.EFFECTIVE, ack.state);
+        assertEquals(actions.suggestOutput, ack.output);
+        assertEquals(List.of("suggest/arena/time s"), actions.calls);
+    }
+
+    @Test
+    void malformedSuggestFramesRejectedWithoutHandlerCall() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        for (String frame :
+                List.of(
+                        suggestFrame("op-sb1", "time\nstop"),
+                        suggestFrame("op-sb2", "x".repeat(1001)))) {
+            CpAck ack = last(withActions.onFrame(frame));
+            assertEquals(CpAck.State.REJECTED, ack.state);
+            assertEquals(CpAck.Result.INVALID_SCHEMA, ack.result);
+        }
+        assertTrue(actions.calls.isEmpty());
+    }
+
+    @Test
+    void oversizedSuggestListRefusedInsteadOfTruncatedJson() {
+        RecordingActions actions = new RecordingActions();
+        JsonArray suggestions = new JsonArray();
+        for (int i = 0; i < 2000; i++) {
+            JsonObject suggestion = new JsonObject();
+            suggestion.addProperty("text", "command-" + i);
+            suggestions.add(suggestion);
+        }
+        JsonObject answer = new JsonObject();
+        answer.addProperty("from", 5);
+        answer.add("suggestions", suggestions);
+        actions.suggestOutput = answer.toString();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        CpAck ack = last(withActions.onFrame(suggestFrame("op-s2", "time ")));
+
+        assertEquals(CpAck.State.REJECTED, ack.state);
+        assertEquals(CpAck.Result.APPLY_FAILED, ack.result);
+        assertEquals("suggest output exceeds the ack output cap, refused", ack.output);
+        assertEquals(1, actions.calls.size());
+    }
+
+    private String suggestFrame(String operationId, String input) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", "console.suggest");
+        payload.addProperty("target", "arena");
+        payload.addProperty("input", input);
+        return payloadFrame(operationId, payload);
+    }
+
     private static CpAck last(List<CpAck> acks) {
         return acks.get(acks.size() - 1);
     }
@@ -1252,6 +1315,14 @@ class CpConsumerTest {
         public CpApplier.Outcome handleConsole(String target, String command, boolean readOnly) {
             calls.add("console/" + target + "/" + command + "/" + readOnly);
             return next != null ? next : CpApplier.Outcome.ok(output);
+        }
+
+        String suggestOutput;
+
+        @Override
+        public CpApplier.Outcome handleSuggest(String target, String input) {
+            calls.add("suggest/" + target + "/" + input);
+            return next != null ? next : CpApplier.Outcome.ok(suggestOutput);
         }
     }
 }
