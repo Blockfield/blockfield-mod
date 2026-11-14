@@ -22,8 +22,23 @@ import java.util.regex.Pattern;
  * instead reports unknown for operator reconciliation.
  */
 public final class CpConsumer {
-    /** Namespaces this build applies. Gate snapshots belong to the proxy. */
-    private static final Set<String> SETTINGS_NAMESPACES = Set.of("gameplay");
+    /**
+     * Namespaces this build applies: the gameplay core plus every settings.json-section namespace
+     * the control plane delivers for the game backend (coordination#64 rows 10-11:
+     * rooms/deathmatch/classLocks/campaign/parcool/gunBalance/kits/disabledMapIds). Gate snapshots
+     * belong to the proxy; ai-limits and workshop-ai are never game-applied.
+     */
+    private static final Set<String> SETTINGS_NAMESPACES =
+            Set.of(
+                    "gameplay",
+                    "rooms",
+                    "deathmatch",
+                    "classLocks",
+                    "campaign",
+                    "parcool",
+                    "gunBalance",
+                    "kits",
+                    "disabledMapIds");
 
     /** Typed actions this consumer routes; anything else is rejected, never run. */
     static final Set<String> ACTION_KINDS =
