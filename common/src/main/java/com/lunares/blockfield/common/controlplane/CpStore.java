@@ -90,12 +90,26 @@ public final class CpStore {
         save(state);
     }
 
-    public record PendingAcks(List<CpAck> acks, int sent) {}
+    public record PendingAcks(List<CpAck> acks, int sent, boolean hadHook) {}
 
     /** Persist the exact wire bodies so a lost response can be retried idempotently. */
     public synchronized void savePendingAcks(List<CpAck> acks, int sent) {
         JsonObject state = load();
+        JsonObject previous = objectField(state, "pendingAcks");
+        boolean hadHook =
+                previous != null
+                        && previous.has("hadHook")
+                        && previous.get("hadHook").getAsBoolean();
+        savePendingAcks(state, acks, sent, hadHook);
+    }
+
+    public synchronized void savePendingAcks(List<CpAck> acks, int sent, boolean hadHook) {
+        savePendingAcks(load(), acks, sent, hadHook);
+    }
+
+    private void savePendingAcks(JsonObject state, List<CpAck> acks, int sent, boolean hadHook) {
         JsonObject pending = new JsonObject();
+        pending.addProperty("hadHook", hadHook);
         JsonArray entries = new JsonArray();
         for (CpAck ack : acks) {
             JsonObject entry = JsonParser.parseString(ack.toJson()).getAsJsonObject();
@@ -105,8 +119,8 @@ public final class CpStore {
         pending.add("acks", entries);
         pending.addProperty("sent", sent);
         state.add("pendingAcks", pending);
-        if (acks.size() == 1 && acks.get(0).state == CpAck.State.UNKNOWN) {
-            CpAck ack = acks.get(0);
+        if (acks.get(acks.size() - 1).state == CpAck.State.UNKNOWN) {
+            CpAck ack = acks.get(acks.size() - 1);
             if (ack.operationId != null) {
                 String key = terminalKey(ack.epoch.toString(), ack.operationId);
                 terminal(state)
@@ -146,7 +160,10 @@ public final class CpStore {
                                     ? a.get("operationId").getAsString()
                                     : null));
         }
-        return new PendingAcks(List.copyOf(acks), pending.get("sent").getAsInt());
+        return new PendingAcks(
+                List.copyOf(acks),
+                pending.get("sent").getAsInt(),
+                pending.has("hadHook") && pending.get("hadHook").getAsBoolean());
     }
 
     public synchronized void clearPendingAcks() {

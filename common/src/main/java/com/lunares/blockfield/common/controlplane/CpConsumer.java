@@ -178,7 +178,26 @@ public final class CpConsumer {
                     throw new IllegalStateException("control-plane consumer shut down");
                 }
                 SnapshotReport report = onSnapshotLocked(json);
-                discarded = discardSupersededBySnapshotLocked();
+                CpStore.PendingAcks chain = store.loadPendingAcks();
+                if (chain != null) {
+                    CpAck first = chain.acks().get(0);
+                    if (!first.epoch.toString().equals(epoch)
+                            || !first.generation.equals(generation)
+                            || store.loadCursor().sequence() >= first.sequence) {
+                        store.clearPendingAcks();
+                        PendingAck hook =
+                                pendingAcks.remove(
+                                        new PendingKey(
+                                                first.epoch, first.sequence, first.operationId));
+                        if (hook != null) discarded = List.of(hook);
+                    }
+                }
+                List<PendingAck> superseded = discardSupersededBySnapshotLocked();
+                if (!superseded.isEmpty()) {
+                    List<PendingAck> all = new ArrayList<>(discarded);
+                    all.addAll(superseded);
+                    discarded = all;
+                }
                 return report;
             }
         } finally {
@@ -409,6 +428,14 @@ public final class CpConsumer {
             return effectiveChain(frame, OffsetDateTime.now(clock));
         }
         return terminal(frame, apply.state(), apply.result(), String.join("; ", apply.errors()));
+    }
+
+    boolean hasLiveHook(CpAck ack) {
+        synchronized (lock) {
+            PendingAck pending =
+                    pendingAcks.get(new PendingKey(ack.epoch, ack.sequence, ack.operationId));
+            return pending != null && pending.future().getNumberOfDependents() > 0;
+        }
     }
 
     /**

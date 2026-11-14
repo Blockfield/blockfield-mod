@@ -1931,6 +1931,86 @@ class CpSseClientTest {
         }
     }
 
+    @Test
+    void conflictResnapshotsBeforeRetryAndDropsSupersededChain() throws Exception {
+        CpStore store = new CpStore(directory.resolve("conflict-epoch"));
+        AtomicInteger failed = new AtomicInteger();
+        CpActionHandler handler =
+                new CpActionHandler() {
+                    public CpApplier.Outcome handleAction(
+                            String kind, String target, String playerId, String reason) {
+                        return CpApplier.Outcome.ok();
+                    }
+
+                    public CpApplier.Outcome handleWorkshopGame(
+                            String target, String op, String job, CompletableFuture<CpAck> acked) {
+                        acked.whenComplete(
+                                (ack, error) -> {
+                                    if (error != null) failed.incrementAndGet();
+                                });
+                        return CpApplier.Outcome.ok();
+                    }
+                };
+        CpConsumer consumer =
+                new CpConsumer(store, (n, t, r, v) -> CpApplier.Outcome.ok(), handler, CLOCK);
+        consumer.onSnapshot(snapshot());
+        String action = workshopStopFrame(EPOCH, 42).replace("ws-game", "game-1");
+        eventsBody = cursor -> sse(action);
+        ackStatus = body -> 409;
+        CpSseClient client = newClient(store, consumer);
+        assertThrows(CpResyncException.class, () -> client.stream(new AtomicBoolean()));
+        snapshotBody = () -> snapshotAt("223e4567-e89b-12d3-a456-426614174000", 0, 0);
+        stopAfterSnapshots.set(1);
+        runToStop(client);
+        assertEquals(1, ackBodies.size());
+        assertNull(store.loadPendingAcks());
+        assertEquals(1, failed.get());
+    }
+
+    @Test
+    void restartDemotesChainWithLostHook() throws Exception {
+        CpStore store = new CpStore(directory.resolve("restart-hook"));
+        CpActionHandler handler =
+                new CpActionHandler() {
+                    public CpApplier.Outcome handleAction(
+                            String kind, String target, String playerId, String reason) {
+                        return CpApplier.Outcome.ok();
+                    }
+
+                    public CpApplier.Outcome handleWorkshopGame(
+                            String target, String op, String job, CompletableFuture<CpAck> acked) {
+                        acked.thenAccept(ack -> {});
+                        return CpApplier.Outcome.ok();
+                    }
+                };
+        CpConsumer first =
+                new CpConsumer(store, (n, t, r, v) -> CpApplier.Outcome.ok(), handler, CLOCK);
+        first.onSnapshot(snapshot());
+        eventsBody = cursor -> sse(workshopStopFrame(EPOCH, 42).replace("ws-game", "game-1"));
+        AtomicInteger calls = new AtomicInteger();
+        ackStatus = body -> calls.incrementAndGet() == 2 ? 500 : 200;
+        assertThrows(IOException.class, () -> newClient(store, first).stream(new AtomicBoolean()));
+        assertTrue(store.loadPendingAcks().hadHook());
+        stopAfterAcks.set(5);
+        eventsBody = cursor -> "";
+        CpStore reopened = new CpStore(directory.resolve("restart-hook"));
+        CpConsumer second = new CpConsumer(reopened, (n, t, r, v) -> CpApplier.Outcome.ok(), CLOCK);
+        runToStop(newClient(reopened, second));
+        assertEquals(
+                List.of("received", "validated", "validated", "applied", "unknown"),
+                ackBodies.stream()
+                        .map(
+                                body ->
+                                        JsonParser.parseString(body)
+                                                .getAsJsonObject()
+                                                .get("state")
+                                                .getAsString())
+                        .toList());
+        assertEquals(
+                CpAck.State.UNKNOWN,
+                reopened.lastTerminal(EPOCH, "123e4567-e89b-12d3-a456-426614170042").state());
+    }
+
     private String snapshotFor(String audience, String epoch, long cursor, long revision) {
         JsonObject entry = new JsonObject();
         entry.addProperty("namespace", "gameplay");

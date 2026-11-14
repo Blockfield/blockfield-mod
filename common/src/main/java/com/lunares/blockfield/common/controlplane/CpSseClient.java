@@ -196,13 +196,13 @@ public final class CpSseClient {
         boolean needsSnapshot = true;
         while (!stop.get()) {
             try {
-                if (store.loadPendingAcks() != null) {
-                    deliverPending();
-                    backoff = BACKOFF_MIN_MILLIS;
-                }
                 if (needsSnapshot) {
                     resnapshot();
                     needsSnapshot = false;
+                }
+                if (store.loadPendingAcks() != null) {
+                    deliverPending();
+                    backoff = BACKOFF_MIN_MILLIS;
                 }
                 StreamOutcome outcome = stream(stop);
                 if (outcome.frames() > 0) {
@@ -386,7 +386,8 @@ public final class CpSseClient {
                 && prior != null
                 && prior.sequence() == frame.sequence) return false;
         if (store.loadPendingAcks() == null) {
-            store.savePendingAcks(consumer.onFrame(data), 0);
+            List<CpAck> acks = consumer.onFrame(data);
+            store.savePendingAcks(acks, 0, consumer.hasLiveHook(acks.get(0)));
         }
         deliverPending();
         return true;
@@ -398,6 +399,26 @@ public final class CpSseClient {
         List<CpAck> acks = pending.acks();
         CpAck first = acks.get(0);
         CpAck finalAck = acks.get(acks.size() - 1);
+        if (pending.hadHook()
+                && finalAck.state == CpAck.State.EFFECTIVE
+                && !consumer.hasLiveHook(first)) {
+            CpAck unknown =
+                    new CpAck(
+                            finalAck.epoch,
+                            finalAck.sequence,
+                            finalAck.generation,
+                            finalAck.revision,
+                            finalAck.payloadHash,
+                            CpAck.State.UNKNOWN,
+                            OffsetDateTime.now(clock),
+                            CpAck.Result.EFFECT_UNCERTAIN,
+                            null,
+                            finalAck.operationId);
+            acks = new java.util.ArrayList<>(acks);
+            acks.set(acks.size() - 1, unknown);
+            store.savePendingAcks(acks, pending.sent(), false);
+            finalAck = unknown;
+        }
         int sent = pending.sent();
         try {
             for (; sent < acks.size(); sent++) {

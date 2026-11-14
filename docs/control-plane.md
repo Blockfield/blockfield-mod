@@ -15,14 +15,14 @@ For each `control` SSE frame at `(epoch, sequence, operationId)`, `CpConsumer.on
 2. **Operation timeout closure (`cpv2`)**: timed-out operations in `accepted`, `received`, `validated`, or `applied` expire lazily on read when outbox rows exist, and fallback `unknown` (`effect_uncertain`) receipts clamp consumer clock skew rather than failing `422 receipt_time`.
 3. **Local cursor (`CpSseClient.dispatch`)**: `store.saveCursorIfForward` never advances past `sequence` until CP returns `200` for a terminal state (`effective`, `rejected`, or fallback `unknown`).
 
-The client stores the exact ack bodies and progress before posting, and retries unfinished chains with bounded backoff before reconnecting or taking a snapshot. After a restart it resumes from the stored progress; exact duplicate posts cover a lost HTTP response. A redelivery already settled locally does not apply the operation or complete its hook again.
+The client stores the exact ack bodies and progress before posting, and retries unfinished chains with bounded backoff and resnapshots before retrying after a conflict. After a restart it resumes from the stored progress; exact duplicate posts cover a lost HTTP response. A redelivery already settled locally does not apply the operation or complete its hook again.
 
 ## 2. HTTP Status Classification (`POST /v2/agents/{agentId}/acks`)
 
 | Status | Meaning on `cpv2` | Consumer / Client Action | Hook Outcome | Cursor (CP & Local) |
 | :--- | :--- | :--- | :--- | :--- |
 | `200` | Transition accepted | Continue chain; on final ack save cursor then call `ackAccepted(finalAck)` | Succeeds **only** if `finalAck.state == EFFECTIVE`; `REJECTED`/`UNKNOWN` fails the hook | Both advance to `sequence` |
-| `409` | Stale cursor, generation, or transition (`receipt_terminal`, `receipt_gap`, etc.) | Back off and retry the saved chain | Stays pending | Unchanged |
+| `409` | Stale cursor, generation, or transition (`receipt_terminal`, `receipt_gap`, etc.) | Resnapshot, discard a superseded chain, otherwise retry it | Fails if superseded; otherwise stays pending | Snapshot baseline |
 | `400` / `404` / `422` | Permanent validation rejection (`invalid_request`, `receipt_time`, field/route error) | Demote durable `EFFECTIVE` -> `UNKNOWN`; see Section 3 | Fails with `CpAckRejectedException` once terminal (or stays pending across transient fallback retries) | Advance only once fallback `unknown` returns `200` |
 | `408` / `429` / `5xx` / other `4xx` / I/O | Transient timeout, rate limit, auth hiccup, or server error | Back off and retry the saved chain locally before reconnecting | Stays pending | Unchanged |
 
@@ -46,4 +46,6 @@ Post-ack hooks (`CompletableFuture<CpAck>` for `workshop.game`) are keyed by ful
 
 - **Terminal non-effective settlement**: `ackAccepted` receives `UNKNOWN`/`REJECTED` (failing with the stored `CpAckRejectedException` when from fallback, or `IllegalStateException` otherwise).
 - **Permanent rejection without retryable fallback**: `ackFailed` receives `CpAckRejectedException`.
-- **Superseded or shutdown**: `onSnapshot` changes `epoch` or moves `cursor >= sequence`; `onFrame` accepts a different `operationId` at `<= sequence` or sees cursor past it; `ackAccepted` settles at `>= sequence`; or `close()` shuts down the consumer (preferring any stored `CpAckRejectedException` over `CpResyncException`).
+- **Superseded or shutdown**: `onSnapshot` changes `epoch` or `generation` or moves `cursor >= sequence`; `onFrame` accepts a different `operationId` at `<= sequence` or sees cursor past it; `ackAccepted` settles at `>= sequence`; or `close()` shuts down the consumer (preferring any stored `CpAckRejectedException` over `CpResyncException`).
+
+After restart, a pending action whose post-ack hook was lost is settled as `unknown` / `effect_uncertain`.
