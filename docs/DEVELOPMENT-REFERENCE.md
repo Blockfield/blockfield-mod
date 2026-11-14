@@ -34,7 +34,9 @@ submodules в `localmods/` workspace. Правка коммитится в `main
 
 **Артефакты.** Два jar'а с одним mod id `blockfield`: `blockfield-client` (environment client,
 собирается здесь) и `blockfield-server` (environment server, собирается в `blockfield-server/mod-server`
-из тех же `common`-источников по закреплённому тегу). Серверные команды ниже (`:server:…`,
+из тех же `common`-источников по закреплённому тегу; версия геймплея читается
+из `blockfield-server/distribution/gameplay.lock.json`, когда лок есть, иначе
+из `mod_version` в `blockfield-server/mod-server/gradle.properties`). Серверные команды ниже (`:server:…`,
 `server/build/…`) выполняются из `blockfield-server/mod-server` (тот же Gradle-проект,
 модуль `server/` переехал туда целиком); клиентские — отсюда. `common` — не мод: его классы и ресурсы копируются в оба jar'а
 (`jar { from project(':common')... }`). Клиент и сервер никогда не стоят вместе.
