@@ -72,6 +72,39 @@ class CpConsumerTest {
     }
 
     @Test
+    void sectionNamespacesApply() {
+        JsonObject rooms = new JsonObject();
+        rooms.addProperty("maxRooms", 8);
+        List<CpAck> applied = consumer.onFrame(settingsFrameNs(42, 42, "rooms", rooms, false));
+
+        assertEquals(1, applier.calls.size());
+        assertEquals(CpAck.State.EFFECTIVE, applied.get(applied.size() - 1).state);
+        assertEquals(42, store.loadLkg("rooms", "*").revision());
+    }
+
+    @Test
+    void gateFramesStaySkipped() {
+        // Settings frames never advance the cursor (actions do), so each
+        // namespace rides its own fresh consumer at cursor + 1.
+        List<CpAck> gate =
+                consumer.onFrame(settingsFrameNs(42, 42, "gate", gameplayValue(false), false));
+
+        assertEquals(CpAck.State.REJECTED, gate.get(gate.size() - 1).state);
+        assertEquals(CpAck.Result.INVALID_SCHEMA, gate.get(gate.size() - 1).result);
+        assertEquals(0, applier.calls.size());
+    }
+
+    @Test
+    void aiLimitsFramesStaySkipped() {
+        List<CpAck> aiLimits =
+                consumer.onFrame(settingsFrameNs(42, 42, "ai-limits", gameplayValue(false), false));
+
+        assertEquals(CpAck.State.REJECTED, aiLimits.get(aiLimits.size() - 1).state);
+        assertEquals(CpAck.Result.INVALID_SCHEMA, aiLimits.get(aiLimits.size() - 1).result);
+        assertEquals(0, applier.calls.size());
+    }
+
+    @Test
     void expiredFrameNeverExecutes() {
         List<CpAck> acks =
                 consumer.onFrame(
@@ -1023,8 +1056,12 @@ class CpConsumerTest {
     }
 
     private JsonObject settingsPayload(JsonObject value, boolean invalid) {
+        return settingsPayloadNs(value, "gameplay", invalid);
+    }
+
+    private JsonObject settingsPayloadNs(JsonObject value, String namespace, boolean invalid) {
         JsonObject payload = new JsonObject();
-        payload.addProperty("namespace", "gameplay");
+        payload.addProperty("namespace", namespace);
         payload.addProperty("target", "*");
         if (invalid) value.addProperty("unknownKey", true);
         payload.add("value", value);
@@ -1032,13 +1069,21 @@ class CpConsumerTest {
     }
 
     private String settingsFrame(long sequence, long revision, JsonObject value, boolean invalid) {
-        return settingsFrame(
+        return settingsFrameNs(sequence, revision, "gameplay", value, invalid);
+    }
+
+    private String settingsFrameNs(
+            long sequence, long revision, String namespace, JsonObject value, boolean invalid) {
+        return frame(
                 EPOCH,
                 sequence,
+                settingsPayloadNs(value, namespace, invalid),
                 revision,
-                value,
-                invalid,
-                OffsetDateTime.now(CLOCK).plusMinutes(5));
+                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                true,
+                null,
+                GENERATION,
+                AUDIENCE);
     }
 
     private String settingsFrame(
