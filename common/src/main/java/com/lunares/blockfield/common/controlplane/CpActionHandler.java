@@ -50,16 +50,18 @@ public interface CpActionHandler {
     /**
      * One Workshop game lifecycle action ({@code workshop.game}): {@code gameOp} is one of {@code
      * save-flush}, {@code save-off}, {@code save-on}, {@code stop}, or {@code export-limbo}; {@code
-     * job} is the export job UUID for {@code export-limbo} and empty otherwise. {@code acked}
-     * completes with the final {@link CpAck} once any delivery (initial attempt or retry, including
-     * after SSE reconnect or resync replay) is accepted by the control plane and the cursor has
-     * been saved, or completes exceptionally only on a terminal outcome: frame superseded (by a
-     * different frame/ack at the same sequence, cursor advancement, or resnapshot) or discarded,
-     * permanent HTTP 400/404/422 ack rejection (whether settled as {@code unknown} or triggering
-     * resync), or consumer shutdown. Handlers must not block on {@code acked} synchronously inside
-     * this method (acks are posted only after it returns); attach non-blocking continuations such
-     * as {@code whenComplete} (optionally with {@code orTimeout}). Without an override, Workshop
-     * game actions are not supported.
+     * job} is the export job UUID for {@code export-limbo} and empty otherwise. {@code acked} stays
+     * pending across every transient delivery failure (including HTTP 5xx, {@code 408}/{@code 429},
+     * {@code 401}/{@code 403}, IO/timeouts, {@code 409} resync, and transient failure of a fallback
+     * {@code unknown} ack) and resolves only on a control-plane-recorded terminal outcome for that
+     * exact {@code operationId}: completes normally only when CP accepted {@link
+     * CpAck.State#EFFECTIVE} and the local cursor has been saved, or completes exceptionally on
+     * CP-settled {@code rejected}/{@code unknown}, permanent HTTP 400/404/422 ack rejection, frame
+     * supersede (different frame/cursor advance/resnapshot past the sequence), or consumer
+     * shutdown. Handlers must not block on {@code acked} synchronously inside this method (acks are
+     * posted only after it returns); attach non-blocking continuations such as {@code whenComplete}
+     * (optionally with {@code orTimeout}). Without an override, Workshop game actions are not
+     * supported.
      */
     default CpApplier.Outcome handleWorkshopGame(
             String target, String gameOp, String job, CompletableFuture<CpAck> acked) {

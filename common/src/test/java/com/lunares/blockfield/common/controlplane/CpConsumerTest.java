@@ -1384,6 +1384,91 @@ class CpConsumerTest {
                                 workshopGameFrame("op-wg-late", "workshop", "stop", null)));
     }
 
+    @Test
+    void ackAcceptedFailsPendingHookUnlessFinalStateIsEffective() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        actions.next = CpApplier.Outcome.rejected(CpAck.Result.APPLY_FAILED, "refused");
+        List<CpAck> rejected =
+                withActions.onFrame(workshopGameFrame("op-wg-rej", "workshop", "stop", null));
+        CompletableFuture<CpAck> rejHook = actions.lastAckHook;
+        withActions.ackAccepted(last(rejected));
+        assertTrue(rejHook.isCompletedExceptionally());
+        commit(rejected);
+
+        CpActionHandler throwing =
+                new CpActionHandler() {
+                    @Override
+                    public CpApplier.Outcome handleAction(
+                            String kind, String target, String playerId, String reason) {
+                        return CpApplier.Outcome.rejected(
+                                CpAck.Result.INVALID_SCHEMA, "unexpected");
+                    }
+
+                    @Override
+                    public CpApplier.Outcome handleWorkshopGame(
+                            String target,
+                            String gameOp,
+                            String job,
+                            CompletableFuture<CpAck> acked) {
+                        actions.lastAckHook = acked;
+                        throw new IllegalStateException("boom");
+                    }
+                };
+        CpConsumer throwingConsumer = new CpConsumer(store, applier, throwing, CLOCK, AUDIENCE);
+        throwingConsumer.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        JsonObject stopPayload = new JsonObject();
+        stopPayload.addProperty("kind", "workshop.game");
+        stopPayload.addProperty("target", "workshop");
+        stopPayload.addProperty("gameOp", "stop");
+        List<CpAck> uncertain =
+                throwingConsumer.onFrame(
+                        frameWithOp(
+                                EPOCH,
+                                43,
+                                "op-wg-boom",
+                                stopPayload,
+                                null,
+                                OffsetDateTime.now(CLOCK).plusMinutes(5),
+                                true,
+                                null,
+                                GENERATION,
+                                AUDIENCE));
+        CompletableFuture<CpAck> uncHook = actions.lastAckHook;
+        throwingConsumer.ackAccepted(last(uncertain));
+        assertTrue(uncHook.isCompletedExceptionally());
+    }
+
+    @Test
+    void ackFailedRejectionDemotesEffectiveSoReplayNeverEmitsEffective() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        String frame = workshopGameFrame("op-wg-demote", "workshop", "stop", null);
+        withActions.onFrame(frame);
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
+
+        withActions.ackFailed(
+                UUID.fromString(EPOCH),
+                42,
+                "op-wg-demote",
+                new CpAckRejectedException(422, "receipt_time"));
+        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
+        assertInstanceOf(CpAckRejectedException.class, thrown.getCause());
+        assertTrue(withActions.needsOperator());
+        CpStore.Terminal stored = store.lastTerminal(EPOCH, "op-wg-demote");
+        assertNotNull(stored);
+        assertEquals(CpAck.State.UNKNOWN, stored.state());
+
+        List<CpAck> replayed = withActions.onFrame(frame);
+        assertEquals(1, replayed.size());
+        assertEquals(CpAck.State.UNKNOWN, replayed.get(0).state);
+        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, replayed.get(0).result);
+    }
+
     private String workshopGameFrame(String operationId, String target, String gameOp, String job) {
         JsonObject payload = new JsonObject();
         payload.addProperty("kind", "workshop.game");

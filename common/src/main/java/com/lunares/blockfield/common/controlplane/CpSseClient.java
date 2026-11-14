@@ -375,18 +375,21 @@ public final class CpSseClient {
      *
      * <ul>
      *   <li>{@code 409}: drops this chain and re-syncs from the snapshot on the next pass: the
-     *       durable terminal decision stays stored, so any replay re-posts it instead of re-running
+     *       durable terminal decision stays stored (and CP never advances its cursor past a
+     *       non-terminal operation), so any replay re-posts the settled outcome without re-running
      *       non-idempotent actions.
-     *   <li>{@code 400}/{@code 404}/{@code 422} on a post-{@code received} ack (when the server
-     *       already accepted {@code received} and advanced {@code received_cursor}): attempts one
-     *       fallback {@code unknown} ({@code effect_uncertain}, no {@code output}) ack so the row
-     *       does not stay stranded in {@code received}/{@code validated}/{@code applied}. If the
-     *       fallback returns {@code 200}, the consumer records {@code UNKNOWN}, fails the post-ack
-     *       hook with the rejection, and only then saves the local cursor.
-     *   <li>{@code 400}/{@code 404}/{@code 422} on the initial ack (before {@code received}), on an
-     *       {@code unknown} ack, or when the fallback {@code unknown} itself fails: fails the hook
-     *       without advancing the local cursor and triggers a resync ({@link CpResyncException}) so
-     *       the frame is never silently skipped.
+     *   <li>{@code 400}/{@code 404}/{@code 422} after {@code received} was accepted: demotes the
+     *       durable record to {@code UNKNOWN} ({@code effect_uncertain}) with the hook still
+     *       pending and posts one fallback {@code unknown} ack. If accepted ({@code 200}), saves
+     *       the local cursor and fails the hook via {@link CpConsumer#ackAccepted}; if fallback
+     *       transiently fails (e.g. {@code 5xx}/IO/{@code 401}/{@code 403}/{@code 408}/{@code
+     *       429}/{@code 409}), keeps the hook pending and retries {@code unknown}; if fallback
+     *       itself is rejected with {@code 400}/{@code 404}/{@code 422}, fails the hook and
+     *       triggers resync.
+     *   <li>{@code 400}/{@code 404}/{@code 422} on the initial ack (before {@code received}) or on
+     *       an {@code unknown} ack: demotes any stored {@code effective} record to {@code unknown},
+     *       fails the hook without advancing the local cursor, and triggers resync ({@link
+     *       CpResyncException}) so redelivery never posts {@code effective} without a hook.
      *   <li>Retryable errors ({@code 408}/{@code 429}/{@code 5xx}/other {@code 4xx}/IO): leave the
      *       hook pending and retry with backoff from the unchanged local cursor.
      * </ul>
@@ -398,26 +401,25 @@ public final class CpSseClient {
         List<CpAck> acks = consumer.onFrame(data);
         CpAck first = acks.get(0);
         CpAck last = acks.get(acks.size() - 1);
+        CpAck finalAck = last;
         int sent = 0;
         try {
             for (; sent < acks.size(); sent++) {
                 postAck(acks.get(sent));
             }
-            store.saveCursorIfForward(first.epoch.toString(), first.sequence);
         } catch (CpAckRejectedException terminal) {
-            return handleRejectedAck(first, acks.get(sent), sent > 0, terminal);
-        } catch (Throwable failure) {
-            consumer.ackFailed(first.epoch, first.sequence, first.operationId, failure);
-            throw failure;
+            finalAck = handleRejectedAck(first, acks.get(sent), sent > 0, terminal);
         }
-        consumer.ackAccepted(last);
+        store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+        consumer.ackAccepted(finalAck);
         return true;
     }
 
-    private boolean handleRejectedAck(
+    private CpAck handleRejectedAck(
             CpAck first, CpAck failed, boolean receivedAccepted, CpAckRejectedException terminal)
             throws IOException, InterruptedException {
         if (receivedAccepted && failed.state != CpAck.State.UNKNOWN) {
+            consumer.markFallbackUnknown(first.epoch, first.sequence, first.operationId, terminal);
             CpAck fallback =
                     new CpAck(
                             failed.epoch,
@@ -442,17 +444,12 @@ public final class CpSseClient {
                                 + fallbackRejected.statusCode()
                                 + "), resyncing",
                         terminal);
-            } catch (Throwable failure) {
-                consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
-                throw failure;
             }
-            consumer.ackSettledUnknown(first.epoch, first.sequence, first.operationId, terminal);
             reporter.warn(
                     "control-plane ack rejected after received, settled as unknown: "
                             + terminal.getMessage(),
                     terminal);
-            store.saveCursorIfForward(first.epoch.toString(), first.sequence);
-            return true;
+            return fallback;
         }
         consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
         throw new CpResyncException(
@@ -470,9 +467,11 @@ public final class CpSseClient {
      *   <li>{@code 409}: stale cursor, generation, or transition ({@link CpResyncException}), drops
      *       the chain and re-syncs.
      *   <li>{@code 400}, {@code 404}, {@code 422}: validation rejection ({@link
-     *       CpAckRejectedException}). Fails the hook; if {@code received} was already accepted, the
-     *       dispatcher attempts one fallback {@code unknown} ack before saving the cursor,
-     *       otherwise it triggers a resync without advancing the cursor.
+     *       CpAckRejectedException}). Demotes any durable {@code effective} record to {@code
+     *       unknown}; if {@code received} was already accepted, attempts fallback {@code unknown}
+     *       (keeping the hook pending across transient fallback failures until CP records a
+     *       terminal outcome), otherwise triggers resync and fails the hook without advancing the
+     *       cursor.
      *   <li>{@code 408}, {@code 429}, {@code 5xx}, any other {@code 4xx} (including transient
      *       {@code 401}/{@code 403}), IO and timeouts: retryable, the hook stays pending.
      * </ul>

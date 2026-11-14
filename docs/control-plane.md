@@ -1,57 +1,47 @@
 # Control Plane Consumer & Ack Terminal Contract (`cpv2`)
 
-This document specifies the ack delivery, cursor advancement, post-ack hook, and terminal failure-recovery contract implemented by `CpConsumer`, `CpSseClient`, and `CpStore` (`com.lunares.blockfield.common.controlplane`) against `Blockfield/blockfield-control-plane` (`cpv2`).
+This document specifies the end-to-end delivery, cursor advancement, post-ack hook, and terminal settlement contract between `Blockfield/blockfield-control-plane` (`cpv2`) and `CpConsumer` / `CpSseClient` / `CpStore` (`com.lunares.blockfield.common.controlplane`).
 
-## 1. Ack Chain and Cursor Invariant
+## 1. Unified Terminal Contract (`cpv2` + Consumer)
 
-For each `control` SSE frame at `(epoch, sequence, operationId)`, `CpConsumer.onFrame` records durable execution state in `CpStore` (`state.json`) and returns an ordered list of `CpAck` bodies to `POST /v2/agents/{agentId}/acks`:
+For each `control` SSE frame at `(epoch, sequence, operationId)`, `CpConsumer.onFrame` persists the execution verdict in `CpStore` (`state.json`) and returns the `CpAck` chain to `POST /v2/agents/{agentId}/acks`:
 
-- **Settings / Effective Actions**: `received` -> `validated` -> `applied` -> `effective` (`output` carried on the final `effective` ack only when applicable).
+- **Settings / Effective Actions**: `received` -> `validated` -> `applied` -> `effective` (`output` on `effective` only when applicable).
 - **Non-executable / Expired / Malformed / Rejected Actions**: `received` -> `rejected`.
-- **Crash-started Non-idempotent Action / Effect Uncertain**: `unknown` (`effect_uncertain`).
+- **Uncertain Effect / Fallback Recovery**: `unknown` (`effect_uncertain`).
 
-**Cursor Invariant (`CpSseClient.dispatch`)**:
-The local cursor (`store.saveCursorIfForward`) MUST NEVER advance past `sequence` unless the control plane has returned `HTTP 200` for a terminal state (`effective`, `rejected`, or fallback `unknown`).
+**Server & Client Cursor Invariants**:
+1. **Terminal-only cursor (`cpv2`)**: `consumers.received_cursor` (reported by `GET /snapshot` and enforced by `/events` + `Last-Event-ID`) advances only across contiguous sequences with a **terminal** receipt (`effective`, `rejected`, or `unknown`), never on `received`/`validated`/`applied`. Any resnapshot or SSE reconnect while an operation is non-terminal redelivers that operation.
+2. **Operation timeout closure (`cpv2`)**: timed-out operations in `accepted`, `received`, `validated`, or `applied` expire lazily on read when outbox rows exist, and fallback `unknown` (`effect_uncertain`) receipts clamp consumer clock skew rather than failing `422 receipt_time`.
+3. **Local cursor (`CpSseClient.dispatch`)**: `store.saveCursorIfForward` never advances past `sequence` until CP returns `200` for a terminal state (`effective`, `rejected`, or fallback `unknown`).
 
 ## 2. HTTP Status Classification (`POST /v2/agents/{agentId}/acks`)
 
-| Status | Meaning on `cpv2` | Consumer / Client Action | Hook Outcome | Local Cursor |
+| Status | Meaning on `cpv2` | Consumer / Client Action | Hook Outcome | Cursor (CP & Local) |
 | :--- | :--- | :--- | :--- | :--- |
-| `200` | Transition accepted | Continue chain; on final ack call `ackAccepted(last)` | Completes normally with final `CpAck` | Saved (`sequence`) |
-| `409` | Stale cursor, generation mismatch, or invalid state transition (e.g. `rejected` after `applied`, or `receipt_terminal`) | Drop remaining chain, throw `CpResyncException` -> backoff + `GET /snapshot` | Stays pending (retried on replay; failed if snapshot moves past `sequence` or changes epoch) | Unchanged |
-| `400` / `404` / `422` | Validation rejection (`invalid_request`, `receipt_time`, missing/malformed field, route mismatch) | See Section 3 (`handleRejectedAck`) | Fails with `CpAckRejectedException` | Only advances if fallback `unknown` returns `200` |
-| `408` / `429` / `5xx` / other `4xx` / I/O | Transient timeout, rate limit, auth hiccup, or server error | Throw `IOException` -> backoff + reconnect (`/events` replays from unchanged local cursor) | Stays pending | Unchanged |
+| `200` | Transition accepted | Continue chain; on final ack save cursor then call `ackAccepted(finalAck)` | Succeeds **only** if `finalAck.state == EFFECTIVE`; `REJECTED`/`UNKNOWN` fails the hook | Both advance to `sequence` |
+| `409` | Stale cursor, generation, or transition (`receipt_terminal`, `receipt_gap`, etc.) | Drop chain, throw `CpResyncException` -> backoff + `GET /snapshot` | Stays pending (redelivered if CP cursor `< sequence`; failed as superseded if CP cursor `>= sequence` or epoch changed) | Unchanged |
+| `400` / `404` / `422` | Permanent validation rejection (`invalid_request`, `receipt_time`, field/route error) | Demote durable `EFFECTIVE` -> `UNKNOWN`; see Section 3 | Fails with `CpAckRejectedException` once terminal (or stays pending across transient fallback retries) | Advance only once fallback `unknown` returns `200` |
+| `408` / `429` / `5xx` / other `4xx` / I/O | Transient timeout, rate limit, auth hiccup, or server error | Propagate `IOException` -> backoff + reconnect (`/events` replays from unchanged cursor) | Stays pending | Unchanged |
 
-## 3. Terminal Rejection Recovery Path (`400` / `404` / `422`)
-
-Because `cpv2` (`cpv2/delivery.py`) advances `consumers.received_cursor = sequence` immediately when `received` returns `200`, rejecting a later ack in the same chain leaves the server cursor ahead of the unsettled row. `CpSseClient.handleRejectedAck` handles `CpAckRejectedException` in two cases:
+## 3. Terminal Rejection Recovery (`400` / `404` / `422`)
 
 1. **Rejected AFTER `received` was accepted (`failedIndex > 0` and `failed.state != UNKNOWN`)**:
-   - Example: `effective` or `rejected` fails schema/size/time validation (such as `output` rejected by an older CP schema or unexpected field) after `received`/`validated`/`applied` already returned `200`.
-   - The client posts one fallback terminal ack: `state = unknown`, `result = effect_uncertain`, `output = null`, fresh `actualAt = OffsetDateTime.now(clock)`.
-   - If CP returns `200`: `consumer.ackSettledUnknown` overwrites the durable terminal record in `CpStore` to `UNKNOWN`/`EFFECT_UNCERTAIN` (`needsOperator()` becomes `true` and crash-replay will repost `unknown`), fails the post-ack hook with the `CpAckRejectedException`, and only then advances `store.saveCursorIfForward(epoch, sequence)`.
-   - If the fallback `unknown` also returns `400`/`404`/`422`: the fallback exception is attached as suppressed on the primary `CpAckRejectedException`, the hook fails via `ackFailed`, the local cursor is **not** advanced, and `CpResyncException` is thrown to backoff + `GET /snapshot`.
-   - If the fallback `unknown` throws `409` or `IOException`: the hook fails via `ackFailed`, the local cursor is **not** advanced, and the exception propagates (`resync` on `409`, reconnect backoff on `IOException`).
+   - Before posting fallback, `consumer.markFallbackUnknown` demotes `CpStore` to `UNKNOWN`/`EFFECT_UNCERTAIN` (`needsOperator() = true`) and attaches the `CpAckRejectedException` to the still-pending hook so replay never emits `effective` or `received` (`409 receipt_conflict`).
+   - Client posts fallback `state = unknown`, `result = effect_uncertain`, `output = null`.
+   - **`200`**: `dispatch` saves the local cursor and `consumer.ackAccepted(fallback)` fails the pending hook with the original `CpAckRejectedException`.
+   - **Transient failure (`5xx`, timeout, I/O, `401`/`403`/`408`/`429`, `409` resync)**: propagates out with the hook still pending and cursor unchanged (`< sequence`). Because CP's `received_cursor` also did not pass the non-terminal row, reconnect or resnapshot redelivers the frame, `CpConsumer.onFrame` reposts `[unknown]`, and once `200` arrives `ackAccepted(unknown)` fails the still-pending hook with the stored `CpAckRejectedException`.
+   - **Terminal failure on fallback (`400`/`404`/`422`)**: attaches fallback rejection as suppressed, calls `consumer.ackFailed` (failing the hook), leaves cursor unchanged, and throws `CpResyncException`.
 
-2. **Rejected BEFORE `received` (`failedIndex == 0`) or on an `UNKNOWN` ack itself**:
-   - CP has not recorded any state transition (`received_cursor` did not move).
-   - Wait/advance is unsafe: `consumer.ackFailed` fails the post-ack hook with `CpAckRejectedException`, the local cursor is **not** saved, and `CpSseClient` throws `CpResyncException` so `runLoop` backs off and runs `GET /snapshot` before resuming `/events`.
+2. **Rejected BEFORE `received` (`failedIndex == 0`) or on `UNKNOWN`**:
+   - CP has not recorded a terminal state (cursor stays behind `sequence`).
+   - `consumer.ackFailed` demotes any durable `EFFECTIVE` state in `CpStore` to `UNKNOWN`/`EFFECT_UNCERTAIN` and fails the pending hook with `CpAckRejectedException`.
+   - Client leaves local cursor unchanged and throws `CpResyncException` so `GET /snapshot` + `/events` redelivers the non-terminal operation as `[unknown]`—never re-sending `effective` without a hook.
 
 ## 4. Post-Ack Hook Identity & Supersede Rules (`CpConsumer`)
 
-Post-ack hooks (`CompletableFuture<CpAck>` for `workshop.game`) are keyed by full frame identity `(epoch, sequence, operationId)` so an ack for another operation at the same sequence can never complete a hook by accident.
+Post-ack hooks (`CompletableFuture<CpAck>` for `workshop.game`) are keyed by full frame identity `(epoch, sequence, operationId)` so an ack for another operation at the same sequence can never settle a hook by accident. A hook succeeds only when CP returns `200` for `effective` on that exact `operationId`, stays pending across every transient failure (including fallback `unknown` retries), and fails immediately (outside the consumer lock) when:
 
-A pending hook fails immediately (outside the consumer lock) with `CpResyncException` whenever CP or local state moves past it or replaces its slot:
-
-- **Resnapshot**: `onSnapshot` moves to a new `epoch` or sets `cursor >= entry.sequence()`.
-- **Frame dispatch**: `onFrame` accepts a valid non-gap frame with a different `operationId` at the same `(epoch, sequence)`, or sees the stored cursor has already passed/reached an earlier pending entry (`entry.sequence() < frame.sequence`, or `entry.sequence() <= cursor.sequence()` excluding a replay of the same operation).
-- **Accepted / settled ack**: `ackAccepted` or `ackSettledUnknown` completes for `(epoch, sequence, operationId)` and discards every other pending entry in `epoch` with `entry.sequence() < sequence` or `(entry.sequence() == sequence && !Objects.equals(entry.operationId(), operationId))`.
-- **Consumer shutdown**: `close()` fails all remaining hooks with `IllegalStateException`.
-
-## 5. Known Control-Plane (`cpv2`) Server Gaps Observed
-
-When auditing `Blockfield/blockfield-control-plane` (`next`, `cpv2`), three server-side gaps affect `400`/`404`/`422` recovery and should be tracked on CP:
-
-1. **`received_cursor` advances on `received` before a terminal ack**: `cpv2/delivery.py` sets `consumers.received_cursor = sequence` upon `state == 'received'`. If the consumer subsequently fails to deliver `unknown` (e.g. process crash or second `422`), `GET /snapshot` already reports `cursor = sequence` and `/events` will not redeliver that operation.
-2. **`applied` operations never expire on timeout**: `cpv2/core.py:read_operation` expires timed-out operations only when `state` is in `('accepted', 'received', 'validated')`; an operation stranded in `'applied'` remains non-terminal until reconciled or settled via `unknown`.
-3. **Clock-skew `422 receipt_time` blocks fallback `unknown`**: `cpv2/delivery.py` returns `422 receipt_time` when `actualAt > now() + 5s` or `actualAt < created_at`, which can also reject a fallback `unknown` ack built from a forward-skewed game host clock.
+- **Terminal non-effective settlement**: `ackAccepted` receives `UNKNOWN`/`REJECTED` (failing with the stored `CpAckRejectedException` when from fallback, or `IllegalStateException` otherwise).
+- **Permanent rejection without retryable fallback**: `ackFailed` receives `CpAckRejectedException`.
+- **Superseded or shutdown**: `onSnapshot` changes `epoch` or moves `cursor >= sequence`; `onFrame` accepts a different `operationId` at `<= sequence` or sees cursor past it; `ackAccepted` settles at `>= sequence`; or `close()` shuts down the consumer (preferring any stored `CpAckRejectedException` over `CpResyncException`).

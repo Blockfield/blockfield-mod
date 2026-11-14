@@ -15,6 +15,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Pattern;
 
 /**
@@ -149,7 +150,15 @@ public final class CpConsumer {
     private record PendingKey(UUID epoch, long sequence, String operationId) {}
 
     private record PendingAck(
-            UUID epoch, long sequence, String operationId, CompletableFuture<CpAck> future) {
+            UUID epoch,
+            long sequence,
+            String operationId,
+            CompletableFuture<CpAck> future,
+            AtomicReference<CpAckRejectedException> rejection) {
+        PendingAck(UUID epoch, long sequence, String operationId, CompletableFuture<CpAck> future) {
+            this(epoch, sequence, operationId, future, new AtomicReference<>());
+        }
+
         PendingKey key() {
             return new PendingKey(epoch, sequence, operationId);
         }
@@ -403,13 +412,16 @@ public final class CpConsumer {
     }
 
     /**
-     * Notify the consumer that the control plane accepted the final ack for a frame (and the cursor
-     * was saved), completing any handler post-ack hook. Matching is by the full frame identity
+     * Notify the consumer that the control plane accepted a terminal ack for a frame (and the
+     * cursor was saved), settling any handler post-ack hook. Matching is by the full frame identity
      * (epoch, sequence, operationId): an ack for another operation reissued at the same sequence
      * never completes this frame's hook, and instead fails it as superseded along with any pending
-     * hooks behind the accepted sequence in the same epoch. Unknown frames are ignored, so a
-     * replayed receipt never completes a hook twice. Safe to call from any thread; completions run
-     * outside the consumer lock.
+     * hooks behind the accepted sequence in the same epoch. The hook completes normally only when
+     * CP accepted {@link CpAck.State#EFFECTIVE}; {@link CpAck.State#UNKNOWN} or {@link
+     * CpAck.State#REJECTED} fails the hook (with the originating permanent rejection when settled
+     * via fallback {@code unknown}). Unknown frames are ignored, so a replayed receipt never
+     * settles a hook twice. Safe to call from any thread; completions run outside the consumer
+     * lock.
      */
     public void ackAccepted(CpAck finalAck) {
         Objects.requireNonNull(finalAck, "finalAck");
@@ -424,7 +436,17 @@ public final class CpConsumer {
                     removeSupersededLocked(finalAck.epoch, finalAck.sequence, finalAck.operationId);
         }
         if (matched != null) {
-            matched.future().complete(finalAck);
+            if (finalAck.state == CpAck.State.EFFECTIVE) {
+                matched.future().complete(finalAck);
+            } else {
+                CpAckRejectedException cause = matched.rejection().get();
+                Throwable outcome =
+                        cause != null
+                                ? cause
+                                : new IllegalStateException(
+                                        "control-plane settled as " + finalAck.state);
+                matched.future().completeExceptionally(outcome);
+            }
         }
         failAll(
                 superseded,
@@ -433,66 +455,66 @@ public final class CpConsumer {
     }
 
     /**
-     * Record a frame as {@link CpAck.State#UNKNOWN} after the control plane accepted a fallback
-     * {@code unknown} ack following a permanent rejection (400/404/422) on a post-{@code received}
-     * state, fail the handler's post-ack hook with the rejection that prevented normal completion,
-     * and supersede any pending hooks at or behind {@code sequence} in the same epoch.
+     * Demote a frame's durable record to {@link CpAck.State#UNKNOWN} ({@code effect_uncertain})
+     * before posting a fallback {@code unknown} ack, keeping any handler post-ack hook pending with
+     * {@code error} attached so retries replay {@code unknown} (never {@code effective}) and only
+     * fail the hook once the control plane records a terminal outcome.
      */
-    void ackSettledUnknown(
+    void markFallbackUnknown(
             UUID epoch, long sequence, String operationId, CpAckRejectedException error) {
         Objects.requireNonNull(epoch, "epoch");
         Objects.requireNonNull(error, "error");
-        PendingAck matched;
-        List<PendingAck> superseded;
         synchronized (lock) {
-            if (operationId != null) {
-                store.recordTerminal(
-                        epoch.toString(),
-                        operationId,
-                        sequence,
-                        CpAck.State.UNKNOWN,
-                        CpAck.Result.EFFECT_UNCERTAIN,
-                        null);
+            demoteUncertainLocked(epoch.toString(), operationId, sequence, true);
+            PendingAck pending = pendingAcks.get(new PendingKey(epoch, sequence, operationId));
+            if (pending != null) {
+                pending.rejection().compareAndSet(null, error);
             }
-            matched = pendingAcks.remove(new PendingKey(epoch, sequence, operationId));
-            superseded = removeSupersededLocked(epoch, sequence, operationId);
         }
-        if (matched != null) {
-            matched.future().completeExceptionally(error);
-        }
-        failAll(
-                superseded,
-                new CpResyncException("superseded by settled ack at sequence " + sequence));
     }
 
     /**
      * Notify the consumer that posting acks for {@code epoch}/{@code sequence}/{@code operationId}
      * failed or timed out without settling the row on the control plane. Only a permanent
-     * control-plane rejection ({@link CpAckRejectedException}) fails the handler hook: the terminal
-     * receipt is durable, so a retryable failure (HTTP 5xx, timeout, IO, retryable 4xx, 409 resync)
-     * leaves the hook pending and a later accepted delivery of the replayed receipt completes it.
-     * Unknown frames are ignored.
+     * control-plane rejection ({@link CpAckRejectedException}) demotes durable {@code EFFECTIVE}
+     * state to {@code UNKNOWN} and fails the handler hook: any retryable failure (HTTP 5xx,
+     * timeout, IO, retryable 4xx, 409 resync) leaves the hook pending so a later accepted delivery
+     * of the replayed receipt settles it.
      */
     public void ackFailed(UUID epoch, long sequence, String operationId, Throwable error) {
         Objects.requireNonNull(epoch, "epoch");
-        PendingAck matched = null;
-        Throwable terminal = null;
-        synchronized (lock) {
-            PendingKey key = new PendingKey(epoch, sequence, operationId);
-            if (!pendingAcks.containsKey(key) || !isTerminalRejection(error)) {
-                return;
-            }
-            matched = pendingAcks.remove(key);
-            terminal = error != null ? error : new IllegalStateException("ack delivery failed");
+        if (!(error instanceof CpAckRejectedException rejected)) {
+            return;
         }
-        matched.future().completeExceptionally(terminal);
+        PendingAck matched;
+        synchronized (lock) {
+            demoteUncertainLocked(epoch.toString(), operationId, sequence, false);
+            matched = pendingAcks.remove(new PendingKey(epoch, sequence, operationId));
+        }
+        if (matched != null) {
+            CpAckRejectedException stored = matched.rejection().get();
+            matched.future().completeExceptionally(stored != null ? stored : rejected);
+        }
     }
 
-    /**
-     * Only a permanent control-plane rejection ends the hook; every other delivery failure replays.
-     */
-    private static boolean isTerminalRejection(Throwable error) {
-        return error instanceof CpAckRejectedException;
+    private void demoteUncertainLocked(
+            String epochId, String operationId, long sequence, boolean alwaysRecord) {
+        if (operationId == null) {
+            return;
+        }
+        CpStore.Terminal existing = store.lastTerminal(epochId, operationId);
+        if (alwaysRecord || existing == null || existing.state() == CpAck.State.EFFECTIVE) {
+            store.recordTerminal(
+                    epochId,
+                    operationId,
+                    sequence,
+                    CpAck.State.UNKNOWN,
+                    CpAck.Result.EFFECT_UNCERTAIN,
+                    null);
+        }
+        if (store.isActionStarted(epochId, operationId)) {
+            store.markActionOperatorNeeded(operationId);
+        }
     }
 
     /**
@@ -514,7 +536,8 @@ public final class CpConsumer {
 
     private static void failAll(List<PendingAck> pending, RuntimeException error) {
         for (PendingAck ack : pending) {
-            ack.future().completeExceptionally(error);
+            CpAckRejectedException rejection = ack.rejection().get();
+            ack.future().completeExceptionally(rejection != null ? rejection : error);
         }
     }
 
