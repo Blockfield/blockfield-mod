@@ -11,6 +11,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -71,6 +72,7 @@ public final class CpSseClient {
     private final Clock clock;
     private final HttpClient http;
     private final Duration idleTimeout;
+    private final Duration ackTimeout;
     private final Sleeper sleeper;
 
     private String lastContractMessage;
@@ -109,6 +111,30 @@ public final class CpSseClient {
             Clock clock,
             Duration idleTimeout,
             Sleeper sleeper) {
+        this(
+                baseUrl,
+                agentId,
+                bearer,
+                store,
+                consumer,
+                reporter,
+                clock,
+                idleTimeout,
+                READ_TIMEOUT,
+                sleeper);
+    }
+
+    CpSseClient(
+            String baseUrl,
+            String agentId,
+            String bearer,
+            CpStore store,
+            CpConsumer consumer,
+            Reporter reporter,
+            Clock clock,
+            Duration idleTimeout,
+            Duration ackTimeout,
+            Sleeper sleeper) {
         this.baseUrl = baseUrl;
         this.agentId = agentId;
         this.bearer = bearer;
@@ -117,6 +143,7 @@ public final class CpSseClient {
         this.reporter = reporter;
         this.clock = clock;
         this.idleTimeout = idleTimeout;
+        this.ackTimeout = ackTimeout;
         this.sleeper = sleeper != null ? sleeper : this::sleep;
         this.http =
                 HttpClient.newBuilder()
@@ -153,9 +180,18 @@ public final class CpSseClient {
      * (repeats rate-limited) and retried with backoff, never fatal: the cursor does not advance
      * past it, so it replays until an operator reconciles it. Keep-alive comments refresh liveness:
      * a connection that carried any line resumes without growing the backoff; only a totally silent
-     * close backs off. Returns when stopped.
+     * close backs off. Returns when stopped, closing the consumer so pending post-ack hooks settle
+     * immediately.
      */
     public void run(AtomicBoolean stop) {
+        try {
+            runLoop(stop);
+        } finally {
+            consumer.close();
+        }
+    }
+
+    private void runLoop(AtomicBoolean stop) {
         long backoff = BACKOFF_MIN_MILLIS;
         boolean needsSnapshot = true;
         while (!stop.get()) {
@@ -163,6 +199,10 @@ public final class CpSseClient {
                 if (needsSnapshot) {
                     resnapshot();
                     needsSnapshot = false;
+                }
+                if (store.loadPendingAcks() != null) {
+                    deliverPending();
+                    backoff = BACKOFF_MIN_MILLIS;
                 }
                 StreamOutcome outcome = stream(stop);
                 if (outcome.frames() > 0) {
@@ -333,30 +373,112 @@ public final class CpSseClient {
         return new StreamOutcome(frames, active);
     }
 
-    /**
-     * Post the current ack chain for one frame, then advance the cursor. A 409/stale answer drops
-     * this chain and re-syncs from the snapshot on the next pass: the terminal decision stays
-     * durable, so the replay re-posts it instead of rebuilding chained retries.
-     */
+    /** Persist and deliver the chain before accepting another frame. */
     private boolean dispatch(String event, String data) throws IOException, InterruptedException {
         if (data.isEmpty()) return false;
         if ("resync".equals(event)) throw new CpResyncException("server asked to resync");
         if (!"control".equals(event)) return false;
-        List<CpAck> acks = consumer.onFrame(data);
-        for (CpAck ack : acks) postAck(ack);
-        CpAck first = acks.get(0);
-        store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+        CpEnvelope frame = CpEnvelope.parse(data);
+        CpStore.Cursor cursor = store.loadCursor();
+        CpStore.Terminal prior = store.lastTerminal(frame.epoch.toString(), frame.operationId);
+        if (cursor.epoch().equals(frame.epoch.toString())
+                && frame.sequence <= cursor.sequence()
+                && prior != null
+                && prior.sequence() == frame.sequence) return false;
+        if (store.loadPendingAcks() == null) {
+            consumer.onFrame(data);
+        }
+        deliverPending();
         return true;
+    }
+
+    private void deliverPending() throws IOException, InterruptedException {
+        CpStore.PendingAcks pending = store.loadPendingAcks();
+        if (pending == null) return;
+        List<CpAck> acks = pending.acks();
+        CpAck first = acks.get(0);
+        CpAck finalAck = acks.get(acks.size() - 1);
+        int sent = pending.sent();
+        try {
+            for (; sent < acks.size(); sent++) {
+                postAck(acks.get(sent));
+                store.savePendingAcks(acks, sent + 1);
+            }
+        } catch (CpAckRejectedException terminal) {
+            finalAck = handleRejectedAck(first, acks.get(sent), sent > 0, terminal);
+        }
+        store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+        store.clearPendingAcks();
+        consumer.ackAccepted(finalAck);
+    }
+
+    private CpAck handleRejectedAck(
+            CpAck first, CpAck failed, boolean receivedAccepted, CpAckRejectedException terminal)
+            throws IOException, InterruptedException {
+        if (receivedAccepted && failed.state != CpAck.State.UNKNOWN) {
+            CpAck fallback =
+                    new CpAck(
+                            failed.epoch,
+                            failed.sequence,
+                            failed.generation,
+                            failed.revision,
+                            failed.payloadHash,
+                            CpAck.State.UNKNOWN,
+                            OffsetDateTime.now(clock),
+                            CpAck.Result.EFFECT_UNCERTAIN,
+                            null,
+                            failed.operationId);
+            store.savePendingAcks(List.of(fallback), 0);
+            consumer.markFallbackUnknown(first.epoch, first.sequence, first.operationId);
+            try {
+                postAck(fallback);
+            } catch (CpAckRejectedException fallbackRejected) {
+                terminal.addSuppressed(fallbackRejected);
+                consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+                store.clearPendingAcks();
+                throw new CpResyncException(
+                        "control-plane ack rejected ("
+                                + terminal.statusCode()
+                                + ") and fallback unknown rejected ("
+                                + fallbackRejected.statusCode()
+                                + "), resyncing",
+                        terminal);
+            }
+            reporter.warn(
+                    "control-plane ack rejected after received, settled as unknown: "
+                            + terminal.getMessage(),
+                    terminal);
+            return fallback;
+        }
+        consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+        store.clearPendingAcks();
+        throw new CpResyncException(
+                "control-plane ack rejected (" + terminal.statusCode() + "), resyncing", terminal);
     }
 
     void postAck(CpAck ack) throws IOException, InterruptedException {
         postAckJson(ack.toJson());
     }
 
+    /**
+     * Post one ack body. Status policy:
+     *
+     * <ul>
+     *   <li>{@code 409}: stale cursor, generation, or transition ({@link CpResyncException}); the
+     *       saved chain stays pending for retry.
+     *   <li>{@code 400}, {@code 404}, {@code 422}: validation rejection ({@link
+     *       CpAckRejectedException}). Demotes any durable {@code effective} record to {@code
+     *       unknown}; if {@code received} was already accepted, attempts fallback {@code unknown}
+     *       across transient failures until CP records a terminal state, otherwise triggers resync
+     *       and settles the hook without advancing the cursor.
+     *   <li>{@code 408}, {@code 429}, {@code 5xx}, any other {@code 4xx} (including transient
+     *       {@code 401}/{@code 403}), IO and timeouts: retryable.
+     * </ul>
+     */
     void postAckJson(String body) throws IOException, InterruptedException {
         HttpRequest request =
                 HttpRequest.newBuilder(URI.create(baseUrl + "/v2/agents/" + agentId + "/acks"))
-                        .timeout(READ_TIMEOUT)
+                        .timeout(ackTimeout)
                         .header("Authorization", "Bearer " + bearer)
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -364,6 +486,21 @@ public final class CpSseClient {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() == 409) {
             throw new CpResyncException("ack rejected: " + response.body());
+        }
+        if (response.statusCode() == 408 || response.statusCode() == 429) {
+            // Retryable rate limit / timeout: the receipt replays and the hook stays pending.
+            throw new IOException("ack HTTP " + response.statusCode() + " (retryable)");
+        }
+        if (response.statusCode() == 400
+                || response.statusCode() == 404
+                || response.statusCode() == 422) {
+            throw new CpAckRejectedException(
+                    response.statusCode(), "ack rejected: " + response.body());
+        }
+        if (response.statusCode() >= 400 && response.statusCode() < 500) {
+            // Any other 4xx (including a transient 401/403) is retryable: the receipt replays
+            // and the hook stays pending until a delivery is accepted.
+            throw new IOException("ack HTTP " + response.statusCode() + " (retryable)");
         }
         if (response.statusCode() != 200) {
             throw new IOException("ack HTTP " + response.statusCode());

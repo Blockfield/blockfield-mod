@@ -1,5 +1,7 @@
 package com.lunares.blockfield.common.controlplane;
 
+import java.util.concurrent.CompletableFuture;
+
 /**
  * Server-side seam for typed control-plane actions ({@code moderation.kick}/{@code moderation.ban}
  * on the frozen v2 contract, plus the site-sent moderation commands {@code moderation.say}, {@code
@@ -43,5 +45,31 @@ public interface CpActionHandler {
      */
     default CpApplier.Outcome handleSuggest(String target, String input) {
         return CpApplier.Outcome.rejected(CpAck.Result.INVALID_SCHEMA, "suggest not supported");
+    }
+
+    /**
+     * One Workshop game lifecycle action ({@code workshop.game}): {@code gameOp} is one of {@code
+     * save-flush}, {@code save-off}, {@code save-on}, {@code stop}, or {@code export-limbo}; {@code
+     * job} is the export job UUID for {@code export-limbo} and empty otherwise.
+     *
+     * <p>{@code acked} is a best-effort, in-process "ack delivery settled" signal: it completes
+     * normally (never exceptionally) once the action's final ack is accepted by CP (with that
+     * {@link CpAck}, whatever its state: EFFECTIVE, REJECTED or fallback UNKNOWN; a continuation
+     * that must act only on success checks {@link CpAck#state}), or with {@code null} after a
+     * bounded wait ({@link CpConsumer#HOOK_SETTLE_TIMEOUT}), on permanent ack rejection, or on
+     * consumer close/supersede. It always completes exactly once, so attached continuations always
+     * run; no hook state is persisted across restarts. Handlers must not block on {@code acked}
+     * synchronously inside this method. Without an override, Workshop game actions are not
+     * supported.
+     */
+    default CpApplier.Outcome handleWorkshopGame(
+            String target, String gameOp, String job, CompletableFuture<CpAck> acked) {
+        return handleWorkshopGame(target, gameOp, job);
+    }
+
+    /** Convenience overload when the handler needs no acknowledgement-completion callback. */
+    default CpApplier.Outcome handleWorkshopGame(String target, String gameOp, String job) {
+        return CpApplier.Outcome.rejected(
+                CpAck.Result.INVALID_SCHEMA, "workshop.game not supported");
     }
 }

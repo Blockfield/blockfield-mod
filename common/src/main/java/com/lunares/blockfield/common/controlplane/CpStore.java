@@ -1,5 +1,6 @@
 package com.lunares.blockfield.common.controlplane;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -14,7 +15,13 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.UUID;
 
 /**
  * Durable consumer state in ONE small file ({@code state.json}): epoch, generation, cursor,
@@ -44,9 +51,15 @@ public final class CpStore {
     private static final String FILE = "state.json";
 
     private final Path dir;
+    private final Runnable beforePersist;
 
     public CpStore(Path dir) {
-        this.dir = dir;
+        this(dir, () -> {});
+    }
+
+    CpStore(Path dir, Runnable beforePersist) {
+        this.dir = Objects.requireNonNull(dir, "dir");
+        this.beforePersist = Objects.requireNonNull(beforePersist, "beforePersist");
     }
 
     public synchronized Cursor loadCursor() {
@@ -84,6 +97,104 @@ public final class CpStore {
         save(state);
     }
 
+    public record PendingAcks(List<CpAck> acks, int sent) {}
+
+    /** Persist the exact wire bodies so a lost response can be retried idempotently. */
+    public synchronized void savePendingAcks(List<CpAck> acks, int sent) {
+        JsonObject state = load();
+        putPendingAcks(state, acks, sent);
+        save(state);
+    }
+
+    /**
+     * Persist a reposted chain only when no matching pending chain is already queued on disk, so
+     * partially delivered chains keep their {@code sent} offset.
+     */
+    public synchronized void saveRepostedPendingAcks(List<CpAck> acks) {
+        JsonObject state = load();
+        JsonObject existing = objectField(state, "pendingAcks");
+        if (existing != null && matchesPendingIdentity(existing, acks.get(0))) return;
+        putPendingAcks(state, acks, 0);
+        save(state);
+    }
+
+    private static boolean matchesPendingIdentity(JsonObject pending, CpAck first) {
+        if (!pending.has("acks") || !pending.get("acks").isJsonArray()) return false;
+        JsonArray entries = pending.getAsJsonArray("acks");
+        if (entries.isEmpty() || !entries.get(0).isJsonObject()) return false;
+        JsonObject head = entries.get(0).getAsJsonObject();
+        String existingOp =
+                head.has("operationId") && !head.get("operationId").isJsonNull()
+                        ? stringField(head, "operationId", null)
+                        : null;
+        return first.epoch.toString().equals(stringField(head, "epoch", ""))
+                && first.sequence == longField(head, "sequence", -1L)
+                && Objects.equals(first.generation, stringField(head, "generation", null))
+                && Objects.equals(first.operationId, existingOp);
+    }
+
+    private static void putPendingAcks(JsonObject state, List<CpAck> acks, int sent) {
+        JsonObject pending = new JsonObject();
+        JsonArray entries = new JsonArray();
+        for (CpAck ack : acks) {
+            JsonObject entry = JsonParser.parseString(ack.toJson()).getAsJsonObject();
+            entry.addProperty("operationId", ack.operationId);
+            entries.add(entry);
+        }
+        pending.add("acks", entries);
+        pending.addProperty("sent", sent);
+        state.add("pendingAcks", pending);
+        CpAck lastAck = acks.get(acks.size() - 1);
+        if (lastAck.state == CpAck.State.UNKNOWN && lastAck.operationId != null) {
+            String epochId = lastAck.epoch.toString();
+            putTerminal(
+                    state,
+                    epochId,
+                    lastAck.operationId,
+                    lastAck.sequence,
+                    lastAck.state,
+                    lastAck.result,
+                    null);
+            if (started(state).has(terminalKey(epochId, lastAck.operationId))) {
+                operator(state).addProperty("action/" + lastAck.operationId, true);
+            }
+        }
+    }
+
+    public synchronized PendingAcks loadPendingAcks() {
+        JsonObject pending = objectField(load(), "pendingAcks");
+        if (pending == null) return null;
+        List<CpAck> acks = new ArrayList<>();
+        for (JsonElement item : pending.getAsJsonArray("acks")) {
+            JsonObject a = item.getAsJsonObject();
+            acks.add(
+                    new CpAck(
+                            UUID.fromString(a.get("epoch").getAsString()),
+                            a.get("sequence").getAsLong(),
+                            a.get("generation").getAsString(),
+                            a.get("revision").isJsonNull() ? null : a.get("revision").getAsLong(),
+                            a.get("payloadHash").isJsonNull()
+                                    ? null
+                                    : a.get("payloadHash").getAsString(),
+                            CpAck.State.valueOf(
+                                    a.get("state").getAsString().toUpperCase(Locale.ROOT)),
+                            OffsetDateTime.parse(a.get("actualAt").getAsString()),
+                            CpAck.Result.valueOf(
+                                    a.get("result").getAsString().toUpperCase(Locale.ROOT)),
+                            a.has("output") ? a.get("output").getAsString() : null,
+                            a.has("operationId") && !a.get("operationId").isJsonNull()
+                                    ? a.get("operationId").getAsString()
+                                    : null));
+        }
+        return new PendingAcks(List.copyOf(acks), pending.get("sent").getAsInt());
+    }
+
+    public synchronized void clearPendingAcks() {
+        JsonObject state = load();
+        state.remove("pendingAcks");
+        save(state);
+    }
+
     /** Last-known-good and its revision, keyed by namespace/target pair. */
     public synchronized Lkg loadLkg(String namespace, String target) {
         JsonObject entry = child(load(), "lkg", key(namespace, target));
@@ -107,14 +218,42 @@ public final class CpStore {
             String operationId,
             long sequence) {
         JsonObject state = load();
-        lkg(state).add(key(namespace, target), lkgEntry(revision, payload));
-        terminal(state)
-                .add(
-                        terminalKey(epoch, operationId),
-                        terminalEntry(
-                                operationId, sequence, CpAck.State.EFFECTIVE, CpAck.Result.OK));
-        operator(state).remove(key(namespace, target));
+        putAppliedFrame(state, namespace, target, revision, payload, epoch, operationId, sequence);
         save(state);
+    }
+
+    /**
+     * Applied settings frame: LKG, terminal receipt, cleared operator marker and pending ack chain
+     * in one atomic write.
+     */
+    public synchronized void saveAppliedFrameAndPendingAcks(
+            String namespace,
+            String target,
+            long revision,
+            JsonObject payload,
+            String epoch,
+            String operationId,
+            long sequence,
+            List<CpAck> acks) {
+        JsonObject state = load();
+        putAppliedFrame(state, namespace, target, revision, payload, epoch, operationId, sequence);
+        putPendingAcks(state, acks, 0);
+        save(state);
+    }
+
+    private static void putAppliedFrame(
+            JsonObject state,
+            String namespace,
+            String target,
+            long revision,
+            JsonObject payload,
+            String epoch,
+            String operationId,
+            long sequence) {
+        lkg(state).add(key(namespace, target), lkgEntry(revision, payload));
+        putTerminal(
+                state, epoch, operationId, sequence, CpAck.State.EFFECTIVE, CpAck.Result.OK, null);
+        operator(state).remove(key(namespace, target));
     }
 
     /** Applied snapshot entry without any ack identity: LKG and cleared marker, one write. */
@@ -140,12 +279,40 @@ public final class CpStore {
             long sequence,
             CpAck.Result result) {
         JsonObject state = load();
-        markMax(operator(state), key(namespace, target), revision);
-        terminal(state)
-                .add(
-                        terminalKey(epoch, operationId),
-                        terminalEntry(operationId, sequence, CpAck.State.UNKNOWN, result));
+        putUncertainFrame(state, namespace, target, revision, epoch, operationId, sequence, result);
         save(state);
+    }
+
+    /**
+     * Effect-uncertain settings frame: monotonic operator marker, terminal UNKNOWN receipt and
+     * pending ack chain in one atomic write.
+     */
+    public synchronized void saveUncertainFrameAndPendingAcks(
+            String namespace,
+            String target,
+            long revision,
+            String epoch,
+            String operationId,
+            long sequence,
+            CpAck.Result result,
+            List<CpAck> acks) {
+        JsonObject state = load();
+        putUncertainFrame(state, namespace, target, revision, epoch, operationId, sequence, result);
+        putPendingAcks(state, acks, 0);
+        save(state);
+    }
+
+    private static void putUncertainFrame(
+            JsonObject state,
+            String namespace,
+            String target,
+            long revision,
+            String epoch,
+            String operationId,
+            long sequence,
+            CpAck.Result result) {
+        markMax(operator(state), key(namespace, target), revision);
+        putTerminal(state, epoch, operationId, sequence, CpAck.State.UNKNOWN, result, null);
     }
 
     /** Last terminal ack for an operation, or null when it was never decided. */
@@ -158,7 +325,9 @@ public final class CpStore {
                     longField(entry, "sequence", 0),
                     CpAck.State.valueOf(stringField(entry, "state", "")),
                     CpAck.Result.valueOf(stringField(entry, "result", "")),
-                    entry.has("output") ? entry.get("output").getAsString() : null);
+                    entry.has("output") && !entry.get("output").isJsonNull()
+                            ? entry.get("output").getAsString()
+                            : null);
         } catch (IllegalArgumentException e) {
             return null;
         }
@@ -182,12 +351,77 @@ public final class CpStore {
             CpAck.State state,
             CpAck.Result result,
             String output) {
-        if (!state.terminal()) throw new IllegalArgumentException("terminal states only");
         JsonObject stateJson = load();
+        putTerminal(stateJson, epoch, operationId, sequence, state, result, output);
+        save(stateJson);
+    }
+
+    /**
+     * Persist a terminal receipt, optional action-operator marker, and queued ack chain in one
+     * atomic write so a crash never leaves a terminal receipt without its pending chain.
+     */
+    public synchronized void saveTerminalAndPendingAcks(
+            String epoch,
+            String operationId,
+            long sequence,
+            CpAck.State ackState,
+            CpAck.Result result,
+            String output,
+            boolean markOperator,
+            List<CpAck> acks) {
+        JsonObject state = load();
+        putTerminal(state, epoch, operationId, sequence, ackState, result, output);
+        if (markOperator && operationId != null) {
+            operator(state).addProperty("action/" + operationId, true);
+        }
+        putPendingAcks(state, acks, 0);
+        save(state);
+    }
+
+    /**
+     * Atomically demote an operation to UNKNOWN ({@code effect_uncertain}) and set the action
+     * operator marker when the operation had already started.
+     */
+    public synchronized void demoteUncertain(
+            String epoch, String operationId, long sequence, boolean alwaysRecord) {
+        JsonObject state = load();
+        JsonObject existingEntry = child(state, "terminal", terminalKey(epoch, operationId));
+        boolean shouldRecord =
+                alwaysRecord
+                        || existingEntry == null
+                        || CpAck.State.EFFECTIVE
+                                .name()
+                                .equals(stringField(existingEntry, "state", ""));
+        boolean actionStarted = started(state).has(terminalKey(epoch, operationId));
+        if (!shouldRecord && !actionStarted) return;
+        if (shouldRecord) {
+            putTerminal(
+                    state,
+                    epoch,
+                    operationId,
+                    sequence,
+                    CpAck.State.UNKNOWN,
+                    CpAck.Result.EFFECT_UNCERTAIN,
+                    null);
+        }
+        if (actionStarted) {
+            operator(state).addProperty("action/" + operationId, true);
+        }
+        save(state);
+    }
+
+    private static void putTerminal(
+            JsonObject stateJson,
+            String epoch,
+            String operationId,
+            long sequence,
+            CpAck.State state,
+            CpAck.Result result,
+            String output) {
+        if (!state.terminal()) throw new IllegalArgumentException("terminal states only");
         JsonObject entry = terminalEntry(operationId, sequence, state, result);
         if (output != null) entry.addProperty("output", output);
         terminal(stateJson).add(terminalKey(epoch, operationId), entry);
-        save(stateJson);
     }
 
     public synchronized boolean hasTerminalState(CpAck.State state) {
@@ -338,6 +572,7 @@ public final class CpStore {
     }
 
     private void save(JsonObject state) {
+        beforePersist.run();
         try {
             Files.createDirectories(dir);
             Path tmp = dir.resolve(FILE + ".tmp");

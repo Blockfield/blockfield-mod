@@ -19,7 +19,8 @@
   Справочник: архитектура (§2), ловушки (§3); тема оружия — также [KNIFE_COMBAT](KNIFE_COMBAT.md),
   Ranked — [campaign-admission](review/campaign-admission.md),
   полигон — [RANGE](training/RANGE.md), статистика — [PRODUCER](statistics/PRODUCER.md),
-  настройки — [admin-settings](admin-settings.md).
+  настройки — [admin-settings](admin-settings.md),
+  control plane — [control-plane](control-plane.md).
 
 ## Стенд и безопасность
 
