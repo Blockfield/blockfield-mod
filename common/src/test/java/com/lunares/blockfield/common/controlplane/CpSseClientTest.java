@@ -9,7 +9,6 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
-import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -26,7 +25,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -815,17 +813,51 @@ class CpSseClientTest {
     }
 
     @Test
-    void ackHookFailsWhenAckEndpointErrorsOrTimesOut() throws Exception {
+    void postAckJsonClassifiesRejections() {
+        CpStore store = new CpStore(directory.resolve("cp-ack-class"));
+        CpConsumer consumer =
+                new CpConsumer(
+                        store,
+                        (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                        CLOCK);
+        CpSseClient client = newClient(store, consumer);
+
+        ackStatus = body -> 400;
+        CpAckRejectedException rejected =
+                assertThrows(CpAckRejectedException.class, () -> client.postAckJson("{}"));
+        assertEquals(400, rejected.statusCode());
+
+        ackStatus = body -> 403;
+        assertEquals(
+                403,
+                assertThrows(CpAckRejectedException.class, () -> client.postAckJson("{}"))
+                        .statusCode());
+
+        ackStatus = body -> 408;
+        assertThrows(IOException.class, () -> client.postAckJson("{}"));
+        ackStatus = body -> 429;
+        assertThrows(IOException.class, () -> client.postAckJson("{}"));
+        ackStatus = body -> 500;
+        assertThrows(IOException.class, () -> client.postAckJson("{}"));
+        ackStatus = body -> 409;
+        assertThrows(CpResyncException.class, () -> client.postAckJson("{}"));
+    }
+
+    @Test
+    void transientAckFailureStillDeliversPostAckHookOnce() throws Exception {
         HttpServer wsServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        CountDownLatch releaseHungAck = new CountDownLatch(1);
-        AtomicBoolean hangAck = new AtomicBoolean();
-        AtomicInteger ackHttpStatus = new AtomicInteger(500);
+        List<String> events = new CopyOnWriteArrayList<>();
+        AtomicInteger ackCalls = new AtomicInteger();
+        AtomicInteger hookSuccesses = new AtomicInteger();
+        AtomicBoolean clientStop = new AtomicBoolean();
+        CountDownLatch halted = new CountDownLatch(1);
         wsServer.createContext(
                 "/v2/agents/ws-game/snapshot",
                 exchange -> respond(exchange, 200, snapshotFor("ws-game", EPOCH, 41, 41)));
         wsServer.createContext(
                 "/v2/agents/ws-game/events",
-                exchange ->
+                exchange -> {
+                    if (queryCursor(exchange) < 42) {
                         respond(
                                 exchange,
                                 200,
@@ -833,103 +865,107 @@ class CpSseClientTest {
                                         + EPOCH
                                         + ":42\nevent: control\ndata: "
                                         + workshopStopFrame(EPOCH, 42)
-                                        + "\n\n"));
+                                        + "\n\n");
+                    } else {
+                        respond(exchange, 200, "");
+                    }
+                });
         wsServer.createContext(
                 "/v2/agents/ws-game/acks",
                 exchange -> {
-                    exchange.getRequestBody().readAllBytes();
-                    if (hangAck.get()) {
-                        try {
-                            releaseHungAck.await(5, TimeUnit.SECONDS);
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
-                        }
-                        respond(exchange, 200, "{}");
+                    String body =
+                            new String(
+                                    exchange.getRequestBody().readAllBytes(),
+                                    StandardCharsets.UTF_8);
+                    if (ackCalls.incrementAndGet() == 1) {
+                        // Transient 500 on the first ack post: the chain drops, the hook waits.
+                        respond(exchange, 500, "{}");
                         return;
                     }
-                    respond(exchange, ackHttpStatus.get(), "{}");
+                    events.add(
+                            "ack:"
+                                    + com.google.gson.JsonParser.parseString(body)
+                                            .getAsJsonObject()
+                                            .get("state")
+                                            .getAsString());
+                    respond(exchange, 200, "{\"state\":\"received\"}");
                 });
         wsServer.setExecutor(Executors.newCachedThreadPool());
         wsServer.start();
         try {
-            // Case 1: HTTP 500 fails the ack hook without committing the cursor.
-            AtomicReference<Throwable> errorOn500 = runExpectingAckFailure(wsServer, false);
-            assertInstanceOf(IOException.class, errorOn500.get());
+            CpStore store = new CpStore(directory.resolve("cp-ws-retry"));
+            CpActionHandler handler =
+                    new CpActionHandler() {
+                        @Override
+                        public CpApplier.Outcome handleAction(
+                                String kind, String target, String playerId, String reason) {
+                            return CpApplier.Outcome.rejected(
+                                    CpAck.Result.INVALID_SCHEMA, "unexpected");
+                        }
 
-            // Case 2: HTTP 409 fails the ack hook with CpResyncException.
-            ackHttpStatus.set(409);
-            AtomicReference<Throwable> errorOn409 = runExpectingAckFailure(wsServer, false);
-            assertInstanceOf(CpResyncException.class, errorOn409.get());
-
-            // Case 3: Hung ack endpoint exceeds ackTimeout and fails with HttpTimeoutException.
-            hangAck.set(true);
-            AtomicReference<Throwable> errorOnTimeout = runExpectingAckFailure(wsServer, true);
-            assertInstanceOf(HttpTimeoutException.class, errorOnTimeout.get());
+                        @Override
+                        public CpApplier.Outcome handleWorkshopGame(
+                                String target,
+                                String gameOp,
+                                String job,
+                                CompletableFuture<CpAck> acked) {
+                            events.add("handler:" + gameOp);
+                            acked.whenComplete(
+                                    (ack, error) -> {
+                                        if (error == null && ack.state == CpAck.State.EFFECTIVE) {
+                                            hookSuccesses.incrementAndGet();
+                                            events.add("cursor:" + store.loadCursor().sequence());
+                                            events.add("halt");
+                                            halted.countDown();
+                                            clientStop.set(true);
+                                        } else if (error != null) {
+                                            events.add("hook-failed:" + error);
+                                        }
+                                    });
+                            return CpApplier.Outcome.ok();
+                        }
+                    };
+            CpConsumer consumer =
+                    new CpConsumer(
+                            store,
+                            (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
+                            handler,
+                            CLOCK,
+                            "ws-game");
+            CpSseClient client =
+                    new CpSseClient(
+                            "http://127.0.0.1:" + wsServer.getAddress().getPort(),
+                            "ws-game",
+                            "bearer",
+                            store,
+                            consumer,
+                            new Quiet(),
+                            CLOCK);
+            ExecutorService runner = Executors.newSingleThreadExecutor();
+            try {
+                Future<?> done = runner.submit(() -> client.run(clientStop));
+                assertTrue(halted.await(20, TimeUnit.SECONDS), "post-ack halt did not run");
+                done.get(15, TimeUnit.SECONDS);
+            } finally {
+                runner.shutdownNow();
+            }
         } finally {
-            releaseHungAck.countDown();
             wsServer.stop(0);
         }
-    }
 
-    private AtomicReference<Throwable> runExpectingAckFailure(
-            HttpServer wsServer, boolean shortTimeout) throws Exception {
-        CpStore store =
-                new CpStore(
-                        directory.resolve(
-                                "cp-fail-" + (shortTimeout ? "timeout" : System.nanoTime())));
-        AtomicReference<Throwable> observedError = new AtomicReference<>();
-        CountDownLatch failed = new CountDownLatch(1);
-        AtomicBoolean stopOnFail = new AtomicBoolean();
-        CpActionHandler handler =
-                new CpActionHandler() {
-                    @Override
-                    public CpApplier.Outcome handleAction(
-                            String kind, String target, String playerId, String reason) {
-                        return CpApplier.Outcome.rejected(
-                                CpAck.Result.INVALID_SCHEMA, "unexpected");
-                    }
-
-                    @Override
-                    public CpApplier.Outcome handleWorkshopGame(
-                            String target,
-                            String gameOp,
-                            String job,
-                            CompletableFuture<CpAck> acked) {
-                        acked.whenComplete(
-                                (ack, error) -> {
-                                    observedError.set(error);
-                                    failed.countDown();
-                                });
-                        return CpApplier.Outcome.ok();
-                    }
-                };
-        CpConsumer consumer =
-                new CpConsumer(
-                        store,
-                        (namespace, target, revision, value) -> CpApplier.Outcome.ok(),
-                        handler,
-                        CLOCK,
-                        "ws-game");
-        CpSseClient client =
-                new CpSseClient(
-                        "http://127.0.0.1:" + wsServer.getAddress().getPort(),
-                        "ws-game",
-                        "bearer",
-                        store,
-                        consumer,
-                        new Quiet(),
-                        CLOCK,
-                        CpSseClient.IDLE_TIMEOUT,
-                        shortTimeout ? Duration.ofMillis(150) : Duration.ofSeconds(10),
-                        (millis, stopFlag) -> {
-                            stopFlag.set(true);
-                            return false;
-                        });
-        client.run(stopOnFail);
-        assertTrue(failed.await(5, TimeUnit.SECONDS), "ack hook did not complete on failure");
-        assertNotNull(observedError.get());
-        assertEquals(41, store.loadCursor().sequence());
-        return observedError;
+        assertEquals(1, hookSuccesses.get(), "post-ack hook must fire exactly once: " + events);
+        assertEquals(1, events.stream().filter("handler:stop"::equals).count());
+        assertTrue(events.stream().noneMatch(entry -> entry.startsWith("hook-failed:")));
+        assertEquals(
+                List.of(
+                        "handler:stop",
+                        "ack:received",
+                        "ack:validated",
+                        "ack:applied",
+                        "ack:effective",
+                        "cursor:42",
+                        "halt"),
+                events);
     }
 
     private String snapshotFor(String audience, String epoch, long cursor, long revision) {

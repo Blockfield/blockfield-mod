@@ -179,9 +179,18 @@ public final class CpSseClient {
      * (repeats rate-limited) and retried with backoff, never fatal: the cursor does not advance
      * past it, so it replays until an operator reconciles it. Keep-alive comments refresh liveness:
      * a connection that carried any line resumes without growing the backoff; only a totally silent
-     * close backs off. Returns when stopped.
+     * close backs off. Returns when stopped, closing the consumer so hooks that never delivered
+     * fail as shut down instead of hanging.
      */
     public void run(AtomicBoolean stop) {
+        try {
+            runLoop(stop);
+        } finally {
+            consumer.close();
+        }
+    }
+
+    private void runLoop(AtomicBoolean stop) {
         long backoff = BACKOFF_MIN_MILLIS;
         boolean needsSnapshot = true;
         while (!stop.get()) {
@@ -362,7 +371,8 @@ public final class CpSseClient {
     /**
      * Post the current ack chain for one frame, then advance the cursor. A 409/stale answer drops
      * this chain and re-syncs from the snapshot on the next pass: the terminal decision stays
-     * durable, so the replay re-posts it instead of rebuilding chained retries.
+     * durable, so the replay re-posts it instead of rebuilding chained retries. The post-ack hook
+     * stays pending across the retry and completes when a delivery is accepted.
      */
     private boolean dispatch(String event, String data) throws IOException, InterruptedException {
         if (data.isEmpty()) return false;
@@ -397,6 +407,14 @@ public final class CpSseClient {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() == 409) {
             throw new CpResyncException("ack rejected: " + response.body());
+        }
+        if (response.statusCode() == 408 || response.statusCode() == 429) {
+            // Retryable rate limit / timeout: the receipt replays and the hook stays pending.
+            throw new IOException("ack HTTP " + response.statusCode() + " (retryable)");
+        }
+        if (response.statusCode() >= 400 && response.statusCode() < 500) {
+            throw new CpAckRejectedException(
+                    response.statusCode(), "ack rejected: " + response.body());
         }
         if (response.statusCode() != 200) {
             throw new IOException("ack HTTP " + response.statusCode());

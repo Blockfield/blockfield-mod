@@ -7,7 +7,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -83,16 +86,20 @@ public final class CpConsumer {
     private static final Set<String> WORKSHOP_GAME_OPS =
             Set.of("save-flush", "save-off", "save-on", "stop", "export-limbo");
 
+    /** Maximum number of in-flight pending post-ack hooks tracked at once. */
+    static final int MAX_PENDING_ACKS = 64;
+
     private final Object lock = new Object();
     private final CpStore store;
     private final CpApplier applier;
     private final CpActionHandler actions;
     private final Clock clock;
     private final String expectedAudience;
+    private final Map<PendingKey, PendingAck> pendingAcks = new LinkedHashMap<>();
 
     private String epoch;
     private String generation;
-    private PendingAck pendingAck;
+    private boolean closed;
 
     public CpConsumer(CpStore store, CpApplier applier, Clock clock) {
         this(store, applier, null, clock, null);
@@ -139,26 +146,73 @@ public final class CpConsumer {
     /** Verdict of the single shared settings-apply path, as ack-equivalent states. */
     private record NamespaceApply(CpAck.State state, CpAck.Result result, List<String> errors) {}
 
-    private record PendingAck(UUID epoch, long sequence, CompletableFuture<CpAck> future) {}
+    private record PendingKey(UUID epoch, long sequence) {}
+
+    private record PendingAck(
+            UUID epoch, long sequence, String operationId, CompletableFuture<CpAck> future) {
+        PendingKey key() {
+            return new PendingKey(epoch, sequence);
+        }
+    }
 
     /**
      * Adopt the snapshot baseline (desired state only, never receipt ACKs) and reconcile
-     * last-known-good toward it. Unknown namespaces are reported, not applied.
+     * last-known-good toward it. Unknown namespaces are reported, not applied. Pending ack hooks
+     * survive if the snapshot stays in the same epoch with its cursor behind the frame; hooks
+     * discarded by an epoch change or a cursor at or past their sequence fail as superseded.
      */
     public SnapshotReport onSnapshot(String json) {
-        PendingAck stale = null;
+        List<PendingAck> discarded = List.of();
         try {
             synchronized (lock) {
-                stale = pendingAck;
-                pendingAck = null;
-                return onSnapshotLocked(json);
+                if (closed) {
+                    throw new IllegalStateException("control-plane consumer shut down");
+                }
+                SnapshotReport report = onSnapshotLocked(json);
+                discarded = discardSupersededBySnapshotLocked();
+                return report;
             }
         } finally {
-            if (stale != null) {
-                stale.future()
-                        .completeExceptionally(
-                                new CpResyncException("superseded by control-plane resnapshot"));
+            failAll(discarded, new CpResyncException("superseded by control-plane resnapshot"));
+        }
+    }
+
+    private List<PendingAck> discardSupersededBySnapshotLocked() {
+        if (pendingAcks.isEmpty()) {
+            return List.of();
+        }
+        long cursorSequence = store.loadCursor().sequence();
+        List<PendingAck> discarded = new ArrayList<>();
+        Iterator<Map.Entry<PendingKey, PendingAck>> it = pendingAcks.entrySet().iterator();
+        while (it.hasNext()) {
+            PendingAck entry = it.next().getValue();
+            if (!entry.epoch().toString().equals(epoch) || cursorSequence >= entry.sequence()) {
+                discarded.add(entry);
+                it.remove();
             }
+        }
+        return discarded;
+    }
+
+    /**
+     * Track a new post-ack hook, bounded by {@link #MAX_PENDING_ACKS}. A hook for the same frame
+     * replaces the stale one as superseded; past the cap the oldest hook fails as superseded so
+     * entries never leak across reconnects. Callers hold the consumer lock (intrinsic locks are
+     * re-entrant, so handler callbacks that re-enter the consumer cannot deadlock here).
+     */
+    private void registerPending(PendingAck next) {
+        PendingAck replaced = pendingAcks.put(next.key(), next);
+        if (replaced != null) {
+            replaced.future()
+                    .completeExceptionally(new CpResyncException("superseded by frame redelivery"));
+        }
+        while (pendingAcks.size() > MAX_PENDING_ACKS) {
+            Iterator<PendingAck> oldest = pendingAcks.values().iterator();
+            PendingAck evicted = oldest.next();
+            oldest.remove();
+            evicted.future()
+                    .completeExceptionally(
+                            new CpResyncException("superseded: too many pending ack hooks"));
         }
     }
 
@@ -216,34 +270,17 @@ public final class CpConsumer {
      * cursor: settings re-apply idempotently, decided operations re-post their terminal state, and
      * started-but-unfinished actions report unknown instead of re-running. Gaps and
      * epoch/generation changes request a re-snapshot.
+     *
+     * <p>A throwing frame leaves earlier post-ack hooks pending: the hook completes when a later
+     * accepted delivery arrives (see {@link #ackAccepted}), and only the snapshot, rejection and
+     * shutdown paths fail hooks that can never be delivered.
      */
     public List<CpAck> onFrame(String json) {
-        PendingAck stale = null;
-        PendingAck failedCurrent = null;
-        RuntimeException failure = null;
-        try {
-            synchronized (lock) {
-                stale = pendingAck;
-                pendingAck = null;
-                try {
-                    return onFrameLocked(json);
-                } catch (RuntimeException e) {
-                    failedCurrent = pendingAck;
-                    pendingAck = null;
-                    failure = e;
-                    throw e;
-                }
+        synchronized (lock) {
+            if (closed) {
+                throw new IllegalStateException("control-plane consumer shut down");
             }
-        } finally {
-            if (stale != null) {
-                stale.future()
-                        .completeExceptionally(
-                                new IllegalStateException(
-                                        "superseded before ack delivery completed"));
-            }
-            if (failedCurrent != null) {
-                failedCurrent.future().completeExceptionally(failure);
-            }
+            return onFrameLocked(json);
         }
     }
 
@@ -320,40 +357,70 @@ public final class CpConsumer {
 
     /**
      * Notify the consumer that the control plane accepted the final ack for a frame (and the cursor
-     * was saved), completing any handler acknowledgement hook.
+     * was saved), completing any handler post-ack hook. Unknown frames are ignored, so a replayed
+     * receipt never completes a hook twice. Safe to call from any thread; completions run outside
+     * the consumer lock.
      */
     public void ackAccepted(CpAck finalAck) {
         Objects.requireNonNull(finalAck, "finalAck");
-        PendingAck matched = takePendingAck(finalAck.epoch, finalAck.sequence);
+        PendingAck matched;
+        synchronized (lock) {
+            matched = pendingAcks.remove(new PendingKey(finalAck.epoch, finalAck.sequence));
+        }
         if (matched != null) {
             matched.future().complete(finalAck);
         }
     }
 
     /**
-     * Notify the consumer that posting acks for {@code epoch}/{@code sequence} failed or timed out,
-     * failing any handler acknowledgement hook with {@code error}.
+     * Notify the consumer that posting acks for {@code epoch}/{@code sequence} failed or timed out.
+     * Only a permanent control-plane rejection ({@link CpAckRejectedException}) fails the handler
+     * hook: the terminal receipt is durable, so a retryable failure (HTTP 5xx, timeout, IO, 409
+     * resync) leaves the hook pending and a later accepted delivery of the replayed receipt
+     * completes it. Unknown frames are ignored.
      */
     public void ackFailed(UUID epoch, long sequence, Throwable error) {
         Objects.requireNonNull(epoch, "epoch");
-        PendingAck matched = takePendingAck(epoch, sequence);
-        if (matched != null) {
-            Throwable cause =
-                    error != null ? error : new IllegalStateException("ack delivery failed");
-            matched.future().completeExceptionally(cause);
+        PendingAck matched = null;
+        Throwable terminal = null;
+        synchronized (lock) {
+            PendingKey key = new PendingKey(epoch, sequence);
+            if (!pendingAcks.containsKey(key) || !isTerminalRejection(error)) {
+                return;
+            }
+            matched = pendingAcks.remove(key);
+            terminal = error != null ? error : new IllegalStateException("ack delivery failed");
         }
+        matched.future().completeExceptionally(terminal);
     }
 
-    private PendingAck takePendingAck(UUID epoch, long sequence) {
+    /**
+     * Only a permanent control-plane rejection ends the hook; every other delivery failure replays.
+     */
+    private static boolean isTerminalRejection(Throwable error) {
+        return error instanceof CpAckRejectedException;
+    }
+
+    /**
+     * Consumer shutdown: every hook that can never be delivered fails. Idempotent; the consumer
+     * rejects further frames and snapshots afterwards.
+     */
+    public void close() {
+        List<PendingAck> pending;
         synchronized (lock) {
-            if (pendingAck != null
-                    && pendingAck.epoch().equals(epoch)
-                    && pendingAck.sequence() == sequence) {
-                PendingAck matched = pendingAck;
-                pendingAck = null;
-                return matched;
+            if (closed) {
+                return;
             }
-            return null;
+            closed = true;
+            pending = List.copyOf(pendingAcks.values());
+            pendingAcks.clear();
+        }
+        failAll(pending, new IllegalStateException("control-plane consumer shut down"));
+    }
+
+    private static void failAll(List<PendingAck> pending, RuntimeException error) {
+        for (PendingAck ack : pending) {
+            ack.future().completeExceptionally(error);
         }
     }
 
@@ -469,7 +536,9 @@ public final class CpConsumer {
         }
         store.markActionStarted(epochId, frame.operationId, kind);
         CompletableFuture<CpAck> ackFuture = new CompletableFuture<>();
-        pendingAck = new PendingAck(frame.epoch, frame.sequence, ackFuture);
+        registerPending(
+                new PendingAck(
+                        frame.epoch, frame.sequence, frame.operationId.toString(), ackFuture));
         CpApplier.Outcome outcome;
         try {
             outcome =

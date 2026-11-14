@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import java.io.IOException;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,7 +18,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -1109,37 +1110,137 @@ class CpConsumerTest {
     }
 
     @Test
-    void ackHookFailsOnDeliveryErrorOrResyncWithoutDeadlock() {
+    void ackHookSurvivesRetryableFailuresUntilAccepted() throws Exception {
         RecordingActions actions = new RecordingActions();
         CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
         withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
 
         List<CpAck> acks =
-                withActions.onFrame(workshopGameFrame("op-wg-fail", "workshop", "stop", null));
+                withActions.onFrame(workshopGameFrame("op-wg-retry", "workshop", "stop", null));
         CompletableFuture<CpAck> hook = actions.lastAckHook;
+        assertNotNull(hook);
         AtomicReference<Boolean> needsOpInsideCallback = new AtomicReference<>();
-        AtomicBoolean failed = new AtomicBoolean();
         hook.whenComplete(
                 (ack, error) -> {
                     // Re-entering CpConsumer from the completion callback must not deadlock.
                     needsOpInsideCallback.set(withActions.needsOperator());
-                    failed.set(error != null);
                 });
+
+        // Transient 500, then a timeout: the hook stays pending, nothing fires.
+        withActions.ackFailed(
+                UUID.fromString(EPOCH), last(acks).sequence, new IOException("ack HTTP 500"));
+        assertFalse(hook.isDone());
+        withActions.ackFailed(
+                UUID.fromString(EPOCH),
+                last(acks).sequence,
+                new HttpTimeoutException("ack timed out"));
+        assertFalse(hook.isDone());
+
+        // A later accepted delivery completes the hook exactly once.
+        withActions.ackAccepted(last(acks));
+        assertSame(last(acks), hook.get());
+        assertEquals(Boolean.FALSE, needsOpInsideCallback.get());
+        withActions.ackAccepted(last(acks));
+        withActions.ackFailed(
+                UUID.fromString(EPOCH), last(acks).sequence, new IOException("ack HTTP 500"));
+        assertSame(last(acks), hook.get());
+    }
+
+    @Test
+    void ackHookSurvivesResyncReplayUntilAccepted() throws Exception {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        String frame = workshopGameFrame("op-wg-409", "workshop", "stop", null);
+        List<CpAck> first = withActions.onFrame(frame);
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
+
+        // A 409 drops the chain for a re-sync, but the terminal receipt is durable.
+        withActions.ackFailed(
+                UUID.fromString(EPOCH),
+                last(first).sequence,
+                new CpResyncException("ack rejected: {}"));
+        assertFalse(hook.isDone());
+
+        // Re-snapshot in the same epoch with the cursor behind the frame keeps the hook.
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        assertFalse(hook.isDone());
+
+        // The replay re-posts the stored receipt without re-running the handler ...
+        List<CpAck> replayed = withActions.onFrame(frame);
+        assertEquals(1, actions.calls.size());
+        assertSame(hook, actions.lastAckHook);
+        assertEquals(CpAck.State.EFFECTIVE, last(replayed).state);
+
+        // ... and the accepted redelivery completes it.
+        withActions.ackAccepted(last(replayed));
+        assertEquals(CpAck.State.EFFECTIVE, hook.get().state);
+    }
+
+    @Test
+    void ackHookFailsOnPermanentRejection() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks =
+                withActions.onFrame(workshopGameFrame("op-wg-reject", "workshop", "stop", null));
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
 
         withActions.ackFailed(
                 UUID.fromString(EPOCH),
                 last(acks).sequence,
-                new IllegalStateException("ack http 500"));
-        assertTrue(failed.get());
-        assertEquals(Boolean.FALSE, needsOpInsideCallback.get());
+                new CpAckRejectedException(400, "ack rejected"));
+        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
+        assertInstanceOf(CpAckRejectedException.class, thrown.getCause());
+        assertEquals(400, ((CpAckRejectedException) thrown.getCause()).statusCode());
+        assertEquals(41, store.loadCursor().sequence());
+    }
+
+    @Test
+    void ackHookFailsWhenSnapshotRotatesEpoch() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        withActions.onFrame(workshopGameFrame("op-wg-old", "workshop", "stop", null));
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
+
+        withActions.onSnapshot(snapshot(OTHER_EPOCH, GENERATION, 41, gameplayValue(true)));
+        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
+        assertInstanceOf(CpResyncException.class, thrown.getCause());
+    }
+
+    @Test
+    void ackHookFailsWhenSnapshotCursorMovesPastFrame() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        withActions.onFrame(workshopGameFrame("op-wg-past", "workshop", "stop", null));
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
+
+        withActions.onSnapshot(snapshotWithCursor(EPOCH, GENERATION, 42, 41));
+        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
+        assertInstanceOf(CpResyncException.class, thrown.getCause());
+    }
+
+    @Test
+    void consumerCloseFailsPendingHooksAndRejectsFurtherFrames() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        withActions.onFrame(workshopGameFrame("op-wg-close", "workshop", "stop", null));
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
+
+        withActions.close();
+        withActions.close();
         ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
         assertInstanceOf(IllegalStateException.class, thrown.getCause());
-
-        withActions.onFrame(workshopGameFrame("op-wg-resync", "workshop", "stop", null));
-        CompletableFuture<CpAck> resyncHook = actions.lastAckHook;
-        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
-        ExecutionException resyncThrown = assertThrows(ExecutionException.class, resyncHook::get);
-        assertInstanceOf(CpResyncException.class, resyncThrown.getCause());
+        assertThrows(
+                IllegalStateException.class,
+                () ->
+                        withActions.onFrame(
+                                workshopGameFrame("op-wg-late", "workshop", "stop", null)));
     }
 
     private String workshopGameFrame(String operationId, String target, String gameOp, String job) {

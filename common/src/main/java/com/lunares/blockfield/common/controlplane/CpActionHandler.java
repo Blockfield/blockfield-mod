@@ -51,12 +51,13 @@ public interface CpActionHandler {
      * One Workshop game lifecycle action ({@code workshop.game}): {@code gameOp} is one of {@code
      * save-flush}, {@code save-off}, {@code save-on}, {@code stop}, or {@code export-limbo}; {@code
      * job} is the export job UUID for {@code export-limbo} and empty otherwise. {@code acked}
-     * completes with the final {@link CpAck} once accepted by the control plane (and the cursor has
-     * been saved), or completes exceptionally if delivery fails, times out, or is superseded by a
-     * resync. Handlers must not block on {@code acked} synchronously inside this method (acks are
-     * posted only after it returns); attach non-blocking continuations such as {@code whenComplete}
-     * (optionally with {@code orTimeout}). Without an override, Workshop game actions are not
-     * supported.
+     * completes with the final {@link CpAck} once any delivery (initial attempt or retry, including
+     * after SSE reconnect or resync replay) is accepted by the control plane and the cursor has
+     * been saved, or completes exceptionally only on a terminal outcome: frame superseded or
+     * discarded by a resnapshot, permanent HTTP 4xx rejection, or consumer shutdown. Handlers must
+     * not block on {@code acked} synchronously inside this method (acks are posted only after it
+     * returns); attach non-blocking continuations such as {@code whenComplete} (optionally with
+     * {@code orTimeout}). Without an override, Workshop game actions are not supported.
      */
     default CpApplier.Outcome handleWorkshopGame(
             String target, String gameOp, String job, CompletableFuture<CpAck> acked) {
