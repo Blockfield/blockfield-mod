@@ -71,6 +71,7 @@ public final class CpSseClient {
     private final Clock clock;
     private final HttpClient http;
     private final Duration idleTimeout;
+    private final Duration ackTimeout;
     private final Sleeper sleeper;
 
     private String lastContractMessage;
@@ -109,6 +110,30 @@ public final class CpSseClient {
             Clock clock,
             Duration idleTimeout,
             Sleeper sleeper) {
+        this(
+                baseUrl,
+                agentId,
+                bearer,
+                store,
+                consumer,
+                reporter,
+                clock,
+                idleTimeout,
+                READ_TIMEOUT,
+                sleeper);
+    }
+
+    CpSseClient(
+            String baseUrl,
+            String agentId,
+            String bearer,
+            CpStore store,
+            CpConsumer consumer,
+            Reporter reporter,
+            Clock clock,
+            Duration idleTimeout,
+            Duration ackTimeout,
+            Sleeper sleeper) {
         this.baseUrl = baseUrl;
         this.agentId = agentId;
         this.bearer = bearer;
@@ -117,6 +142,7 @@ public final class CpSseClient {
         this.reporter = reporter;
         this.clock = clock;
         this.idleTimeout = idleTimeout;
+        this.ackTimeout = ackTimeout;
         this.sleeper = sleeper != null ? sleeper : this::sleep;
         this.http =
                 HttpClient.newBuilder()
@@ -343,9 +369,16 @@ public final class CpSseClient {
         if ("resync".equals(event)) throw new CpResyncException("server asked to resync");
         if (!"control".equals(event)) return false;
         List<CpAck> acks = consumer.onFrame(data);
-        for (CpAck ack : acks) postAck(ack);
         CpAck first = acks.get(0);
-        store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+        CpAck last = acks.get(acks.size() - 1);
+        try {
+            for (CpAck ack : acks) postAck(ack);
+            store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+        } catch (Throwable failure) {
+            consumer.ackFailed(first.epoch, first.sequence, failure);
+            throw failure;
+        }
+        consumer.ackAccepted(last);
         return true;
     }
 
@@ -356,7 +389,7 @@ public final class CpSseClient {
     void postAckJson(String body) throws IOException, InterruptedException {
         HttpRequest request =
                 HttpRequest.newBuilder(URI.create(baseUrl + "/v2/agents/" + agentId + "/acks"))
-                        .timeout(READ_TIMEOUT)
+                        .timeout(ackTimeout)
                         .header("Authorization", "Bearer " + bearer)
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(body))

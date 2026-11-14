@@ -1,5 +1,7 @@
 package com.lunares.blockfield.common.controlplane;
 
+import java.util.concurrent.CompletableFuture;
+
 /**
  * Server-side seam for typed control-plane actions ({@code moderation.kick}/{@code moderation.ban}
  * on the frozen v2 contract, plus the site-sent moderation commands {@code moderation.say}, {@code
@@ -43,5 +45,27 @@ public interface CpActionHandler {
      */
     default CpApplier.Outcome handleSuggest(String target, String input) {
         return CpApplier.Outcome.rejected(CpAck.Result.INVALID_SCHEMA, "suggest not supported");
+    }
+
+    /**
+     * One Workshop game lifecycle action ({@code workshop.game}): {@code gameOp} is one of {@code
+     * save-flush}, {@code save-off}, {@code save-on}, {@code stop}, or {@code export-limbo}; {@code
+     * job} is the export job UUID for {@code export-limbo} and empty otherwise. {@code acked}
+     * completes with the final {@link CpAck} once accepted by the control plane (and the cursor has
+     * been saved), or completes exceptionally if delivery fails, times out, or is superseded by a
+     * resync. Handlers must not block on {@code acked} synchronously inside this method (acks are
+     * posted only after it returns); attach non-blocking continuations such as {@code whenComplete}
+     * (optionally with {@code orTimeout}). Without an override, Workshop game actions are not
+     * supported.
+     */
+    default CpApplier.Outcome handleWorkshopGame(
+            String target, String gameOp, String job, CompletableFuture<CpAck> acked) {
+        return handleWorkshopGame(target, gameOp, job);
+    }
+
+    /** Convenience overload when the handler needs no acknowledgement-completion callback. */
+    default CpApplier.Outcome handleWorkshopGame(String target, String gameOp, String job) {
+        return CpApplier.Outcome.rejected(
+                CpAck.Result.INVALID_SCHEMA, "workshop.game not supported");
     }
 }

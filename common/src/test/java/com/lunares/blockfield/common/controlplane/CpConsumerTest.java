@@ -13,6 +13,11 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -972,6 +977,180 @@ class CpConsumerTest {
         assertEquals(CpAck.State.EFFECTIVE, acks.get(acks.size() - 1).state);
     }
 
+    @Test
+    void workshopGameOpsRouteWithOutputAndAckHook() throws Exception {
+        RecordingActions actions = new RecordingActions();
+        actions.output = "saved 3 levels";
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String job = "123e4567-e89b-12d3-a456-426614174055";
+
+        List<CpAck> saveFlush =
+                withActions.onFrame(workshopGameFrame("op-wg-1", "workshop", "save-flush", null));
+        assertEquals(CpAck.State.EFFECTIVE, last(saveFlush).state);
+        assertEquals("saved 3 levels", last(saveFlush).output);
+        CompletableFuture<CpAck> flushHook = actions.lastAckHook;
+        assertNotNull(flushHook);
+        assertFalse(flushHook.isDone());
+        withActions.ackAccepted(last(saveFlush));
+        assertSame(last(saveFlush), flushHook.get());
+
+        actions.output = null;
+        assertEquals(
+                CpAck.State.EFFECTIVE,
+                last(withActions.onFrame(
+                                workshopGameFrame("op-wg-2", "workshop", "save-off", null)))
+                        .state);
+        assertEquals(
+                CpAck.State.EFFECTIVE,
+                last(withActions.onFrame(workshopGameFrame("op-wg-3", "workshop", "save-on", null)))
+                        .state);
+        assertEquals(
+                CpAck.State.EFFECTIVE,
+                last(withActions.onFrame(workshopGameFrame("op-wg-4", "workshop", "stop", null)))
+                        .state);
+        assertEquals(
+                CpAck.State.EFFECTIVE,
+                last(withActions.onFrame(
+                                workshopGameFrame("op-wg-5", "workshop", "export-limbo", job)))
+                        .state);
+
+        assertEquals(
+                List.of(
+                        "workshop.game/workshop/save-flush/",
+                        "workshop.game/workshop/save-off/",
+                        "workshop.game/workshop/save-on/",
+                        "workshop.game/workshop/stop/",
+                        "workshop.game/workshop/export-limbo/" + job),
+                actions.calls);
+
+        actions.next = CpApplier.Outcome.rejected(CpAck.Result.APPLY_FAILED, "save failed");
+        CpAck rejected =
+                last(
+                        withActions.onFrame(
+                                workshopGameFrame("op-wg-6", "workshop", "save-flush", null)));
+        assertEquals(CpAck.State.REJECTED, rejected.state);
+        assertEquals(CpAck.Result.APPLY_FAILED, rejected.result);
+        assertEquals("save failed", rejected.output);
+    }
+
+    @Test
+    void malformedWorkshopGamePayloadsRejectedWithoutHandlerCall() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        String job = "123e4567-e89b-12d3-a456-426614174055";
+
+        List<String> frames =
+                List.of(
+                        workshopGameFrame("op-wgb-1", "arena", "save-off", null),
+                        workshopGameFrame("op-wgb-2", "*", "stop", null),
+                        workshopGameFrame("op-wgb-3", "workshop", "restart", null),
+                        workshopGameFrame("op-wgb-4", "workshop", "", null),
+                        workshopGameFrame("op-wgb-5", "workshop", null, null),
+                        workshopGameFrame("op-wgb-6", "workshop", "export-limbo", null),
+                        workshopGameFrame("op-wgb-7", "workshop", "export-limbo", "not-a-uuid"),
+                        workshopGameFrame("op-wgb-8", "workshop", "export-limbo", "1-2-3-4-5"),
+                        workshopGameFrame("op-wgb-9", "workshop", "save-off", job),
+                        workshopGameFrame("op-wgb-10", "workshop", "stop", ""));
+        for (String frame : frames) {
+            CpAck ack = last(withActions.onFrame(frame));
+            assertEquals(CpAck.State.REJECTED, ack.state);
+            assertEquals(CpAck.Result.INVALID_SCHEMA, ack.result);
+        }
+        assertTrue(actions.calls.isEmpty());
+    }
+
+    @Test
+    void workshopGameDefaultsToRejectedWhenHandlerDoesNotOverride() {
+        List<String> genericCalls = new ArrayList<>();
+        CpActionHandler mainGameHandler =
+                (kind, target, playerId, reason) -> {
+                    genericCalls.add(kind);
+                    return CpApplier.Outcome.ok();
+                };
+        CpConsumer withMainGame = new CpConsumer(store, applier, mainGameHandler, CLOCK, AUDIENCE);
+        withMainGame.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        CpAck ack =
+                last(
+                        withMainGame.onFrame(
+                                workshopGameFrame("op-wg-main", "workshop", "stop", null)));
+
+        assertEquals(CpAck.State.REJECTED, ack.state);
+        assertEquals(CpAck.Result.INVALID_SCHEMA, ack.result);
+        assertEquals("workshop.game not supported", ack.output);
+        assertTrue(genericCalls.isEmpty());
+    }
+
+    @Test
+    void workshopGameStartedCrashAndReplayIdempotency() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        String stopFrame = workshopGameFrame("op-wg-rep", "workshop", "stop", null);
+        List<CpAck> first = withActions.onFrame(stopFrame);
+        List<CpAck> second = withActions.onFrame(stopFrame);
+        assertEquals(1, actions.calls.size());
+        assertEquals(
+                first.stream().map(CpAck::toJson).toList(),
+                second.stream().map(CpAck::toJson).toList());
+
+        store.markActionStarted(EPOCH, "op-wg-crash", "workshop.game");
+        CpAck crashed =
+                last(
+                        withActions.onFrame(
+                                workshopGameFrame("op-wg-crash", "workshop", "save-flush", null)));
+        assertEquals(CpAck.State.UNKNOWN, crashed.state);
+        assertEquals(CpAck.Result.EFFECT_UNCERTAIN, crashed.result);
+        assertEquals(1, actions.calls.size());
+        assertTrue(withActions.needsOperator());
+    }
+
+    @Test
+    void ackHookFailsOnDeliveryErrorOrResyncWithoutDeadlock() {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> acks =
+                withActions.onFrame(workshopGameFrame("op-wg-fail", "workshop", "stop", null));
+        CompletableFuture<CpAck> hook = actions.lastAckHook;
+        AtomicReference<Boolean> needsOpInsideCallback = new AtomicReference<>();
+        AtomicBoolean failed = new AtomicBoolean();
+        hook.whenComplete(
+                (ack, error) -> {
+                    // Re-entering CpConsumer from the completion callback must not deadlock.
+                    needsOpInsideCallback.set(withActions.needsOperator());
+                    failed.set(error != null);
+                });
+
+        withActions.ackFailed(
+                UUID.fromString(EPOCH),
+                last(acks).sequence,
+                new IllegalStateException("ack http 500"));
+        assertTrue(failed.get());
+        assertEquals(Boolean.FALSE, needsOpInsideCallback.get());
+        ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
+        assertInstanceOf(IllegalStateException.class, thrown.getCause());
+
+        withActions.onFrame(workshopGameFrame("op-wg-resync", "workshop", "stop", null));
+        CompletableFuture<CpAck> resyncHook = actions.lastAckHook;
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+        ExecutionException resyncThrown = assertThrows(ExecutionException.class, resyncHook::get);
+        assertInstanceOf(CpResyncException.class, resyncThrown.getCause());
+    }
+
+    private String workshopGameFrame(String operationId, String target, String gameOp, String job) {
+        JsonObject payload = new JsonObject();
+        payload.addProperty("kind", "workshop.game");
+        if (target != null) payload.addProperty("target", target);
+        if (gameOp != null) payload.addProperty("gameOp", gameOp);
+        if (job != null) payload.addProperty("job", job);
+        return payloadFrame(operationId, payload);
+    }
+
     private void commit(List<CpAck> acks) {
         store.saveCursorIfForward(acks.get(0).epoch.toString(), acks.get(0).sequence);
     }
@@ -1318,11 +1497,21 @@ class CpConsumerTest {
         }
 
         String suggestOutput;
+        CompletableFuture<CpAck> lastAckHook;
 
         @Override
         public CpApplier.Outcome handleSuggest(String target, String input) {
             calls.add("suggest/" + target + "/" + input);
             return next != null ? next : CpApplier.Outcome.ok(suggestOutput);
+        }
+
+        @Override
+        public CpApplier.Outcome handleWorkshopGame(
+                String target, String gameOp, String job, CompletableFuture<CpAck> acked) {
+            calls.add("workshop.game/" + target + "/" + gameOp + "/" + job);
+            lastAckHook = acked;
+            if (throwOnHandle) throw new RuntimeException("boom");
+            return next != null ? next : CpApplier.Outcome.ok(output);
         }
     }
 }
