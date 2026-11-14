@@ -54,11 +54,13 @@ public interface CpActionHandler {
      *
      * <p>{@code acked} is a best-effort, in-process "ack delivery settled" signal: it completes
      * normally (never exceptionally) once the action's final ack is accepted by CP (with that
-     * {@link CpAck}), or with {@code null} after a bounded wait ({@link
-     * CpConsumer#HOOK_SETTLE_TIMEOUT}), on permanent ack rejection, or on consumer close/supersede.
-     * It always completes exactly once, so attached continuations always run; no hook state is
-     * persisted across restarts. Handlers must not block on {@code acked} synchronously inside this
-     * method. Without an override, Workshop game actions are not supported.
+     * {@link CpAck}, whatever its state: EFFECTIVE, REJECTED or fallback UNKNOWN; a continuation
+     * that must act only on success checks {@link CpAck#state}), or with {@code null} after a
+     * bounded wait ({@link CpConsumer#HOOK_SETTLE_TIMEOUT}), on permanent ack rejection, or on
+     * consumer close/supersede. It always completes exactly once, so attached continuations always
+     * run; no hook state is persisted across restarts. Handlers must not block on {@code acked}
+     * synchronously inside this method. Without an override, Workshop game actions are not
+     * supported.
      */
     default CpApplier.Outcome handleWorkshopGame(
             String target, String gameOp, String job, CompletableFuture<CpAck> acked) {
