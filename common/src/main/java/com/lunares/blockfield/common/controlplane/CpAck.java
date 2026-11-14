@@ -49,6 +49,13 @@ public final class CpAck {
     /** Command output for the control plane (informational, not part of the receipt), or null. */
     public final String output;
 
+    /**
+     * Frame identity for post-ack hook matching (epoch/sequence/operationId). Never serialized:
+     * older control planes refuse unknown ack keys, so the wire body stays exactly the frozen
+     * envelope identity.
+     */
+    public final String operationId;
+
     public CpAck(
             UUID epoch,
             long sequence,
@@ -71,7 +78,32 @@ public final class CpAck {
             OffsetDateTime actualAt,
             Result result,
             String output) {
+        this(
+                epoch,
+                sequence,
+                generation,
+                revision,
+                payloadHash,
+                state,
+                actualAt,
+                result,
+                output,
+                null);
+    }
+
+    public CpAck(
+            UUID epoch,
+            long sequence,
+            String generation,
+            Long revision,
+            String payloadHash,
+            State state,
+            OffsetDateTime actualAt,
+            Result result,
+            String output,
+            String operationId) {
         this.output = output;
+        this.operationId = operationId;
         this.epoch = epoch;
         this.sequence = sequence;
         this.generation = generation;
@@ -102,7 +134,8 @@ public final class CpAck {
                 state,
                 now,
                 result,
-                output);
+                output,
+                envelope.operationId);
     }
 
     public String toJson() {

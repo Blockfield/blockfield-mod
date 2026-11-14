@@ -1128,11 +1128,15 @@ class CpConsumerTest {
 
         // Transient 500, then a timeout: the hook stays pending, nothing fires.
         withActions.ackFailed(
-                UUID.fromString(EPOCH), last(acks).sequence, new IOException("ack HTTP 500"));
+                UUID.fromString(EPOCH),
+                last(acks).sequence,
+                last(acks).operationId,
+                new IOException("ack HTTP 500"));
         assertFalse(hook.isDone());
         withActions.ackFailed(
                 UUID.fromString(EPOCH),
                 last(acks).sequence,
+                last(acks).operationId,
                 new HttpTimeoutException("ack timed out"));
         assertFalse(hook.isDone());
 
@@ -1142,7 +1146,10 @@ class CpConsumerTest {
         assertEquals(Boolean.FALSE, needsOpInsideCallback.get());
         withActions.ackAccepted(last(acks));
         withActions.ackFailed(
-                UUID.fromString(EPOCH), last(acks).sequence, new IOException("ack HTTP 500"));
+                UUID.fromString(EPOCH),
+                last(acks).sequence,
+                last(acks).operationId,
+                new IOException("ack HTTP 500"));
         assertSame(last(acks), hook.get());
     }
 
@@ -1160,6 +1167,7 @@ class CpConsumerTest {
         withActions.ackFailed(
                 UUID.fromString(EPOCH),
                 last(first).sequence,
+                last(first).operationId,
                 new CpResyncException("ack rejected: {}"));
         assertFalse(hook.isDone());
 
@@ -1191,11 +1199,68 @@ class CpConsumerTest {
         withActions.ackFailed(
                 UUID.fromString(EPOCH),
                 last(acks).sequence,
+                last(acks).operationId,
                 new CpAckRejectedException(400, "ack rejected"));
         ExecutionException thrown = assertThrows(ExecutionException.class, hook::get);
         assertInstanceOf(CpAckRejectedException.class, thrown.getCause());
         assertEquals(400, ((CpAckRejectedException) thrown.getCause()).statusCode());
         assertEquals(41, store.loadCursor().sequence());
+    }
+
+    @Test
+    void supersedingFrameAtSameSequenceFailsOldHookAndKeepsItsOwn() throws Exception {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> stopAcks =
+                withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
+        CompletableFuture<CpAck> stopHook = actions.lastAckHook;
+        assertNotNull(stopHook);
+        assertFalse(stopHook.isDone());
+
+        // The server reissues sequence 42 for another operation: the stop hook is superseded
+        // and fails, while the new frame gets its own hook.
+        List<CpAck> otherAcks =
+                withActions.onFrame(workshopGameFrame("op-wg-other", "workshop", "save-off", null));
+        CompletableFuture<CpAck> otherHook = actions.lastAckHook;
+        assertNotSame(stopHook, otherHook);
+        ExecutionException superseded = assertThrows(ExecutionException.class, stopHook::get);
+        assertInstanceOf(CpResyncException.class, superseded.getCause());
+
+        // The new frame's EFFECTIVE ack completes only its own hook ...
+        withActions.ackAccepted(last(otherAcks));
+        assertSame(last(otherAcks), otherHook.get());
+
+        // ... and a late ack naming the superseded operation is ignored, never completing
+        // another hook.
+        withActions.ackAccepted(last(stopAcks));
+        assertSame(last(otherAcks), otherHook.get());
+        assertTrue(stopHook.isCompletedExceptionally());
+    }
+
+    @Test
+    void foreignOperationAckNeverCompletesPendingHook() throws Exception {
+        RecordingActions actions = new RecordingActions();
+        CpConsumer withActions = new CpConsumer(store, applier, actions, CLOCK, AUDIENCE);
+        withActions.onSnapshot(snapshot(EPOCH, GENERATION, 41, gameplayValue(true)));
+
+        List<CpAck> stopAcks =
+                withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
+        CompletableFuture<CpAck> stopHook = actions.lastAckHook;
+
+        // Another operation decided at the same sequence without a hook (non-executable): its
+        // ack must not complete the stop hook.
+        List<CpAck> foreignAcks = withActions.onFrame(nonExecutableFrame(42, "superseded"));
+        withActions.ackAccepted(last(foreignAcks));
+        assertFalse(stopHook.isDone());
+
+        // The stop redelivery re-posts its own receipt, and only its own ack completes the hook.
+        List<CpAck> replayed =
+                withActions.onFrame(workshopGameFrame("op-wg-stop", "workshop", "stop", null));
+        assertEquals(1, actions.calls.size());
+        withActions.ackAccepted(last(replayed));
+        assertSame(last(replayed), stopHook.get());
     }
 
     @Test

@@ -371,8 +371,11 @@ public final class CpSseClient {
     /**
      * Post the current ack chain for one frame, then advance the cursor. A 409/stale answer drops
      * this chain and re-syncs from the snapshot on the next pass: the terminal decision stays
-     * durable, so the replay re-posts it instead of rebuilding chained retries. The post-ack hook
-     * stays pending across the retry and completes when a delivery is accepted.
+     * durable, so the replay re-posts it instead of rebuilding chained retries. A terminal
+     * validation rejection (400/404/422, see {@link #postAckJson}) fails the post-ack hook, drops
+     * the stored receipt and advances the cursor without retrying: the server will never accept it,
+     * so replaying would wedge the cursor on a doomed ack. The post-ack hook stays pending across
+     * every other retry and completes when a delivery is accepted.
      */
     private boolean dispatch(String event, String data) throws IOException, InterruptedException {
         if (data.isEmpty()) return false;
@@ -384,8 +387,16 @@ public final class CpSseClient {
         try {
             for (CpAck ack : acks) postAck(ack);
             store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+        } catch (CpAckRejectedException terminal) {
+            consumer.ackFailed(first.epoch, first.sequence, first.operationId, terminal);
+            reporter.warn(
+                    "control-plane ack permanently rejected, dropping frame: "
+                            + terminal.getMessage(),
+                    terminal);
+            store.saveCursorIfForward(first.epoch.toString(), first.sequence);
+            return true;
         } catch (Throwable failure) {
-            consumer.ackFailed(first.epoch, first.sequence, failure);
+            consumer.ackFailed(first.epoch, first.sequence, first.operationId, failure);
             throw failure;
         }
         consumer.ackAccepted(last);
@@ -396,6 +407,19 @@ public final class CpSseClient {
         postAckJson(ack.toJson());
     }
 
+    /**
+     * Post one ack body. Status policy, consistent with the consumer hook lifecycle (a terminal
+     * rejection fails the hook and is never retried; everything else replays with the hook pending,
+     * and the run loop retries with backoff):
+     *
+     * <ul>
+     *   <li>{@code 409}: stale cursor or generation, drops the chain and re-syncs.
+     *   <li>{@code 400}, {@code 404}, {@code 422}: validation rejection, the row will never accept
+     *       this receipt ({@link CpAckRejectedException}).
+     *   <li>{@code 408}, {@code 429}, {@code 5xx}, any other {@code 4xx} (including transient
+     *       {@code 401}/{@code 403}), IO and timeouts: retryable, the hook stays pending.
+     * </ul>
+     */
     void postAckJson(String body) throws IOException, InterruptedException {
         HttpRequest request =
                 HttpRequest.newBuilder(URI.create(baseUrl + "/v2/agents/" + agentId + "/acks"))
@@ -412,9 +436,16 @@ public final class CpSseClient {
             // Retryable rate limit / timeout: the receipt replays and the hook stays pending.
             throw new IOException("ack HTTP " + response.statusCode() + " (retryable)");
         }
-        if (response.statusCode() >= 400 && response.statusCode() < 500) {
+        if (response.statusCode() == 400
+                || response.statusCode() == 404
+                || response.statusCode() == 422) {
             throw new CpAckRejectedException(
                     response.statusCode(), "ack rejected: " + response.body());
+        }
+        if (response.statusCode() >= 400 && response.statusCode() < 500) {
+            // Any other 4xx (including a transient 401/403) is retryable: the receipt replays
+            // and the hook stays pending until a delivery is accepted.
+            throw new IOException("ack HTTP " + response.statusCode() + " (retryable)");
         }
         if (response.statusCode() != 200) {
             throw new IOException("ack HTTP " + response.statusCode());
